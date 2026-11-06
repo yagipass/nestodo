@@ -1,0 +1,33 @@
+packages:
+  - apps/*
+
+minimumReleaseAgeExclude:
+  - void
+  - '@void/*'
+  - '@cloudflare/*'
+  - cf
+  - miniflare
+  - wrangler
+  - workerd
+  - mysql2
+  - vite-plus
+  - '@voidzero-dev/*'
+  - '@oxc-project/*'
+  - oxfmt
+  - '@oxfmt/*'
+  - oxlint
+  - '@oxlint/*'
+  - vitest
+  - '@vitest/*'
+
+allowBuilds:
+  better-sqlite3: false
+  core-js: false
+  esbuild: true
+  sharp: true
+  workerd: true
+overrides:
+  vite@*: npm:@voidzero-dev/vite-plus-core@^1.2.0
+peerDependencyRules:
+  allowedVersions:
+    vite: "*"

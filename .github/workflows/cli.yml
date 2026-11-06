@@ -1,0 +1,44 @@
+name: CLI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/cli/**
+      - Cargo.toml
+      - Cargo.lock
+      - flake.nix
+      - flake.lock
+      - .github/workflows/cli.yml
+  pull_request:
+    paths:
+      - apps/cli/**
+      - Cargo.toml
+      - Cargo.lock
+      - flake.nix
+      - flake.lock
+      - .github/workflows/cli.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@v31.11.3
+      - uses: nix-community/cache-nix-action@v7.0.2
+        with:
+          primary-key: nix-cli-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock', 'Cargo.lock') }}
+      - run: nix develop .#cli --command cargo clippy --locked --all-targets -- -D warnings
+      - run: nix develop .#cli --command cargo test --locked
+      - run: nix build .#nestodo-cli --no-link -L

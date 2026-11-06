@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: read
+
+jobs:
+  tagpr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
+    outputs:
+      tag: ${{ steps.tagpr.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - id: tagpr
+        uses: Songmu/tagpr@v1.21.2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  deploy:
+    needs: tagpr
+    if: needs.tagpr.outputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: Cloudflare
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@v31.11.3
+      - uses: nix-community/cache-nix-action@v7.0.2
+        with:
+          primary-key: nix-web-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+      - run: nix develop --command pnpm install --frozen-lockfile
+      - name: Deploy
+        working-directory: apps/web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          VITE_POSTHOG_PROJECT_TOKEN: ${{ vars.POSTHOG_PROJECT_TOKEN }}
+          NESTODO_HOST: ${{ secrets.NESTODO_HOST }}
+          NESTODO_MCP_HOST: ${{ secrets.NESTODO_MCP_HOST }}
+        run: |
+          : "${CLOUDFLARE_ACCOUNT_ID:?Set the CLOUDFLARE_ACCOUNT_ID secret of the Cloudflare environment}"
+          : "${NESTODO_HOST:?Set the NESTODO_HOST secret of the Cloudflare environment}"
+          : "${NESTODO_MCP_HOST:?Set the NESTODO_MCP_HOST secret of the Cloudflare environment}"
+          nix develop --command pnpm exec void deploy --platform cloudflare
+
+  publish:
+    needs: [tagpr, deploy]
+    if: needs.tagpr.outputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.tagpr.outputs.tag }}
+        run: gh release edit "$TAG" --draft=false

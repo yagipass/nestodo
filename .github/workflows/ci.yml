@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@v31.11.3
+      - uses: nix-community/cache-nix-action@v7.0.2
+        with:
+          primary-key: nix-checks-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+      - run: nix flake check -L
+      - run: |
+          opts=(--full-history --all --diff-filter=uxdb --diff-merges=first-parent)
+          git log -p -U0 "${opts[@]}" > /dev/null
+          nix run --inputs-from . nixpkgs#gitleaks -- git --log-opts="${opts[*]}" --redact --verbose
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@v31.11.3
+      - uses: nix-community/cache-nix-action@v7.0.2
+        with:
+          primary-key: nix-web-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+      - run: nix develop --command pnpm install --frozen-lockfile
+        working-directory: .
+      - run: nix develop --command pnpm exec void prepare
+      - run: nix develop --command pnpm exec tsc --noEmit
+      - run: nix develop --command pnpm exec tsc --noEmit -p e2e
+      - run: nix develop --command pnpm exec vp build
+      - run: nix develop --command pnpm exec vp test run

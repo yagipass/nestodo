@@ -1,0 +1,7 @@
+[tagpr]
+	vPrefix = true
+	releaseBranch = main
+	versionFile = apps/cli/Cargo.toml,apps/android/app/build.gradle.kts,apps/web/src/mcp-server.ts
+	postVersionCommand = cargo update --workspace
+	changelog = true
+	release = draft

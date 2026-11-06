@@ -1,0 +1,17 @@
+enhancement:
+  - head-branch: ['^feat/']
+bug:
+  - head-branch: ['^fix/']
+documentation:
+  - head-branch: ['^docs/']
+maintenance:
+  - head-branch: ['^(build|chore|ci|refactor|style|test)/']
+web:
+  - changed-files:
+      - all-globs-to-any-file: ['apps/web/**', '!apps/web/e2e/**', '!apps/web/**/*.md']
+android:
+  - changed-files:
+      - any-glob-to-any-file: ['apps/android/app/src/main/**']
+cli:
+  - changed-files:
+      - any-glob-to-any-file: ['apps/cli/src/**']

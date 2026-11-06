@@ -1,0 +1,30 @@
+title = "nestodo"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Generated build output is never committed, but keep it out of manual scans."
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)dist/''',
+  '''(^|/)\.void/''',
+  '''(^|/)\.wrangler/''',
+  '''(^|/)build/''',
+  '''(^|/)\.gradle/''',
+  '''(^|/)\.kotlin/''',
+  '''(^|/)target/''',
+]
+
+[[allowlists]]
+description = "The Android Access test data holds only public keys and a JWT signed by a discarded key."
+paths = [
+  '''^apps/android/app/src/test/resources/access/(login-url\.txt|metadata\.jwt)$''',
+]
+
+[[allowlists]]
+description = "Cargo.lock holds crate names and checksums, and the CLI test data holds only public keys and a JWT signed by a discarded key."
+paths = [
+  '''^Cargo\.lock$''',
+  '''^apps/cli/src/access/testdata/(login-url\.txt|metadata\.jwt)$''',
+]
