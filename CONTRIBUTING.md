@@ -95,4 +95,4 @@ The environment's secret `POSTHOG_PROJECT_TOKEN` is optional. Leave it empty to 
 
 The repository settings, labels, merge options, and Actions permissions are managed with [gh-infra](https://github.com/babarot/gh-infra) in `.github/infra.yml`. To change them, edit the file, review the difference with `gh infra plan .github/infra.yml`, and apply it with `gh infra apply .github/infra.yml`. Applying needs admin access to the repository.
 
-gh-infra creates the `Cloudflare` environment and limits it to `main`, but does not manage secrets or variables. Set them under **Settings → Environments → Cloudflare** on GitHub.
+gh-infra creates the `Cachix` and `Cloudflare` environments and limits them to `main`, but does not manage secrets or variables. Set them under **Settings → Environments** on GitHub. The `Cachix` environment needs the secret `CACHIX_AUTH_TOKEN`, a token that can push to the `nestodo` Cachix cache.
