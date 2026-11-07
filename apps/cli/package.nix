@@ -1,8 +1,11 @@
 { lib, rustPlatform }:
 
+let
+  version = (lib.importTOML ./Cargo.toml).package.version;
+in
 rustPlatform.buildRustPackage {
   pname = "nestodo-cli";
-  version = (lib.importTOML ./Cargo.toml).package.version;
+  inherit version;
 
   src = lib.fileset.toSource {
     root = ../..;
@@ -17,7 +20,16 @@ rustPlatform.buildRustPackage {
 
   doCheck = false;
 
+  doInstallCheck = true;
+  installCheckPhase = ''
+    runHook preInstallCheck
+    $out/bin/nestodo --version | grep -Fx 'nestodo ${version}'
+    runHook postInstallCheck
+  '';
+
   meta = {
+    description = "Manage your todos from the terminal";
+    homepage = "https://github.com/yagipass/nestodo";
     license = with lib.licenses; [
       mit
       asl20

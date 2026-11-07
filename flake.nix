@@ -1,6 +1,13 @@
 {
   description = "A family todo list on Cloudflare Workers with D1 storage, built with Void and protected by Cloudflare Access";
 
+  nixConfig = {
+    extra-substituters = [ "https://nestodo.cachix.org" ];
+    extra-trusted-public-keys = [
+      "nestodo.cachix.org-1:c0bWe2rKhDj4HFXF3aMyHzOCJ4Z6aoqYhOyW2XDpg1k="
+    ];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-parts = {
@@ -130,7 +137,10 @@
             };
           };
 
-          packages.nestodo-cli = pkgs.callPackage ./apps/cli/package.nix { };
+          packages = rec {
+            nestodo = pkgs.callPackage ./apps/cli/package.nix { };
+            default = nestodo;
+          };
 
           devShells = {
             default = pkgs.mkShellNoCC {

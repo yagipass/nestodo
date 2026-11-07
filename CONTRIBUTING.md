@@ -43,7 +43,7 @@ Run these in `apps/cli`.
 | `NESTODO_E2E_BASE_URL=http://localhost:5173 cargo test -- --ignored` | run the end-to-end tests against `vp dev` |
 | `cargo run -- --base-url http://localhost:5173 list` | run a command against `vp dev`, without signing in; `NESTODO_BASE_URL` sets the same |
 
-CI also builds the Nix package with `nix build .#nestodo-cli`.
+CI also builds the Nix package with `nix build .#nestodo` on macOS (Apple silicon) and Linux (x86_64 and arm64), and pushes it to the `nestodo` Cachix cache from `main`.
 
 ### Android
 
@@ -95,4 +95,4 @@ The environment's secret `POSTHOG_PROJECT_TOKEN` is optional. Leave it empty to 
 
 The repository settings, labels, merge options, and Actions permissions are managed with [gh-infra](https://github.com/babarot/gh-infra) in `.github/infra.yml`. To change them, edit the file, review the difference with `gh infra plan .github/infra.yml`, and apply it with `gh infra apply .github/infra.yml`. Applying needs admin access to the repository.
 
-gh-infra creates the `Cloudflare` environment and limits it to `main`, but does not manage secrets or variables. Set them under **Settings → Environments → Cloudflare** on GitHub.
+gh-infra creates the `Cachix` and `Cloudflare` environments and limits them to `main`, but does not manage secrets or variables. Set them under **Settings → Environments** on GitHub. The `Cachix` environment needs the secret `CACHIX_AUTH_TOKEN`, a token that can push to the `nestodo` Cachix cache.
