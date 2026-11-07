@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  high_level_summary: false
+  path_filters:
+    - "!CHANGELOG.md"
+    - "!flake.lock"
+    - "!Cargo.lock"
+    - "!pnpm-lock.yaml"
+    - "!.github/workflows/actions.lock"
+    - "!apps/web/AGENTS.md"
+    - "!apps/web/db/migrations/meta/**"
+    - "!apps/android/gradlew"
+    - "!apps/android/gradlew.bat"
+    - "!apps/android/gradle/wrapper/**"
+    - "!apps/android/gradle/gradle-daemon-jvm.properties"
+  auto_review:
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "github-actions[bot]"
+  tools:
+    markdownlint:
+      enabled: false
+    sqlfluff:
+      enabled: false
+knowledge_base:
+  code_guidelines:
+    filePatterns:
+      - CONTRIBUTING.md
