@@ -20,7 +20,7 @@ android {
         minSdk = 37
         targetSdk = 37
         versionCode = 1
-        versionName = "0.9.1"
+        versionName = "0.9.2"
         buildConfigField("String", "BASE_URL", "\"$baseUrl\"")
     }
 

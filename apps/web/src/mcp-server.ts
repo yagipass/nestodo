@@ -34,7 +34,7 @@ async function refusingRejections(action: () => Promise<CallToolResult>) {
 }
 
 export function nestodoMcpServer(userId: string) {
-  const server = new McpServer({ name: "nestodo", version: "0.9.1" });
+  const server = new McpServer({ name: "nestodo", version: "0.9.2" });
 
   server.registerTool(
     "list_todos",
