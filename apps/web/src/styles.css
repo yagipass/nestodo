@@ -71,6 +71,9 @@ body {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin-right: auto;
   font-size: 1.25rem;
   font-weight: 700;

@@ -189,6 +189,7 @@ export function AppHeader({ children }: { children?: ReactNode }) {
   return (
     <header className="app-header">
       <Link href="/" className="brand">
+        <img src="/icon.svg" alt="" width="28" height="28" />
         Nestodo
       </Link>
       {children}
