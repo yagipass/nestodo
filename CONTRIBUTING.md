@@ -43,7 +43,7 @@ Run these in `apps/cli`.
 | `NESTODO_E2E_BASE_URL=http://localhost:5173 cargo test -- --ignored` | run the end-to-end tests against `vp dev` |
 | `cargo run -- --base-url http://localhost:5173 list` | run a command against `vp dev`, without signing in; `NESTODO_BASE_URL` sets the same |
 
-CI also builds the Nix package with `nix build .#nestodo-cli`.
+CI also builds the Nix package with `nix build .#nestodo` on macOS (Apple silicon) and Linux (x86_64 and arm64), and pushes it to the `nestodo` Cachix cache from `main`.
 
 ### Android
 

@@ -2,6 +2,14 @@
 
 Manage your todos from the terminal.
 
+## Install
+
+On macOS (Apple silicon) and Linux, with Nix:
+
+```sh
+nix profile install github:yagipass/nestodo#nestodo
+```
+
 ## Usage
 
 ```sh
