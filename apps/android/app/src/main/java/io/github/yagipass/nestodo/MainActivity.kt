@@ -1,13 +1,13 @@
 package io.github.yagipass.nestodo
 
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.browser.customtabs.CustomTabsIntent
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import io.github.yagipass.nestodo.ui.NestodoApp
@@ -30,7 +30,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openInBrowser(url: String) {
-        CustomTabsIntent.Builder().build().launchUrl(this, Uri.parse(url).normalizeScheme())
+        CustomTabsIntent.Builder().build().launchUrl(this, url.toUri().normalizeScheme())
     }
 
     private fun returnFromBrowser() {

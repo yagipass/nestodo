@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import androidx.core.content.edit
 import java.io.IOException
 import java.security.GeneralSecurityException
 import java.security.KeyStore
@@ -58,11 +59,11 @@ internal constructor(
                 if (e.isKeystoreFailure() && isDeviceLocked()) throw DeviceLockedException()
                 throw e
             }
-        prefs.edit().putString(key(host, kind), sealed).apply()
+        prefs.edit { putString(key(host, kind), sealed) }
     }
 
     override fun delete(host: String, kind: TokenKind) {
-        prefs.edit().remove(key(host, kind)).apply()
+        prefs.edit { remove(key(host, kind)) }
     }
 
     private fun key(host: String, kind: TokenKind) = "$host/${kind.name}"

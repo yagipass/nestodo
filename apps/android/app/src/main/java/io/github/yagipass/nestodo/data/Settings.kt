@@ -1,6 +1,7 @@
 package io.github.yagipass.nestodo.data
 
 import android.content.Context
+import androidx.core.content.edit
 
 interface Settings {
     var showCompleted: Boolean
@@ -12,14 +13,12 @@ class PreferenceSettings(context: Context) : Settings {
 
     override var showCompleted: Boolean
         get() = prefs.getBoolean(SHOW_COMPLETED, true)
-        set(value) = prefs.edit().putBoolean(SHOW_COMPLETED, value).apply()
+        set(value) = prefs.edit { putBoolean(SHOW_COMPLETED, value) }
 
     override var shareParent: Long?
         get() = if (prefs.contains(SHARE_PARENT)) prefs.getLong(SHARE_PARENT, 0) else null
-        set(value) {
-            val edit = prefs.edit()
-            if (value == null) edit.remove(SHARE_PARENT) else edit.putLong(SHARE_PARENT, value)
-            edit.apply()
+        set(value) = prefs.edit {
+            if (value == null) remove(SHARE_PARENT) else putLong(SHARE_PARENT, value)
         }
 
     private companion object {
