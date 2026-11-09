@@ -8,7 +8,6 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -42,7 +41,7 @@ class KeystoreTokenStoreTest {
             locked = true
 
             val error = runCatching { store.load("nestodo.example.com", TokenKind.Org) }
-            assertTrue(error.exceptionOrNull() is DeviceLockedException)
+            assertEquals(DeviceLockedException::class.java, error.exceptionOrNull()?.javaClass)
 
             locked = false
             assertEquals("org", store.load("nestodo.example.com", TokenKind.Org))
@@ -68,7 +67,7 @@ class KeystoreTokenStoreTest {
             locked = true
 
             val error = runCatching { store.save("nestodo.example.com", TokenKind.App, "app") }
-            assertTrue(error.exceptionOrNull() is DeviceLockedException)
+            assertEquals(DeviceLockedException::class.java, error.exceptionOrNull()?.javaClass)
 
             locked = false
             assertNull(store.load("nestodo.example.com", TokenKind.App))

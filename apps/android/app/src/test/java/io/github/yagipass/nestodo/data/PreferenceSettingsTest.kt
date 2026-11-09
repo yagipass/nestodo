@@ -6,12 +6,21 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 class PreferenceSettingsTest {
     @get:Rule val folder = TemporaryFolder()
+
+    @Test
+    fun `a fresh install shows completed rows, so no todo looks missing before the member chooses to hide them`() =
+        runTest {
+            val settings = PreferenceSettings(preferenceStore(folder))
+
+            assertTrue(settings.showCompleted())
+        }
 
     @Test
     fun `settings saved before the app moved to DataStore are kept, so updating the app neither shows hidden completed rows nor forgets where the last share went`() =
