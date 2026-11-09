@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,8 +39,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -46,8 +56,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.yagipass.nestodo.R
 import io.github.yagipass.nestodo.ShareState
 import io.github.yagipass.nestodo.ShareViewModel
-import io.github.yagipass.nestodo.domain.Shared
+import io.github.yagipass.nestodo.domain.MAX_TITLE_LENGTH
 import io.github.yagipass.nestodo.domain.destinations
+import io.github.yagipass.nestodo.domain.encodePaste
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 
@@ -61,8 +72,16 @@ fun ShareScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val colors = MaterialTheme.colorScheme
     val appName = stringResource(R.string.app_name)
+    val titleRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    fun focusTitle() {
+        titleRequester.requestFocus()
+        keyboard?.show()
+    }
 
     LaunchedEffect(state) { (state as? ShareState.Added)?.let { onAdded(it.parent) } }
+    LaunchedEffect(Unit) { if (viewModel.title.isBlank()) focusTitle() }
 
     Surface(Modifier.fillMaxSize(), color = colors.background) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
@@ -75,7 +94,7 @@ fun ShareScreen(
                 }
                 Text("Add to $appName", style = MaterialTheme.typography.titleLarge)
             }
-            Preview(viewModel.shared)
+            Preview(viewModel, titleRequester)
             HorizontalDivider(color = colors.outlineVariant)
             when (val current = state) {
                 ShareState.Loading ->
@@ -86,40 +105,73 @@ fun ShareScreen(
                 ShareState.SignedOut ->
                     Message("Sign in to $appName to add todos.", "Open $appName", onOpenApp)
                 is ShareState.Failed -> Message(current.message, "Try again", viewModel::retry)
-                is ShareState.Ready -> Picker(current, viewModel::add)
+                is ShareState.Ready ->
+                    Picker(current) { parent ->
+                        if (viewModel.title.isBlank()) focusTitle() else viewModel.add(parent)
+                    }
             }
         }
     }
 }
 
 @Composable
-private fun Preview(shared: Shared) {
+private fun Preview(viewModel: ShareViewModel, titleRequester: FocusRequester) {
     val colors = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
+    val note = viewModel.shared.note
+    var title by remember {
+        mutableStateOf(viewModel.title.let { TextFieldValue(it, TextRange(it.length)) })
+    }
     var expanded by rememberSaveable { mutableStateOf(false) }
     var clipped by remember { mutableStateOf(false) }
-    val lines = if (expanded) Int.MAX_VALUE else PREVIEW_LINES
-    val onLayout = { layout: TextLayoutResult -> if (layout.hasVisualOverflow) clipped = true }
     Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 8.dp)) {
         Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
-            Text(
-                remember(shared.title, colors.primary) { shownText(shared.title, colors.primary) },
-                style = typography.bodyLarge,
-                color = colors.onSurface,
-                maxLines = lines,
-                overflow = TextOverflow.Ellipsis,
-                onTextLayout = onLayout,
-            )
-            if (shared.note.isNotEmpty()) {
-                Text(
-                    remember(shared.note, colors.primary) {
-                        shownText(shared.note, colors.primary)
+            BasicTextField(
+                value = title,
+                onValueChange = { typed ->
+                    val pasted =
+                        if (typed.composition != null) null
+                        else
+                            encodePaste(
+                                title.text,
+                                title.selection.min,
+                                title.selection.max,
+                                typed.text,
+                            )
+                    val next = pasted?.let { TextFieldValue(it.text, TextRange(it.caret)) } ?: typed
+                    val clean = next.toSingleLine()
+                    if (clean.text.length > MAX_TITLE_LENGTH) return@BasicTextField
+                    title = clean
+                    viewModel.setTitle(clean.text)
+                },
+                modifier =
+                    Modifier.fillMaxWidth().focusRequester(titleRequester).semantics {
+                        contentDescription = "Title"
                     },
+                textStyle = typography.bodyLarge.copy(color = colors.onSurface),
+                cursorBrush = SolidColor(colors.primary),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                decorationBox = { inner ->
+                    Box {
+                        if (title.text.isEmpty()) {
+                            Text(
+                                "Title",
+                                style = typography.bodyLarge,
+                                color = colors.onSurfaceVariant,
+                            )
+                        }
+                        inner()
+                    }
+                },
+            )
+            if (note.isNotEmpty()) {
+                Text(
+                    remember(note, colors.primary) { shownText(note, colors.primary) },
                     style = typography.bodyMedium,
                     color = colors.onSurfaceVariant,
-                    maxLines = lines,
+                    maxLines = if (expanded) Int.MAX_VALUE else PREVIEW_LINES,
                     overflow = TextOverflow.Ellipsis,
-                    onTextLayout = onLayout,
+                    onTextLayout = { if (it.hasVisualOverflow) clipped = true },
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }

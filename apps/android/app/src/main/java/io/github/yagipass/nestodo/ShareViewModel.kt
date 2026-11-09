@@ -13,11 +13,13 @@ import io.github.yagipass.nestodo.data.PreferenceSettings
 import io.github.yagipass.nestodo.data.Settings
 import io.github.yagipass.nestodo.data.TodoRepository
 import io.github.yagipass.nestodo.domain.Destination
+import io.github.yagipass.nestodo.domain.MAX_TITLE_LENGTH
 import io.github.yagipass.nestodo.domain.Outline
 import io.github.yagipass.nestodo.domain.Shared
 import io.github.yagipass.nestodo.domain.Viewport
 import io.github.yagipass.nestodo.domain.destinations
 import io.github.yagipass.nestodo.domain.outlineOf
+import io.github.yagipass.nestodo.domain.singleLine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -52,6 +54,9 @@ class ShareViewModel(
 
     private var repository: TodoRepository? = null
 
+    var title = shared.title
+        private set
+
     init {
         retry()
     }
@@ -61,15 +66,20 @@ class ShareViewModel(
         viewModelScope.launch { load() }
     }
 
+    fun setTitle(title: String) {
+        this.title = singleLine(title).take(MAX_TITLE_LENGTH)
+    }
+
     fun add(parent: Long?) {
         val ready = _state.value as? ShareState.Ready ?: return
         val repository = repository ?: return
-        if (ready.adding) return
+        val title = this.title.trim()
+        if (ready.adding || title.isEmpty()) return
         _state.value = ready.copy(adding = true, error = null)
         viewModelScope.launch {
             try {
                 val index = ready.outline.children(parent).size
-                repository.create(shared.title, parent, index, shared.note)
+                repository.create(title, parent, index, shared.note)
                 settings.shareParent = parent
                 _state.value = ShareState.Added(parent?.let { ready.outline[it]?.title })
             } catch (e: CancellationException) {
