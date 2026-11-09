@@ -80,7 +80,7 @@ class ShareViewModel(
             try {
                 val index = ready.outline.children(parent).size
                 repository.create(title, parent, index, shared.note)
-                settings.shareParent = parent
+                settings.setShareParent(parent)
                 _state.value = ShareState.Added(parent?.let { ready.outline[it]?.title })
             } catch (e: CancellationException) {
                 throw e
@@ -96,9 +96,9 @@ class ShareViewModel(
         try {
             val todos = (repository ?: connect() ?: return).list()
             val outline = outlineOf(todos)
-            val viewport = Viewport(settings.showCompleted)
+            val viewport = Viewport(settings.showCompleted())
             val last =
-                settings.shareParent?.let { id ->
+                settings.shareParent()?.let { id ->
                     outline.destinations(viewport, null, "").firstOrNull { it.key == id }
                 }
             _state.value = ShareState.Ready(outline, viewport, last, error = error)

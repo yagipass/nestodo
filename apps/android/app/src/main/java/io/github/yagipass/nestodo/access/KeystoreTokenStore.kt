@@ -2,10 +2,16 @@ package io.github.yagipass.nestodo.access
 
 import android.app.KeyguardManager
 import android.content.Context
-import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import androidx.core.content.edit
+import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
+import androidx.datastore.preferences.SharedPreferencesMigration
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
 import java.io.IOException
 import java.security.GeneralSecurityException
 import java.security.KeyStore
@@ -15,6 +21,7 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlinx.coroutines.flow.first
 
 class DeviceLockedException :
     IOException("the saved sign-in cannot be used until the phone is unlocked")
@@ -25,22 +32,29 @@ internal interface TokenCipher {
     fun open(sealed: String): String
 }
 
+private val Context.tokenStore by
+    preferencesDataStore(
+        name = "access_tokens",
+        corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+        produceMigrations = { listOf(SharedPreferencesMigration(it, "access_tokens")) },
+    )
+
 class KeystoreTokenStore
 internal constructor(
-    private val prefs: SharedPreferences,
+    private val store: DataStore<Preferences>,
     private val cipher: TokenCipher,
     private val isDeviceLocked: () -> Boolean,
 ) : TokenStore {
     constructor(
         context: Context
     ) : this(
-        context.getSharedPreferences("access_tokens", Context.MODE_PRIVATE),
+        context.tokenStore,
         KeystoreCipher,
         { context.getSystemService(KeyguardManager::class.java)?.isDeviceLocked == true },
     )
 
-    override fun load(host: String, kind: TokenKind): String? {
-        val stored = prefs.getString(key(host, kind), null) ?: return null
+    override suspend fun load(host: String, kind: TokenKind): String? {
+        val stored = store.data.first()[key(host, kind)] ?: return null
         return try {
             cipher.open(stored)
         } catch (e: Exception) {
@@ -51,7 +65,7 @@ internal constructor(
         }
     }
 
-    override fun save(host: String, kind: TokenKind, token: String) {
+    override suspend fun save(host: String, kind: TokenKind, token: String) {
         val sealed =
             try {
                 cipher.seal(token)
@@ -59,14 +73,14 @@ internal constructor(
                 if (e.isKeystoreFailure() && isDeviceLocked()) throw DeviceLockedException()
                 throw e
             }
-        prefs.edit { putString(key(host, kind), sealed) }
+        store.edit { it[key(host, kind)] = sealed }
     }
 
-    override fun delete(host: String, kind: TokenKind) {
-        prefs.edit { remove(key(host, kind)) }
+    override suspend fun delete(host: String, kind: TokenKind) {
+        store.edit { it.remove(key(host, kind)) }
     }
 
-    private fun key(host: String, kind: TokenKind) = "$host/${kind.name}"
+    private fun key(host: String, kind: TokenKind) = stringPreferencesKey("$host/${kind.name}")
 }
 
 private fun Exception.isKeystoreFailure() =

@@ -15,13 +15,13 @@ object Fixtures {
 class MemoryTokenStore : TokenStore {
     private val tokens = mutableMapOf<Pair<String, TokenKind>, String>()
 
-    override fun load(host: String, kind: TokenKind): String? = tokens[host to kind]
+    override suspend fun load(host: String, kind: TokenKind): String? = tokens[host to kind]
 
-    override fun save(host: String, kind: TokenKind, token: String) {
+    override suspend fun save(host: String, kind: TokenKind, token: String) {
         tokens[host to kind] = token
     }
 
-    override fun delete(host: String, kind: TokenKind) {
+    override suspend fun delete(host: String, kind: TokenKind) {
         tokens.remove(host to kind)
     }
 }
