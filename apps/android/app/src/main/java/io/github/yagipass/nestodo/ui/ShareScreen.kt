@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,6 +38,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -48,7 +50,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,7 +59,6 @@ import io.github.yagipass.nestodo.ShareState
 import io.github.yagipass.nestodo.ShareViewModel
 import io.github.yagipass.nestodo.domain.MAX_TITLE_LENGTH
 import io.github.yagipass.nestodo.domain.destinations
-import io.github.yagipass.nestodo.domain.encodePaste
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 
@@ -72,6 +72,7 @@ fun ShareScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val colors = MaterialTheme.colorScheme
     val appName = stringResource(R.string.app_name)
+    val title = remember { TextFieldState(viewModel.title, TextRange(viewModel.title.length)) }
     val titleRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
 
@@ -82,6 +83,7 @@ fun ShareScreen(
 
     LaunchedEffect(state) { (state as? ShareState.Added)?.let { onAdded(it.parent) } }
     LaunchedEffect(Unit) { if (viewModel.title.isBlank()) focusTitle() }
+    LaunchedEffect(title) { snapshotFlow { title.text.toString() }.collect(viewModel::setTitle) }
 
     Surface(Modifier.fillMaxSize(), color = colors.background) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
@@ -94,7 +96,7 @@ fun ShareScreen(
                 }
                 Text("Add to $appName", style = MaterialTheme.typography.titleLarge)
             }
-            Preview(viewModel, titleRequester)
+            Preview(viewModel, title, titleRequester)
             HorizontalDivider(color = colors.outlineVariant)
             when (val current = state) {
                 ShareState.Loading ->
@@ -107,6 +109,7 @@ fun ShareScreen(
                 is ShareState.Failed -> Message(current.message, "Try again", viewModel::retry)
                 is ShareState.Ready ->
                     Picker(current) { parent ->
+                        viewModel.setTitle(title.text.toString())
                         if (viewModel.title.isBlank()) focusTitle() else viewModel.add(parent)
                     }
             }
@@ -115,43 +118,30 @@ fun ShareScreen(
 }
 
 @Composable
-private fun Preview(viewModel: ShareViewModel, titleRequester: FocusRequester) {
+private fun Preview(
+    viewModel: ShareViewModel,
+    title: TextFieldState,
+    titleRequester: FocusRequester,
+) {
     val colors = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     val note = viewModel.shared.note
-    var title by remember {
-        mutableStateOf(viewModel.title.let { TextFieldValue(it, TextRange(it.length)) })
-    }
+    val input = remember(title) { title.typing(singleLine = true, maxLength = MAX_TITLE_LENGTH) }
     var expanded by rememberSaveable { mutableStateOf(false) }
     var clipped by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 8.dp)) {
         Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
             BasicTextField(
-                value = title,
-                onValueChange = { typed ->
-                    val pasted =
-                        if (typed.composition != null) null
-                        else
-                            encodePaste(
-                                title.text,
-                                title.selection.min,
-                                title.selection.max,
-                                typed.text,
-                            )
-                    val next = pasted?.let { TextFieldValue(it.text, TextRange(it.caret)) } ?: typed
-                    val clean = next.toSingleLine()
-                    if (clean.text.length > MAX_TITLE_LENGTH) return@BasicTextField
-                    title = clean
-                    viewModel.setTitle(clean.text)
-                },
+                state = title,
                 modifier =
                     Modifier.fillMaxWidth().focusRequester(titleRequester).semantics {
                         contentDescription = "Title"
                     },
+                inputTransformation = input,
                 textStyle = typography.bodyLarge.copy(color = colors.onSurface),
-                cursorBrush = SolidColor(colors.primary),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                decorationBox = { inner ->
+                cursorBrush = SolidColor(colors.primary),
+                decorator = { inner ->
                     Box {
                         if (title.text.isEmpty()) {
                             Text(
@@ -192,19 +182,18 @@ private fun Preview(viewModel: ShareViewModel, titleRequester: FocusRequester) {
 @Composable
 private fun Picker(state: ShareState.Ready, onPick: (Long?) -> Unit) {
     val colors = MaterialTheme.colorScheme
-    var query by remember { mutableStateOf("") }
+    val query = remember { TextFieldState() }
     var armed by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         delay(PICK_DELAY)
         armed = true
     }
     val pick = { parent: Long? -> if (armed) onPick(parent) }
-    val found = state.outline.destinations(state.viewport, null, query)
-    val browsing = query.isBlank()
+    val found = state.outline.destinations(state.viewport, null, query.text.toString())
+    val browsing = query.text.isBlank()
 
     SearchField(
         query = query,
-        onQueryChange = { query = it },
         label = "Search todos",
         modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
     )

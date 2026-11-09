@@ -37,8 +37,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.InputTransformation
+import androidx.compose.foundation.text.input.TextFieldBuffer
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.foundation.text.input.then
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -69,6 +74,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -115,7 +121,6 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -252,8 +257,8 @@ private fun DeleteDialog(state: TodoUiState, deleting: Long, viewModel: TodoView
 @Composable
 private fun MovePicker(state: TodoUiState, moving: Long, viewModel: TodoViewModel) {
     val colors = MaterialTheme.colorScheme
-    var query by remember { mutableStateOf("") }
-    val found = state.outline.destinations(state.viewport, moving, query)
+    val query = remember { TextFieldState() }
+    val found = state.outline.destinations(state.viewport, moving, query.text.toString())
     val name = state.outline[moving]?.title?.ifEmpty { null } ?: "empty item"
 
     Dialog(
@@ -285,7 +290,6 @@ private fun MovePicker(state: TodoUiState, moving: Long, viewModel: TodoViewMode
                     }
                     SearchField(
                         query = query,
-                        onQueryChange = { query = it },
                         label = "Move \"$name\" to",
                         modifier = Modifier.weight(1f).focusRequester(requester),
                     )
@@ -308,24 +312,18 @@ private fun MovePicker(state: TodoUiState, moving: Long, viewModel: TodoViewMode
 }
 
 @Composable
-internal fun SearchField(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    label: String,
-    modifier: Modifier = Modifier,
-) {
+internal fun SearchField(query: TextFieldState, label: String, modifier: Modifier = Modifier) {
     val colors = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     BasicTextField(
-        value = query,
-        onValueChange = onQueryChange,
+        state = query,
         modifier = modifier.semantics { contentDescription = label },
         textStyle = typography.bodyLarge.copy(color = colors.onSurface),
+        lineLimits = TextFieldLineLimits.SingleLine,
         cursorBrush = SolidColor(colors.primary),
-        singleLine = true,
-        decorationBox = { inner ->
+        decorator = { inner ->
             Box(contentAlignment = Alignment.CenterStart) {
-                if (query.isEmpty()) {
+                if (query.text.isEmpty()) {
                     Text(
                         "$label…",
                         style = typography.bodyLarge,
@@ -464,24 +462,71 @@ private fun OutlineList(
     }
 }
 
-internal data class Draft(val revision: Long, val value: TextFieldValue)
+internal data class Typed(val text: String, val selection: TextRange, val composition: TextRange?)
 
-internal fun Draft.resolve(revision: Long, title: String): TextFieldValue =
-    if (this.revision == revision || value.text == title) value
-    else TextFieldValue(title, TextRange(title.length))
+internal class Field(
+    text: String,
+    private val revision: () -> Long,
+    singleLine: Boolean,
+    maxLength: Int,
+) {
+    val state = TextFieldState(text, TextRange(text.length))
+    private var typedIn = revision()
+    private var sent = typed()
 
-internal fun Caret.placedIn(text: String, revision: Long): Draft =
-    Draft(revision, TextFieldValue(text, TextRange(caretIn(text, position))))
+    val input: InputTransformation =
+        state.typing(singleLine, maxLength).then(InputTransformation { typedIn = revision() })
 
-internal fun TextFieldValue.toSingleLine(): TextFieldValue {
-    val line = singleLine(text)
-    if (line == text) return this
-    fun at(index: Int) = singleLine(text.take(index)).length
-    return copy(
-        text = line,
-        selection = TextRange(at(selection.start), at(selection.end)),
-        composition = composition?.let { TextRange(at(it.start), at(it.end)) },
-    )
+    fun follow(text: String) {
+        if (typedIn == revision() || state.text.contentEquals(text)) return
+        state.setTextAndPlaceCursorAtEnd(text)
+        sent = typed()
+    }
+
+    fun place(position: Int) {
+        val at = caretIn(state.text.toString(), position)
+        state.edit { selection = TextRange(at) }
+        typedIn = revision()
+        sent = sent.copy(selection = state.selection)
+    }
+
+    fun take(): Typed? {
+        val now = typed()
+        if (now == sent) return null
+        sent = now
+        return now
+    }
+
+    fun typed() = Typed(state.text.toString(), state.selection, state.composition)
+}
+
+internal fun TextFieldState.typing(singleLine: Boolean, maxLength: Int): InputTransformation {
+    val field = this
+    return InputTransformation {
+        clean(composing = field.composition != null, singleLine, maxLength)
+    }
+}
+
+private fun TextFieldBuffer.clean(composing: Boolean, oneLine: Boolean, maxLength: Int) {
+    if (!composing) {
+        val before = originalText.toString()
+        encodePaste(before, originalSelection.min, originalSelection.max, toString())?.let {
+            replace(0, length, it.text)
+            selection = TextRange(it.caret)
+        }
+    }
+    if (oneLine) {
+        val text = toString()
+        val line = singleLine(text)
+        if (line != text) {
+            fun at(index: Int) = singleLine(text.take(index)).length
+            val start = at(selection.start)
+            val end = at(selection.end)
+            replace(0, length, line)
+            selection = TextRange(start, end)
+        }
+    }
+    if (length > maxLength) revertAllChanges()
 }
 
 @Composable
@@ -495,46 +540,74 @@ private fun OutlineItem(
 ) {
     val key = row.key
     val colors = MaterialTheme.colorScheme
-    var draft by remember {
-        mutableStateOf(Draft(revision, TextFieldValue(row.title, TextRange(row.title.length))))
+    val latestRevision by rememberUpdatedState(revision)
+    val latestTitle by rememberUpdatedState(row.title)
+    val latestNote by rememberUpdatedState(row.note)
+    val title = remember {
+        Field(row.title, { latestRevision }, singleLine = true, maxLength = MAX_TITLE_LENGTH)
+    }
+    val note = remember {
+        Field(row.note, { latestRevision }, singleLine = false, maxLength = MAX_NOTE_LENGTH)
     }
     var focused by remember { mutableStateOf(false) }
     val requester = remember { FocusRequester() }
-    val latestRevision by rememberUpdatedState(revision)
-    val latestTitle by rememberUpdatedState(row.title)
-    val value = draft.resolve(revision, row.title)
-    val current = { draft.resolve(latestRevision, latestTitle) }
-    val interceptor = remember(viewModel, key) { DeleteAtStart { viewModel.deleteBackward(key) } }
+
+    fun sendTitle(select: Boolean = true) {
+        val typed = title.take() ?: return
+        viewModel.setTitle(key, typed.text, typed.composition != null)
+        if (select) viewModel.select(key, typed.selection.min)
+    }
+
+    val interceptor =
+        remember(viewModel, key) {
+            DeleteAtStart {
+                sendTitle()
+                viewModel.deleteBackward(key)
+            }
+        }
     val shown = remember(row.title, colors.primary) { shownTitle(row.title, colors.primary) }
     val latestShown by rememberUpdatedState(shown)
     val chips = remember { Chips() }
-    var noteDraft by remember {
-        mutableStateOf(Draft(revision, TextFieldValue(row.note, TextRange(row.note.length))))
-    }
     var noteFocused by remember { mutableStateOf(false) }
     val noteRequester = remember { FocusRequester() }
-    val latestNote by rememberUpdatedState(row.note)
-    val noteValue = noteDraft.resolve(revision, row.note)
-    val currentNote = { noteDraft.resolve(latestRevision, latestNote) }
+
+    fun sendNote(select: Boolean = true) {
+        val typed = note.take() ?: return
+        viewModel.setNote(key, typed.text, typed.composition != null)
+        if (select) viewModel.selectNote(key, typed.selection.min)
+    }
+
     val shownNote = remember(row.note, colors.primary) { shownTitle(row.note, colors.primary) }
     val latestShownNote by rememberUpdatedState(shownNote)
     var noteLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
 
+    LaunchedEffect(revision, row.title) { title.follow(row.title) }
+    LaunchedEffect(revision, row.note) { note.follow(row.note) }
+    LaunchedEffect(title) { snapshotFlow { title.typed() }.collect { if (focused) sendTitle() } }
+    LaunchedEffect(note) { snapshotFlow { note.typed() }.collect { if (noteFocused) sendNote() } }
     LaunchedEffect(caret) {
         if (caret == null) return@LaunchedEffect
         if (caret.inNote) {
-            noteDraft = caret.placedIn(currentNote().text, latestRevision)
+            note.follow(latestNote)
+            note.place(caret.position)
             noteRequester.requestFocus()
         } else {
-            draft = caret.placedIn(current().text, latestRevision)
+            title.follow(latestTitle)
+            title.place(caret.position)
             requester.requestFocus()
         }
         viewModel.caretShown(caret)
     }
     DisposableEffect(key) {
         onDispose {
-            if (focused) viewModel.blur(key)
-            if (noteFocused) viewModel.blurNote(key)
+            if (focused) {
+                sendTitle(select = false)
+                viewModel.blur(key)
+            }
+            if (noteFocused) {
+                sendNote(select = false)
+                viewModel.blurNote(key)
+            }
         }
     }
 
@@ -571,50 +644,37 @@ private fun OutlineItem(
             Box(Modifier.fillMaxWidth().height(RowHeight)) {
                 InterceptPlatformTextInput(interceptor) {
                     BasicTextField(
-                        value = value,
-                        onValueChange = { typed ->
-                            val pasted =
-                                if (typed.composition != null) null
-                                else
-                                    current().let {
-                                        encodePaste(
-                                            it.text,
-                                            it.selection.min,
-                                            it.selection.max,
-                                            typed.text,
-                                        )
-                                    }
-                            val next =
-                                pasted?.let { TextFieldValue(it.text, TextRange(it.caret)) }
-                                    ?: typed
-                            val clean = next.toSingleLine()
-                            if (clean.text.length > MAX_TITLE_LENGTH) return@BasicTextField
-                            draft = Draft(latestRevision, clean)
-                            viewModel.setTitle(key, clean.text, clean.composition != null)
-                            viewModel.select(key, clean.selection.min)
-                        },
+                        state = title.state,
                         modifier =
                             Modifier.fillMaxSize()
                                 .focusRequester(requester)
                                 .onFocusChanged {
-                                    if (it.isFocused != focused) {
-                                        focused = it.isFocused
-                                        if (focused) viewModel.select(key, current().selection.min)
-                                        else viewModel.blur(key)
+                                    if (it.isFocused == focused) return@onFocusChanged
+                                    if (it.isFocused) {
+                                        focused = true
+                                        viewModel.select(key, title.state.selection.min)
+                                    } else {
+                                        sendTitle(select = false)
+                                        focused = false
+                                        viewModel.blur(key)
                                     }
                                 }
-                                .onPreviewKeyEvent { outlineKey(it, current(), key, viewModel) }
+                                .onPreviewKeyEvent {
+                                    sendTitle()
+                                    outlineKey(it, title.state, key, viewModel)
+                                }
                                 .semantics { contentDescription = "Level ${row.depth + 1}" },
+                        inputTransformation = title.input,
                         textStyle =
                             style.copy(color = if (focused) textColor else Color.Transparent),
-                        cursorBrush = SolidColor(colors.primary),
-                        singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                        keyboardActions =
-                            KeyboardActions(
-                                onNext = { viewModel.enter(key, current().selection.min) }
-                            ),
-                        decorationBox = { inner ->
+                        onKeyboardAction = {
+                            sendTitle()
+                            viewModel.enter(key, title.state.selection.min)
+                        },
+                        lineLimits = TextFieldLineLimits.SingleLine,
+                        cursorBrush = SolidColor(colors.primary),
+                        decorator = { inner ->
                             Box(
                                 Modifier.fillMaxSize().padding(horizontal = 4.dp),
                                 contentAlignment = Alignment.CenterStart,
@@ -657,12 +717,8 @@ private fun OutlineItem(
                                     chips.linkAt(tap, latestShown.links)?.let {
                                         return@detectTapGestures onOpenLink(it)
                                     }
-                                    val text = current().text
-                                    draft =
-                                        Draft(
-                                            latestRevision,
-                                            TextFieldValue(text, TextRange(text.length)),
-                                        )
+                                    title.follow(latestTitle)
+                                    title.place(title.state.text.length)
                                     requester.requestFocus()
                                 }
                             }
@@ -679,49 +735,37 @@ private fun OutlineItem(
                         .padding(start = 4.dp, end = 8.dp, bottom = 10.dp)
                 ) {
                     BasicTextField(
-                        value = noteValue,
-                        onValueChange = { typed ->
-                            val pasted =
-                                if (typed.composition != null) null
-                                else
-                                    currentNote().let {
-                                        encodePaste(
-                                            it.text,
-                                            it.selection.min,
-                                            it.selection.max,
-                                            typed.text,
-                                        )
-                                    }
-                            val next =
-                                pasted?.let { TextFieldValue(it.text, TextRange(it.caret)) }
-                                    ?: typed
-                            if (next.text.length > MAX_NOTE_LENGTH) return@BasicTextField
-                            noteDraft = Draft(latestRevision, next)
-                            viewModel.setNote(key, next.text, next.composition != null)
-                            viewModel.selectNote(key, next.selection.min)
-                        },
+                        state = note.state,
                         modifier =
                             Modifier.fillMaxWidth()
                                 .focusRequester(noteRequester)
                                 .onFocusChanged {
-                                    if (it.isFocused != noteFocused) {
-                                        noteFocused = it.isFocused
-                                        if (noteFocused) {
-                                            viewModel.selectNote(key, currentNote().selection.min)
-                                        } else {
-                                            viewModel.blurNote(key)
-                                        }
+                                    if (it.isFocused == noteFocused) return@onFocusChanged
+                                    if (it.isFocused) {
+                                        noteFocused = true
+                                        viewModel.selectNote(key, note.state.selection.min)
+                                    } else {
+                                        sendNote(select = false)
+                                        noteFocused = false
+                                        viewModel.blurNote(key)
                                     }
                                 }
-                                .onPreviewKeyEvent { noteKey(it, currentNote(), viewModel) }
+                                .onPreviewKeyEvent {
+                                    sendNote()
+                                    noteKey(it, note.state, viewModel)
+                                }
                                 .semantics { contentDescription = "Note" },
+                        inputTransformation = note.input,
                         textStyle =
                             noteStyle.copy(
                                 color = if (noteFocused) noteColor else Color.Transparent
                             ),
+                        lineLimits =
+                            TextFieldLineLimits.MultiLine(
+                                maxHeightInLines = if (noteFocused) Int.MAX_VALUE else 2
+                            ),
                         cursorBrush = SolidColor(colors.primary),
-                        maxLines = if (noteFocused) Int.MAX_VALUE else 2,
-                        decorationBox = { inner ->
+                        decorator = { inner ->
                             Box {
                                 inner()
                                 if (!noteFocused) {
@@ -771,14 +815,10 @@ private fun OutlineItem(
                                                 return@detectTapGestures onOpenLink(it.url)
                                             }
                                     }
-                                    val text = current().text
-                                    draft =
-                                        Draft(
-                                            latestRevision,
-                                            TextFieldValue(text, TextRange(text.length)),
-                                        )
+                                    title.follow(latestTitle)
+                                    title.place(title.state.text.length)
                                     requester.requestFocus()
-                                    viewModel.select(key, text.length)
+                                    viewModel.select(key, title.state.text.length)
                                 }
                             }
                         )
@@ -926,7 +966,7 @@ private fun isUndo(event: KeyEvent): Boolean =
 
 private fun outlineKey(
     event: KeyEvent,
-    value: TextFieldValue,
+    value: TextFieldState,
     key: Long,
     viewModel: TodoViewModel,
 ): Boolean {
@@ -968,7 +1008,7 @@ private fun outlineKey(
     }
 }
 
-private fun noteKey(event: KeyEvent, value: TextFieldValue, viewModel: TodoViewModel): Boolean {
+private fun noteKey(event: KeyEvent, value: TextFieldState, viewModel: TodoViewModel): Boolean {
     val down = event.type == KeyEventType.KeyDown
     val enter = event.key == Key.Enter || event.key == Key.NumPadEnter
     val vertical = event.key == Key.DirectionUp || event.key == Key.DirectionDown
