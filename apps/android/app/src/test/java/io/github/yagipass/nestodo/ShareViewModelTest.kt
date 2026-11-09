@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
@@ -54,6 +55,35 @@ class ShareViewModelTest {
             repository.calls,
         )
         assertEquals(ShareState.Added("Groceries"), viewModel.state.value)
+    }
+
+    @Test
+    fun `the title as edited on the screen is what gets added, without stray spaces around it`() {
+        val viewModel = viewModel()
+        viewModel.setTitle(" Pancakes for Sunday ")
+        viewModel.add(1)
+        assertEquals(
+            "POST \"Pancakes for Sunday\" under 1 at 2 with note \"Serves 4\"",
+            repository.calls.last(),
+        )
+    }
+
+    @Test
+    fun `a share without a title is not added until one is typed, so no todo shows up blank in the list`() {
+        val viewModel =
+            ShareViewModel(backend, settings, Shared("", "https://example.com/pancakes"))
+        viewModel.add(1)
+        viewModel.setTitle("  ")
+        viewModel.add(1)
+        assertEquals(listOf("GET"), repository.calls)
+        assertFalse(viewModel.ready().adding)
+
+        viewModel.setTitle("Pancakes")
+        viewModel.add(1)
+        assertEquals(
+            "POST \"Pancakes\" under 1 at 2 with note \"https://example.com/pancakes\"",
+            repository.calls.last(),
+        )
     }
 
     @Test
