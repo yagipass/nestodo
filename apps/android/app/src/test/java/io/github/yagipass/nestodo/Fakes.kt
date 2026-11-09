@@ -1,5 +1,10 @@
 package io.github.yagipass.nestodo
 
+import android.content.SharedPreferences
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.SharedPreferencesMigration
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.Preferences
 import io.github.yagipass.nestodo.data.Backend
 import io.github.yagipass.nestodo.data.Connection
 import io.github.yagipass.nestodo.data.LoginFlow
@@ -8,6 +13,8 @@ import io.github.yagipass.nestodo.data.TodoRepository
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.Todo
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.test.TestScope
+import org.junit.rules.TemporaryFolder
 
 class FakeRepository(var todos: List<Todo>) : TodoRepository {
     val calls = mutableListOf<String>()
@@ -83,6 +90,95 @@ class FakeBackend(private val repository: TodoRepository, var signedIn: Boolean 
 }
 
 class FakeSettings : Settings {
-    override var showCompleted = true
-    override var shareParent: Long? = null
+    var showCompleted = true
+    var shareParent: Long? = null
+
+    override suspend fun showCompleted() = showCompleted
+
+    override suspend fun setShowCompleted(value: Boolean) {
+        showCompleted = value
+    }
+
+    override suspend fun shareParent() = shareParent
+
+    override suspend fun setShareParent(value: Long?) {
+        shareParent = value
+    }
+}
+
+fun TestScope.preferenceStore(
+    folder: TemporaryFolder,
+    legacy: SharedPreferences? = null,
+): DataStore<Preferences> =
+    PreferenceDataStoreFactory.create(
+        migrations = listOfNotNull(legacy?.let { prefs -> SharedPreferencesMigration({ prefs }) }),
+        scope = backgroundScope,
+    ) {
+        folder.root.resolve("test.preferences_pb")
+    }
+
+class MemoryPreferences(vararg saved: Pair<String, Any>) : SharedPreferences {
+    private val values = mutableMapOf<String, Any?>(*saved)
+
+    override fun getAll(): Map<String, *> = values.toMap()
+
+    override fun contains(key: String) = key in values
+
+    override fun edit(): SharedPreferences.Editor = Editor()
+
+    override fun getString(key: String, defValue: String?) = error("not used")
+
+    override fun getStringSet(key: String, defValues: Set<String>?) = error("not used")
+
+    override fun getInt(key: String, defValue: Int) = error("not used")
+
+    override fun getLong(key: String, defValue: Long) = error("not used")
+
+    override fun getFloat(key: String, defValue: Float) = error("not used")
+
+    override fun getBoolean(key: String, defValue: Boolean) = error("not used")
+
+    override fun registerOnSharedPreferenceChangeListener(
+        listener: SharedPreferences.OnSharedPreferenceChangeListener
+    ) = error("not used")
+
+    override fun unregisterOnSharedPreferenceChangeListener(
+        listener: SharedPreferences.OnSharedPreferenceChangeListener
+    ) = error("not used")
+
+    private inner class Editor : SharedPreferences.Editor {
+        private val changes = mutableListOf<(MutableMap<String, Any?>) -> Unit>()
+
+        override fun remove(key: String): SharedPreferences.Editor {
+            changes += { it.remove(key) }
+            return this
+        }
+
+        override fun clear(): SharedPreferences.Editor {
+            changes += { it.clear() }
+            return this
+        }
+
+        override fun commit(): Boolean {
+            apply()
+            return true
+        }
+
+        override fun apply() {
+            changes.forEach { it(values) }
+            changes.clear()
+        }
+
+        override fun putString(key: String, value: String?) = error("not used")
+
+        override fun putStringSet(key: String, values: Set<String>?) = error("not used")
+
+        override fun putInt(key: String, value: Int) = error("not used")
+
+        override fun putLong(key: String, value: Long) = error("not used")
+
+        override fun putFloat(key: String, value: Float) = error("not used")
+
+        override fun putBoolean(key: String, value: Boolean) = error("not used")
+    }
 }

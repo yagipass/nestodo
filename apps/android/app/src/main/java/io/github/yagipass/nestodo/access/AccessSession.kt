@@ -12,11 +12,11 @@ enum class TokenKind {
 }
 
 interface TokenStore {
-    fun load(host: String, kind: TokenKind): String?
+    suspend fun load(host: String, kind: TokenKind): String?
 
-    fun save(host: String, kind: TokenKind, token: String)
+    suspend fun save(host: String, kind: TokenKind, token: String)
 
-    fun delete(host: String, kind: TokenKind)
+    suspend fun delete(host: String, kind: TokenKind)
 }
 
 sealed interface Plan {

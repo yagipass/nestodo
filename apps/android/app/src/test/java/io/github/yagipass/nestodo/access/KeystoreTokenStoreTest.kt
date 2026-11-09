@@ -1,14 +1,19 @@
 package io.github.yagipass.nestodo.access
 
 import android.content.SharedPreferences
+import io.github.yagipass.nestodo.MemoryPreferences
+import io.github.yagipass.nestodo.preferenceStore
 import java.security.InvalidKeyException
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertThrows
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 class KeystoreTokenStoreTest {
-    private val prefs = MemoryPreferences()
+    @get:Rule val folder = TemporaryFolder()
     private var locked = false
     private val keystore =
         object : TokenCipher {
@@ -24,106 +29,55 @@ class KeystoreTokenStoreTest {
                 return sealed.removePrefix("sealed:")
             }
         }
-    private val store = KeystoreTokenStore(prefs, keystore) { locked }
+
+    private fun TestScope.store(legacy: SharedPreferences? = null) =
+        KeystoreTokenStore(preferenceStore(folder, legacy), keystore) { locked }
 
     @Test
-    fun `keeps the saved sign-in when the locked phone cannot read it, so locking the screen during a sync never signs the member out`() {
-        store.save("nestodo.example.com", TokenKind.Org, "org")
-        locked = true
+    fun `keeps the saved sign-in when the locked phone cannot read it, so locking the screen during a sync never signs the member out`() =
+        runTest {
+            val store = store()
+            store.save("nestodo.example.com", TokenKind.Org, "org")
+            locked = true
 
-        assertThrows(DeviceLockedException::class.java) {
-            store.load("nestodo.example.com", TokenKind.Org)
+            val error = runCatching { store.load("nestodo.example.com", TokenKind.Org) }
+            assertEquals(DeviceLockedException::class.java, error.exceptionOrNull()?.javaClass)
+
+            locked = false
+            assertEquals("org", store.load("nestodo.example.com", TokenKind.Org))
         }
 
-        locked = false
-        assertEquals("org", store.load("nestodo.example.com", TokenKind.Org))
-    }
-
     @Test
-    fun `forgets a sign-in that an unlocked phone cannot read, such as one sealed by an earlier key, so the member is asked to sign in once instead of failing every time`() {
-        store.save("nestodo.example.com", TokenKind.App, "app")
-        keystore.readable = false
-
-        assertNull(store.load("nestodo.example.com", TokenKind.App))
-        assertNull(prefs.getString("nestodo.example.com/App", null))
-    }
-
-    @Test
-    fun `reports a sign-in that cannot be saved while the phone is locked as temporary, so the caller can try again once it is unlocked`() {
-        locked = true
-
-        assertThrows(DeviceLockedException::class.java) {
+    fun `forgets a sign-in that an unlocked phone cannot read, such as one sealed by an earlier key, so the member is asked to sign in once instead of failing every time`() =
+        runTest {
+            val store = store()
             store.save("nestodo.example.com", TokenKind.App, "app")
-        }
-        assertNull(prefs.getString("nestodo.example.com/App", null))
-    }
-}
+            keystore.readable = false
 
-private class MemoryPreferences : SharedPreferences {
-    private val values = mutableMapOf<String, Any?>()
+            assertNull(store.load("nestodo.example.com", TokenKind.App))
 
-    override fun getAll(): Map<String, *> = values.toMap()
-
-    override fun getString(key: String, defValue: String?) = values[key] as String? ?: defValue
-
-    override fun getStringSet(key: String, defValues: Set<String>?) = defValues
-
-    override fun getInt(key: String, defValue: Int) = defValue
-
-    override fun getLong(key: String, defValue: Long) = defValue
-
-    override fun getFloat(key: String, defValue: Float) = defValue
-
-    override fun getBoolean(key: String, defValue: Boolean) = defValue
-
-    override fun contains(key: String) = key in values
-
-    override fun edit(): SharedPreferences.Editor = Editor()
-
-    override fun registerOnSharedPreferenceChangeListener(
-        listener: SharedPreferences.OnSharedPreferenceChangeListener
-    ) = Unit
-
-    override fun unregisterOnSharedPreferenceChangeListener(
-        listener: SharedPreferences.OnSharedPreferenceChangeListener
-    ) = Unit
-
-    private inner class Editor : SharedPreferences.Editor {
-        private val changes = mutableListOf<(MutableMap<String, Any?>) -> Unit>()
-
-        override fun putString(key: String, value: String?): SharedPreferences.Editor {
-            changes += { it[key] = value }
-            return this
+            keystore.readable = true
+            assertNull(store.load("nestodo.example.com", TokenKind.App))
         }
 
-        override fun putStringSet(key: String, values: Set<String>?) = this
+    @Test
+    fun `reports a sign-in that cannot be saved while the phone is locked as temporary, so the caller can try again once it is unlocked`() =
+        runTest {
+            val store = store()
+            locked = true
 
-        override fun putInt(key: String, value: Int) = this
+            val error = runCatching { store.save("nestodo.example.com", TokenKind.App, "app") }
+            assertEquals(DeviceLockedException::class.java, error.exceptionOrNull()?.javaClass)
 
-        override fun putLong(key: String, value: Long) = this
-
-        override fun putFloat(key: String, value: Float) = this
-
-        override fun putBoolean(key: String, value: Boolean) = this
-
-        override fun remove(key: String): SharedPreferences.Editor {
-            changes += { it.remove(key) }
-            return this
+            locked = false
+            assertNull(store.load("nestodo.example.com", TokenKind.App))
         }
 
-        override fun clear(): SharedPreferences.Editor {
-            changes += { it.clear() }
-            return this
-        }
+    @Test
+    fun `a sign-in saved before the app moved to DataStore still works, so updating the app does not open the browser again`() =
+        runTest {
+            val store = store(MemoryPreferences("nestodo.example.com/Org" to "sealed:org"))
 
-        override fun commit(): Boolean {
-            apply()
-            return true
+            assertEquals("org", store.load("nestodo.example.com", TokenKind.Org))
         }
-
-        override fun apply() {
-            changes.forEach { it(values) }
-            changes.clear()
-        }
-    }
 }

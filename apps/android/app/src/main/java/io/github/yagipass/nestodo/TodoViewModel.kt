@@ -133,7 +133,7 @@ class TodoViewModel(
         val typing: Typing? = null,
     )
 
-    private val _state = MutableStateFlow(TodoUiState(showCompleted = settings.showCompleted))
+    private val _state = MutableStateFlow(TodoUiState())
     val state: StateFlow<TodoUiState> = _state.asStateFlow()
 
     private val current: TodoUiState
@@ -164,6 +164,8 @@ class TodoViewModel(
     fun connect() {
         _state.update { it.copy(auth = AuthState.Checking, loginError = null) }
         viewModelScope.launch {
+            val shown = settings.showCompleted()
+            _state.update { it.copy(showCompleted = shown) }
             try {
                 when (val connection = backend.connect()) {
                     is Connection.Ready -> onReady(connection)
@@ -218,7 +220,7 @@ class TodoViewModel(
         loginJob?.cancel()
         disconnect()
         _state.value =
-            TodoUiState(auth = AuthState.SignedOut, showCompleted = settings.showCompleted)
+            TodoUiState(auth = AuthState.SignedOut, showCompleted = current.showCompleted)
         viewModelScope.launch {
             try {
                 backend.logout()
@@ -399,7 +401,7 @@ class TodoViewModel(
 
     fun toggleShowCompleted() {
         val shown = !current.showCompleted
-        settings.showCompleted = shown
+        viewModelScope.launch { settings.setShowCompleted(shown) }
         _state.update { it.copy(showCompleted = shown) }
     }
 
@@ -690,7 +692,7 @@ class TodoViewModel(
                     TodoUiState(
                         auth = AuthState.SignedOut,
                         loginError = "Your sign-in has expired. Sign in again.",
-                        showCompleted = settings.showCompleted,
+                        showCompleted = current.showCompleted,
                     )
             }
             is ApiException.NotFound -> notify("This todo has been deleted.")
