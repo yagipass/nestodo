@@ -146,6 +146,38 @@ class OutlineScreenTest {
     }
 
     @Test
+    fun `a caret dragged to the right edge leaves a margin of text after it, so a finger at the screen edge still reaches the next hidden character`() {
+        assertEquals(
+            620,
+            keepInView(cursor = 1000f, value = 600, viewport = 400, max = 2000, slack = 20f),
+        )
+    }
+
+    @Test
+    fun `a caret dragged to the left edge leaves a margin of text before it, so the previous hidden character can be reached the same way`() {
+        assertEquals(
+            590,
+            keepInView(cursor = 610f, value = 600, viewport = 400, max = 2000, slack = 20f),
+        )
+    }
+
+    @Test
+    fun `a caret well inside the field leaves the text where it is, so moving the caret in the middle does not make the line jump`() {
+        assertEquals(
+            600,
+            keepInView(cursor = 800f, value = 600, viewport = 400, max = 2000, slack = 20f),
+        )
+    }
+
+    @Test
+    fun `at the end of the title the field stops at the last character, so it never scrolls into empty space`() {
+        assertEquals(
+            610,
+            keepInView(cursor = 1000f, value = 600, viewport = 400, max = 610, slack = 20f),
+        )
+    }
+
+    @Test
     fun `putting the caret back after an outline change does not drop letters typed just before it, so they still reach the ViewModel`() {
         val field = title("Dentist")
         field.type { replace(7, 7, "x") }

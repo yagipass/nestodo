@@ -7,6 +7,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -75,6 +76,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -125,6 +127,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -144,6 +147,9 @@ import io.github.yagipass.nestodo.domain.destinations
 import io.github.yagipass.nestodo.domain.encodePaste
 import io.github.yagipass.nestodo.domain.findLinks
 import io.github.yagipass.nestodo.domain.singleLine
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlinx.coroutines.flow.filterNotNull
 
 private val RowHeight = 48.dp
 
@@ -529,6 +535,36 @@ private fun TextFieldBuffer.clean(composing: Boolean, oneLine: Boolean, maxLengt
     if (length > maxLength) revertAllChanges()
 }
 
+internal fun keepInView(cursor: Float, value: Int, viewport: Int, max: Int, slack: Float): Int {
+    val low = ceil(cursor + slack - viewport).toInt()
+    val high = floor(cursor - slack).toInt()
+    return value.coerceIn(low, maxOf(low, high)).coerceIn(0, max.coerceAtLeast(0))
+}
+
+private class EdgeScroll {
+    val scroll = ScrollState(0)
+    private var layout by mutableStateOf<(() -> TextLayoutResult?)?>(null)
+    val onTextLayout: Density.(() -> TextLayoutResult?) -> Unit = { layout = it }
+
+    suspend fun follow(state: TextFieldState, active: () -> Boolean) {
+        snapshotFlow { target(state, active()) }
+            .filterNotNull()
+            .collect { (_, to) -> scroll.scrollTo(to) }
+    }
+
+    private fun target(state: TextFieldState, active: Boolean): Pair<TextRange, Int>? {
+        val result = layout?.invoke() ?: return null
+        val selection = state.selection
+        val viewport = scroll.viewportSize
+        if (!active || !selection.collapsed || viewport <= 0) return null
+        val at = selection.start.coerceIn(0, result.layoutInput.text.length)
+        val slack = minOf((result.getLineBottom(0) - result.getLineTop(0)) / 2, viewport / 4f)
+        val value = Snapshot.withoutReadObservation { scroll.value }
+        val cursor = result.getCursorRect(at).left
+        return selection to keepInView(cursor, value, viewport, scroll.maxValue, slack)
+    }
+}
+
 @Composable
 private fun OutlineItem(
     row: OutlineRow,
@@ -551,6 +587,7 @@ private fun OutlineItem(
     }
     var focused by remember { mutableStateOf(false) }
     val requester = remember { FocusRequester() }
+    val titleScroll = remember { EdgeScroll() }
 
     fun sendTitle(select: Boolean = true) {
         val typed = title.take() ?: return
@@ -584,6 +621,7 @@ private fun OutlineItem(
     LaunchedEffect(revision, row.title) { title.follow(row.title) }
     LaunchedEffect(revision, row.note) { note.follow(row.note) }
     LaunchedEffect(title) { snapshotFlow { title.typed() }.collect { if (focused) sendTitle() } }
+    LaunchedEffect(titleScroll) { titleScroll.follow(title.state) { focused } }
     LaunchedEffect(note) { snapshotFlow { note.typed() }.collect { if (noteFocused) sendNote() } }
     LaunchedEffect(caret) {
         if (caret == null) return@LaunchedEffect
@@ -673,7 +711,9 @@ private fun OutlineItem(
                             viewModel.enter(key, title.state.selection.min)
                         },
                         lineLimits = TextFieldLineLimits.SingleLine,
+                        onTextLayout = titleScroll.onTextLayout,
                         cursorBrush = SolidColor(colors.primary),
+                        scrollState = titleScroll.scroll,
                         decorator = { inner ->
                             Box(
                                 Modifier.fillMaxSize().padding(horizontal = 4.dp),
