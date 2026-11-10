@@ -12,6 +12,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -31,10 +33,14 @@ class TodoViewModelTest {
     private val repository = FakeRepository(listOf(groceries, milk, eggs, dentist))
     private val original = listOf("Groceries", "  Milk", "  Eggs", "Dentist")
     private val settings = FakeSettings()
+    private val backend = FakeBackend(repository)
+    private val opened = mutableListOf<HttpUrl>()
+
+    private fun backendAt(base: HttpUrl) = backend.also { opened += base }
 
     private fun viewModel() =
         TodoViewModel(
-                FakeBackend(repository),
+                ::backendAt,
                 settings,
                 timeZone = { "Asia/Tokyo" },
                 timeSource = dispatcher.scheduler.timeSource,
@@ -58,7 +64,7 @@ class TodoViewModelTest {
 
     @Test
     fun `a saved login opens straight to the outline in the order the server keeps`() {
-        val state = TodoViewModel(FakeBackend(repository), settings).state.value
+        val state = TodoViewModel(::backendAt, settings).state.value
         assertEquals(AuthState.SignedIn, state.auth)
         assertTrue(state.loaded)
         assertEquals(listOf(0, 1, 1, 0), state.rows.map { it.depth })
@@ -1024,6 +1030,129 @@ class TodoViewModelTest {
         assertEquals(AuthState.SignedOut, state.auth)
         assertTrue(state.rows.isEmpty())
         assertNotNull(state.loginError)
+    }
+
+    @Test
+    fun `a first launch asks for the server instead of connecting anywhere`() {
+        settings.baseUrl = null
+        val viewModel = viewModel()
+        assertEquals(AuthState.NoServer, viewModel.state.value.auth)
+        assertTrue(opened.isEmpty())
+    }
+
+    @Test
+    fun `an address copied from the browser is saved as the server's https root, so the API and the sign-in go to the server and not to that page`() {
+        settings.baseUrl = null
+        val viewModel = viewModel()
+
+        viewModel.setServer(" Nestodo.example.com/today?view=all ")
+
+        val state = viewModel.state.value
+        assertEquals("https://nestodo.example.com/".toHttpUrl(), settings.baseUrl)
+        assertEquals(listOf("https://nestodo.example.com/".toHttpUrl()), opened)
+        assertEquals(AuthState.SignedIn, state.auth)
+        assertEquals("nestodo.example.com", state.server)
+        assertTrue(state.loaded)
+    }
+
+    @Test
+    fun `a server behind Access is saved before signing in, so the sign-in that follows goes to it`() {
+        settings.baseUrl = null
+        backend.signedIn = false
+        val viewModel = viewModel()
+
+        viewModel.setServer("nestodo.example.com")
+
+        assertEquals(AuthState.SignedOut, viewModel.state.value.auth)
+        assertEquals("https://nestodo.example.com/".toHttpUrl(), settings.baseUrl)
+    }
+
+    @Test
+    fun `an address that can't be reached is not saved, so the next launch asks again instead of failing on a typo`() {
+        settings.baseUrl = null
+        backend.failure = IOException("no such host")
+        val viewModel = viewModel()
+
+        viewModel.setServer("nestodo.exmaple.com")
+
+        val state = viewModel.state.value
+        assertEquals(AuthState.NoServer, state.auth)
+        assertEquals(
+            "Can't reach this server. Check the address and your connection.",
+            state.loginError,
+        )
+        assertEquals("nestodo.exmaple.com", state.server)
+        assertNull(settings.baseUrl)
+    }
+
+    @Test
+    fun `a site that answers without a todo list is not saved, since the outline could never load from it`() {
+        settings.baseUrl = null
+        repository.failure = ApiException.Server(404)
+        val viewModel = viewModel()
+
+        viewModel.setServer("example.com")
+
+        val state = viewModel.state.value
+        assertEquals(AuthState.NoServer, state.auth)
+        assertEquals("Couldn't find Nestodo at this address.", state.loginError)
+        assertNull(settings.baseUrl)
+    }
+
+    @Test
+    fun `text that is not an address asks for one instead of trying to connect`() {
+        settings.baseUrl = null
+        val viewModel = viewModel()
+
+        viewModel.setServer("my server")
+
+        assertEquals(AuthState.NoServer, viewModel.state.value.auth)
+        assertEquals(
+            "Enter an address such as nestodo.example.com.",
+            viewModel.state.value.loginError,
+        )
+        assertTrue(opened.isEmpty())
+    }
+
+    @Test
+    fun `a plain http address is refused before any request, so the sign-in and the todos never travel unencrypted`() {
+        settings.baseUrl = null
+        val viewModel = viewModel()
+
+        viewModel.setServer("http://nestodo.example.com")
+
+        assertEquals(
+            "Enter an address that starts with https://.",
+            viewModel.state.value.loginError,
+        )
+        assertTrue(opened.isEmpty())
+        assertNull(settings.baseUrl)
+    }
+
+    @Test
+    fun `a debug build reaches the dev server over http on a host its network config allows`() {
+        settings.baseUrl = null
+        val viewModel =
+            TodoViewModel(::backendAt, settings, cleartextAllowed = { it == "10.0.2.2" })
+
+        viewModel.setServer("http://10.0.2.2:5173")
+
+        assertEquals("http://10.0.2.2:5173/".toHttpUrl(), settings.baseUrl)
+        assertEquals("http://10.0.2.2:5173", viewModel.state.value.server)
+    }
+
+    @Test
+    fun `changing the server signs out of the old one and forgets it, so its sign-in is not left on the phone`() {
+        val viewModel = viewModel()
+
+        viewModel.changeServer()
+
+        val state = viewModel.state.value
+        assertEquals(AuthState.NoServer, state.auth)
+        assertTrue(state.rows.isEmpty())
+        assertTrue(backend.loggedOut)
+        assertNull(settings.baseUrl)
+        assertEquals("nestodo.example.com", state.server)
     }
 
     @Test

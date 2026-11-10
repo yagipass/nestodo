@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -12,9 +13,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -27,7 +32,10 @@ import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.yagipass.nestodo.AuthState
 import io.github.yagipass.nestodo.R
@@ -36,6 +44,9 @@ import io.github.yagipass.nestodo.R
 fun LoginScreen(
     auth: AuthState,
     error: String?,
+    server: String?,
+    onSetServer: (String) -> Unit,
+    onChangeServer: () -> Unit,
     onSignIn: () -> Unit,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
@@ -80,7 +91,7 @@ fun LoginScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                if (error != null) {
+                if (error != null && auth != AuthState.NoServer) {
                     Text(
                         error,
                         color = MaterialTheme.colorScheme.error,
@@ -90,9 +101,13 @@ fun LoginScreen(
                     )
                 }
                 when (auth) {
+                    AuthState.NoServer -> ServerForm(server, error, onSetServer)
                     AuthState.Checking,
                     AuthState.SignedIn -> CircularProgressIndicator()
-                    AuthState.Unavailable -> WideButton("Try again", onRetry)
+                    AuthState.Unavailable -> {
+                        WideButton("Try again", onRetry)
+                        ServerLine(server, onChangeServer)
+                    }
                     AuthState.WaitingForBrowser -> {
                         WideButton("Signing in…", onClick = {}, enabled = false)
                         Hint(
@@ -108,10 +123,52 @@ fun LoginScreen(
                             "Opens the Cloudflare Access sign-in in your browser.\n" +
                                 "Use the same account as the web app."
                         )
+                        ServerLine(server, onChangeServer)
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ServerForm(server: String?, error: String?, onSubmit: (String) -> Unit) {
+    val address = rememberTextFieldState(server.orEmpty())
+    val submit = { onSubmit(address.text.toString()) }
+    OutlinedTextField(
+        state = address,
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Server") },
+        placeholder = { Text("nestodo.example.com") },
+        supportingText = error?.let { { Text(it) } },
+        isError = error != null,
+        keyboardOptions =
+            KeyboardOptions(
+                autoCorrectEnabled = false,
+                keyboardType = KeyboardType.Uri,
+                imeAction = ImeAction.Go,
+            ),
+        onKeyboardAction = { submit() },
+        lineLimits = TextFieldLineLimits.SingleLine,
+    )
+    WideButton("Continue", submit, enabled = address.text.isNotBlank())
+    Hint("The address you open the web app at.")
+}
+
+@Composable
+private fun ServerLine(server: String?, onChange: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (server != null) {
+            Text(
+                server,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+        }
+        TextButton(onClick = onChange) { Text("Change server") }
     }
 }
 

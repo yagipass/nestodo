@@ -4,13 +4,6 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-val baseUrl =
-    providers.gradleProperty("nestodo.baseUrl").orNull
-        ?: error(
-            "Set nestodo.baseUrl to your Nestodo server in ~/.gradle/gradle.properties, " +
-                "or pass -Pnestodo.baseUrl=https://nestodo.example.com"
-        )
-
 android {
     namespace = "io.github.yagipass.nestodo"
     compileSdk = 37
@@ -21,7 +14,6 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.9.3"
-        buildConfigField("String", "BASE_URL", "\"$baseUrl\"")
     }
 
     buildTypes {
@@ -35,10 +27,7 @@ android {
 
     androidResources { localeFilters += "en" }
 
-    buildFeatures {
-        buildConfig = true
-        compose = true
-    }
+    buildFeatures { compose = true }
 }
 
 dependencies {

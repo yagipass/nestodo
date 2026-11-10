@@ -29,7 +29,7 @@ class ShareViewModelTest {
     private val settings = FakeSettings()
     private val recipe = Shared("Pancakes https://example.com/pancakes", "Serves 4")
 
-    private fun viewModel() = ShareViewModel(backend, settings, recipe)
+    private fun viewModel() = ShareViewModel({ backend }, settings, recipe)
 
     private fun ShareViewModel.ready() = state.value as ShareState.Ready
 
@@ -71,7 +71,7 @@ class ShareViewModelTest {
     @Test
     fun `a share without a title is not added until one is typed, so no todo shows up blank in the list`() {
         val viewModel =
-            ShareViewModel(backend, settings, Shared("", "https://example.com/pancakes"))
+            ShareViewModel({ backend }, settings, Shared("", "https://example.com/pancakes"))
         viewModel.add(1)
         viewModel.setTitle("  ")
         viewModel.add(1)
@@ -160,6 +160,15 @@ class ShareViewModelTest {
     @Test
     fun `without a saved sign-in the screen asks to open the app instead of adding`() {
         backend.signedIn = false
+        val viewModel = viewModel()
+        viewModel.add(null)
+        assertEquals(ShareState.SignedOut, viewModel.state.value)
+        assertEquals(emptyList<String>(), repository.calls)
+    }
+
+    @Test
+    fun `before a server is set up the screen asks to open the app instead of adding`() {
+        settings.baseUrl = null
         val viewModel = viewModel()
         viewModel.add(null)
         assertEquals(ShareState.SignedOut, viewModel.state.value)

@@ -3,6 +3,7 @@ package io.github.yagipass.nestodo.data
 import io.github.yagipass.nestodo.MemoryPreferences
 import io.github.yagipass.nestodo.preferenceStore
 import kotlinx.coroutines.test.runTest
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -20,6 +21,19 @@ class PreferenceSettingsTest {
             val settings = PreferenceSettings(preferenceStore(folder))
 
             assertTrue(settings.showCompleted())
+        }
+
+    @Test
+    fun `the server is kept until it is changed, so each launch connects to it without asking again`() =
+        runTest {
+            val settings = PreferenceSettings(preferenceStore(folder))
+            assertNull(settings.baseUrl())
+
+            settings.setBaseUrl("http://10.0.2.2:5173/".toHttpUrl())
+            assertEquals("http://10.0.2.2:5173/".toHttpUrl(), settings.baseUrl())
+
+            settings.setBaseUrl(null)
+            assertNull(settings.baseUrl())
         }
 
     @Test
