@@ -10,10 +10,17 @@ license = "MIT AND Apache-2.0"
 name = "nestodo_desktop"
 path = "src/lib.rs"
 
+[[bin]]
+name = "nestodo-desktop"
+path = "src/main.rs"
+
 [dependencies]
 base64 = "0.23.1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 crypto_box = "0.9.1"
 dirs = "7.0.0"
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "runtime_shaders"] }
+iana-time-zone = "0.1"
 keyring = "4.2.0"
 ring = "0.17.14"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -23,6 +30,7 @@ ureq = "3.5.0"
 url = "2.5.8"
 
 [dev-dependencies]
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "runtime_shaders", "test-support"] }
 mockito = "1.7.2"
 
 [lints.clippy]

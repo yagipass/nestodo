@@ -45,6 +45,19 @@ Run these in `apps/cli`.
 
 CI also builds the Nix package with `nix build .#nestodo` on macOS (Apple silicon) and Linux (x86_64 and arm64), and pushes it to the `nestodo` Cachix cache from `main`.
 
+### Desktop
+
+The desktop app is built with [GPUI](https://www.gpui.rs) and runs on macOS. It is its own Cargo workspace, so its GUI dependencies stay out of the CLI's `Cargo.lock` and Nix package. Run these in `apps/desktop`.
+
+| Command | Purpose |
+|---|---|
+| `cargo clippy --locked --all-targets -- -D warnings` | lint |
+| `cargo test --locked` | run the unit tests and the UI tests, which drive the outline with simulated keystrokes against an in-memory server |
+| `NESTODO_BASE_URL=http://127.0.0.1:5173 cargo run` | run the app against `vp dev` |
+| `NESTODO_BASE_URL=https://nestodo.example.com ./bundle.sh` | build `target/release/Nestodo.app` for that server |
+
+The app reads `NESTODO_BASE_URL` when it starts and falls back to the value it was built with, since an app opened from Finder gets no shell environment. Start `vp dev` with `--host 127.0.0.1`, as for the Android emulator. No CI job builds the desktop app yet.
+
 ### Android
 
 Run these in `apps/android`. Gradle needs the address of your server: set `nestodo.baseUrl=https://nestodo.example.com` in `~/.gradle/gradle.properties`, or pass `-Pnestodo.baseUrl=https://nestodo.example.com`, which takes precedence.

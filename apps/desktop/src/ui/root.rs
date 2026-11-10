@@ -1,0 +1,1194 @@
+use std::cell::Cell;
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use gpui::{
+    AnyElement, AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
+    KeyBinding, MouseButton, MouseDownEvent, Pixels, PromptLevel, SharedString, Subscription,
+    WeakEntity, Window, WindowHandle, actions, canvas, deferred, div, img, prelude::*, px,
+};
+use url::Url;
+
+use nestodo_desktop::access::{self, AccessApp};
+use nestodo_desktop::api::{self, Client, Connection};
+use nestodo_desktop::error::Error;
+use nestodo_desktop::http::Http;
+use nestodo_desktop::prefs::Prefs;
+use nestodo_desktop::store::TokenStore;
+use nestodo_desktop::wire::Todo;
+
+use crate::ui::backend::Backend;
+use crate::ui::icons::{APP_ICON, Icon};
+use crate::ui::outline_view::{OutlineEvent, OutlineView, ToggleShowDone};
+use crate::ui::shortcuts::shortcuts_dialog;
+use crate::ui::stats_view::StatsView;
+use crate::ui::theme::{sync_theme, theme};
+use crate::ui::widgets::{PAGE_WIDTH, icon, icon_button, modal, shadow};
+
+actions!(
+    nestodo,
+    [
+        ShowShortcuts,
+        ShowStats,
+        ShowTodos,
+        CloseDialog,
+        CloseMenu,
+        Quit
+    ]
+);
+
+pub fn bindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("escape", CloseDialog, Some("Dialog")),
+        KeyBinding::new("escape", CloseMenu, Some("AccountMenu")),
+        KeyBinding::new("cmd-q", Quit, None),
+    ]
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Todos,
+    Stats,
+}
+
+struct Workspace {
+    client: Arc<Client>,
+    page: Page,
+    outline: Entity<OutlineView>,
+    stats: Option<Entity<StatsView>>,
+    _subscription: Subscription,
+}
+
+enum Screen {
+    NoServer(String),
+    Connecting,
+    Unavailable(String),
+    SignedOut {
+        app: AccessApp,
+        error: Option<String>,
+    },
+    Waiting {
+        app: AccessApp,
+        cancel: Arc<AtomicBool>,
+    },
+    Ready(Workspace),
+}
+
+pub struct Root {
+    base: Option<Url>,
+    store: Arc<dyn TokenStore>,
+    prefs_path: Option<PathBuf>,
+    prefs: Prefs,
+    screen: Screen,
+    focus_handle: FocusHandle,
+    menu_focus: FocusHandle,
+    dialog_focus: FocusHandle,
+    menu_open: bool,
+    shortcuts_open: bool,
+    account_bounds: Rc<Cell<Bounds<Pixels>>>,
+    _subscriptions: Vec<Subscription>,
+}
+
+fn sentence(message: String) -> String {
+    let mut chars = message.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => message,
+    }
+}
+
+fn leave_when_saved(
+    root: WeakEntity<Root>,
+    window: &mut Window,
+    cx: &mut App,
+    leave: impl FnOnce(&mut Window, &mut App) + 'static,
+) -> bool {
+    let Some(entity) = root.upgrade() else {
+        return true;
+    };
+    if !entity.read(cx).has_unsaved_changes(cx) {
+        return true;
+    }
+    entity.update(cx, Root::flush);
+    window
+        .spawn(cx, async move |cx| {
+            for _ in 0..50 {
+                let (pending, failed) = cx
+                    .update(|_, cx| {
+                        root.upgrade().map_or((false, false), |root| {
+                            let root = root.read(cx);
+                            (root.has_unsaved_changes(cx), root.save_failed(cx))
+                        })
+                    })
+                    .unwrap_or((false, false));
+                if !pending {
+                    cx.update(|window, cx| leave(window, cx)).ok();
+                    return;
+                }
+                if failed {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+            }
+            let answer = cx
+                .update(|window, cx| {
+                    window.prompt(
+                        PromptLevel::Warning,
+                        "Some changes haven\u{2019}t been saved.",
+                        Some("Leave anyway and lose them?"),
+                        &["Stay", "Leave Anyway"],
+                        cx,
+                    )
+                })
+                .ok();
+            if let Some(answer) = answer
+                && answer.await.ok() == Some(1)
+            {
+                cx.update(|window, cx| leave(window, cx)).ok();
+            }
+        })
+        .detach();
+    false
+}
+
+pub fn ask_before_leaving_unsaved_changes(window: WindowHandle<Root>, cx: &mut App) {
+    guard_leaving(window, cx, |cx| cx.quit());
+}
+
+fn guard_leaving(
+    window: WindowHandle<Root>,
+    cx: &mut App,
+    quit: impl Fn(&mut App) + Clone + 'static,
+) {
+    window
+        .update(cx, |_, window, cx| {
+            let root = cx.entity().downgrade();
+            window.on_window_should_close(cx, move |window, cx| {
+                leave_when_saved(root.clone(), window, cx, |window, _| {
+                    window.remove_window();
+                })
+            });
+        })
+        .ok();
+    cx.on_action(move |_: &Quit, cx| {
+        let quit = quit.clone();
+        cx.defer(move |cx| {
+            let leave = quit.clone();
+            let left = window
+                .entity(cx)
+                .and_then(|root| {
+                    let root = root.downgrade();
+                    AnyWindowHandle::from(window).update(cx, |_, window, cx| {
+                        leave_when_saved(root, window, cx, move |_, cx| leave(cx))
+                    })
+                })
+                .unwrap_or(true);
+            if left {
+                quit(cx);
+            }
+        });
+    });
+}
+
+type Loaded = (Client, Vec<Todo>);
+
+fn load(base: Url, store: Arc<dyn TokenStore>) -> Result<Result<Loaded, AccessApp>, Error> {
+    let connected = Client::connect(base.clone(), store.clone(), api::now())?;
+    let client = match connected {
+        Connection::Ready(client) => *client,
+        Connection::SignedOut(app) => return Ok(Err(app)),
+    };
+    match client.list() {
+        Ok(todos) => Ok(Ok((client, todos))),
+        Err(Error::NotSignedIn) => {
+            api::logout(store.as_ref(), base.host_str().unwrap_or_default())?;
+            match Client::connect(base, store, api::now())? {
+                Connection::SignedOut(app) => Ok(Err(app)),
+                Connection::Ready(_) => Err(Error::NotSignedIn),
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+impl Root {
+    pub fn new(
+        base: Result<Url, String>,
+        store: Arc<dyn TokenStore>,
+        prefs_path: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        sync_theme(window, cx);
+        let prefs = Prefs::load(prefs_path.as_deref());
+        let subscriptions = vec![
+            cx.observe_window_appearance(window, |_, window, cx| {
+                sync_theme(window, cx);
+            }),
+            cx.on_focus_lost(window, Self::restore_focus),
+        ];
+        let (base, screen) = match base {
+            Ok(base) => (Some(base), Screen::Connecting),
+            Err(message) => (None, Screen::NoServer(message)),
+        };
+        let mut root = Self {
+            base,
+            store,
+            prefs_path,
+            prefs,
+            screen,
+            focus_handle: cx.focus_handle(),
+            menu_focus: cx.focus_handle(),
+            dialog_focus: cx.focus_handle(),
+            menu_open: false,
+            shortcuts_open: false,
+            account_bounds: Rc::new(Cell::new(Bounds::default())),
+            _subscriptions: subscriptions,
+        };
+        if root.base.is_some() {
+            root.connect(window, cx);
+        }
+        window.focus(&root.focus_handle);
+        root
+    }
+
+    fn connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(base) = self.base.clone() else {
+            return;
+        };
+        self.screen = Screen::Connecting;
+        self.menu_open = false;
+        self.shortcuts_open = false;
+        window.set_window_title("Nestodo");
+        let store = self.store.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx.background_spawn(async move { load(base, store) }).await;
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(Ok((client, todos))) => this.open_workspace(client, &todos, window, cx),
+                    Ok(Err(app)) => this.screen = Screen::SignedOut { app, error: None },
+                    Err(error) => this.screen = Screen::Unavailable(sentence(error.to_string())),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn open_workspace(
+        &mut self,
+        client: Client,
+        todos: &[Todo],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let client = Arc::new(client);
+        let backend: Arc<dyn Backend> = client.clone();
+        let show_done = self.prefs.show_completed;
+        let outline = cx.new(|cx| OutlineView::new(backend, todos, show_done, window, cx));
+        let subscription =
+            cx.subscribe_in(&outline, window, |this, _, event, window, cx| match event {
+                OutlineEvent::ShowDoneChanged(shown) => {
+                    this.prefs.show_completed = *shown;
+                    this.prefs.save(this.prefs_path.as_deref());
+                }
+                OutlineEvent::ReloadRequested | OutlineEvent::SignedOut => this.connect(window, cx),
+            });
+        window.focus(&outline.focus_handle(cx));
+        window.set_window_title("Todos | Nestodo");
+        self.screen = Screen::Ready(Workspace {
+            client,
+            page: Page::Todos,
+            outline,
+            stats: None,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    fn sign_in(&mut self, app: AccessApp, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(base) = self.base.clone() else {
+            return;
+        };
+        let pending = access::start_login(&base, &app);
+        cx.open_url(pending.url.as_str());
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.screen = Screen::Waiting {
+            app: app.clone(),
+            cancel: cancel.clone(),
+        };
+        let store = self.store.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let flag = cancel.clone();
+            let failed_app = app.clone();
+            let result = cx
+                .background_spawn(async move {
+                    let http = Http::new();
+                    access::finish_login(&http, &pending, store.as_ref(), api::now(), &flag)?;
+                    let client = Client::signed_in(base, app, store, api::now())?;
+                    let todos = client.list()?;
+                    Ok::<_, Error>((client, todos))
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                if cancel.load(Ordering::Relaxed) {
+                    return;
+                }
+                match result {
+                    Ok((client, todos)) => this.open_workspace(client, &todos, window, cx),
+                    Err(Error::Cancelled) => {}
+                    Err(error) => {
+                        this.screen = Screen::SignedOut {
+                            app: failed_app,
+                            error: Some(sentence(error.to_string())),
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn cancel_sign_in(&mut self, cx: &mut Context<Self>) {
+        if let Screen::Waiting { app, cancel } = &self.screen {
+            cancel.store(true, Ordering::Relaxed);
+            self.screen = Screen::SignedOut {
+                app: app.clone(),
+                error: None,
+            };
+            cx.notify();
+        }
+    }
+
+    fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_menu(window, cx);
+        let root = cx.entity().downgrade();
+        window.defer(cx, move |window, cx| {
+            let forget = {
+                let root = root.clone();
+                move |window: &mut Window, cx: &mut App| {
+                    root.update(cx, |this, cx| this.forget_login(window, cx))
+                        .ok();
+                }
+            };
+            if leave_when_saved(root, window, cx, forget.clone()) {
+                forget(window, cx);
+            }
+        });
+        cx.notify();
+    }
+
+    fn forget_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Screen::Ready(workspace) = &self.screen else {
+            return;
+        };
+        let client = workspace.client.clone();
+        let store = self.store.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { client.sign_out(store.as_ref()) })
+                .await;
+            this.update_in(cx, |this, window, cx| match result {
+                Ok(()) => this.connect(window, cx),
+                Err(error) => {
+                    let message = error.to_string();
+                    drop(window.prompt(
+                        PromptLevel::Critical,
+                        "Couldn\u{2019}t sign out",
+                        Some(&message),
+                        &["OK"],
+                        cx,
+                    ));
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn show_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu_open = false;
+        let Screen::Ready(workspace) = &mut self.screen else {
+            return;
+        };
+        if workspace.page == page {
+            self.restore_focus(window, cx);
+            cx.notify();
+            return;
+        }
+        workspace.page = page;
+        match page {
+            Page::Todos => {
+                window.set_window_title("Todos | Nestodo");
+                window.focus(&workspace.outline.focus_handle(cx));
+                workspace
+                    .outline
+                    .update(cx, super::outline_view::OutlineView::refresh);
+            }
+            Page::Stats => {
+                window.set_window_title("Stats | Nestodo");
+                workspace
+                    .outline
+                    .update(cx, super::outline_view::OutlineView::flush_now);
+                let backend: Arc<dyn Backend> = workspace.client.clone();
+                match &workspace.stats {
+                    Some(stats) => stats.update(cx, super::stats_view::StatsView::reload),
+                    None => workspace.stats = Some(cx.new(|cx| StatsView::new(backend, cx))),
+                }
+                window.focus(&self.focus_handle);
+            }
+        }
+        cx.notify();
+    }
+
+    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_menu(window, cx);
+        if let Some(base) = &self.base
+            && let Ok(url) = base.join("/settings")
+        {
+            cx.open_url(url.as_str());
+        }
+        cx.notify();
+    }
+
+    fn open_shortcuts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu_open = false;
+        self.shortcuts_open = true;
+        window.focus(&self.dialog_focus);
+        cx.notify();
+    }
+
+    fn close_shortcuts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.shortcuts_open = false;
+        self.restore_focus(window, cx);
+        cx.notify();
+    }
+
+    fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Screen::Ready(workspace) = &self.screen
+            && workspace.page == Page::Todos
+        {
+            window.focus(&workspace.outline.focus_handle(cx));
+        } else {
+            window.focus(&self.focus_handle);
+        }
+    }
+
+    fn toggle_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu_open = !self.menu_open;
+        if self.menu_open {
+            window.focus(&self.menu_focus);
+        } else {
+            self.restore_focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu_open = false;
+        self.restore_focus(window, cx);
+        cx.notify();
+    }
+
+    fn on_close_menu(&mut self, _: &CloseMenu, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_menu(window, cx);
+    }
+
+    fn on_close_dialog(&mut self, _: &CloseDialog, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_shortcuts(window, cx);
+    }
+
+    fn modal_open(&self, cx: &App) -> bool {
+        self.shortcuts_open
+            || matches!(&self.screen, Screen::Ready(workspace)
+                if workspace.page == Page::Todos && workspace.outline.read(cx).has_modal())
+    }
+
+    fn on_show_shortcuts(
+        &mut self,
+        _: &ShowShortcuts,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.modal_open(cx) {
+            self.open_shortcuts(window, cx);
+        }
+    }
+
+    fn on_show_stats(&mut self, _: &ShowStats, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.modal_open(cx) {
+            self.show_page(Page::Stats, window, cx);
+        }
+    }
+
+    fn on_show_todos(&mut self, _: &ShowTodos, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.modal_open(cx) {
+            self.show_page(Page::Todos, window, cx);
+        }
+    }
+
+    fn on_toggle_show_done(
+        &mut self,
+        _: &ToggleShowDone,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.modal_open(cx) {
+            return;
+        }
+        if let Screen::Ready(workspace) = &self.screen
+            && workspace.page == Page::Todos
+        {
+            workspace
+                .outline
+                .clone()
+                .update(cx, |outline, cx| outline.toggle_show_done(window, cx));
+        }
+    }
+
+    pub fn has_unsaved_changes(&self, cx: &App) -> bool {
+        match &self.screen {
+            Screen::Ready(workspace) => workspace.outline.read(cx).has_unsaved_changes(),
+            _ => false,
+        }
+    }
+
+    pub fn save_failed(&self, cx: &App) -> bool {
+        match &self.screen {
+            Screen::Ready(workspace) => workspace.outline.read(cx).save_failed(),
+            _ => false,
+        }
+    }
+
+    pub fn flush(&mut self, cx: &mut Context<Self>) {
+        if let Screen::Ready(workspace) = &self.screen {
+            workspace
+                .outline
+                .update(cx, super::outline_view::OutlineView::flush_now);
+        }
+    }
+
+    fn render_menu(
+        &mut self,
+        workspace_email: Option<String>,
+        page: Page,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let colors = theme(cx);
+        let protected =
+            matches!(&self.screen, Screen::Ready(workspace) if workspace.client.is_protected());
+        let item = |id: &'static str, glyph: Icon, label: &'static str, current: bool| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .w_full()
+                .h(px(36.))
+                .px(px(10.))
+                .rounded(px(5.))
+                .text_size(px(14.))
+                .text_color(colors.text)
+                .cursor_pointer()
+                .when(current, |item| item.font_weight(FontWeight::SEMIBOLD))
+                .hover(move |style| style.bg(colors.hover))
+                .child(icon(glyph, 16., colors.muted))
+                .child(label)
+        };
+        let separator = || div().h(px(1.)).my(px(4.)).bg(colors.border);
+        let account_bounds = self.account_bounds.clone();
+        deferred(
+            div()
+                .id("account-menu")
+                .key_context("AccountMenu")
+                .track_focus(&self.menu_focus)
+                .on_action(cx.listener(Self::on_close_menu))
+                .absolute()
+                .top(px(38.))
+                .right_0()
+                .w(px(200.))
+                .p(px(4.))
+                .border_1()
+                .border_color(colors.border)
+                .rounded(px(8.))
+                .bg(colors.surface)
+                .shadow(shadow(&colors, false))
+                .occlude()
+                .on_mouse_down_out(
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        if !account_bounds.get().contains(&event.position) {
+                            this.menu_open = false;
+                            if this.menu_focus.is_focused(window) {
+                                this.restore_focus(window, cx);
+                            }
+                            cx.notify();
+                        }
+                    }),
+                )
+                .child(
+                    div()
+                        .px(px(10.))
+                        .py(px(8.))
+                        .text_size(px(14.))
+                        .text_color(colors.muted)
+                        .truncate()
+                        .child(workspace_email.unwrap_or_else(|| {
+                            self.base
+                                .as_ref()
+                                .and_then(|base| base.host_str())
+                                .unwrap_or_default()
+                                .to_string()
+                        })),
+                )
+                .child(separator())
+                .child(
+                    item("menu-stats", Icon::Stats, "Stats", page == Page::Stats).on_click(
+                        cx.listener(|this, _, window, cx| this.show_page(Page::Stats, window, cx)),
+                    ),
+                )
+                .child(
+                    item("menu-settings", Icon::Settings, "Settings", false).on_click(
+                        cx.listener(|this, _, window, cx| this.open_settings(window, cx)),
+                    ),
+                )
+                .child(
+                    item("menu-help", Icon::Help, "Help", false).on_click(
+                        cx.listener(|this, _, window, cx| this.open_shortcuts(window, cx)),
+                    ),
+                )
+                .when(protected, |menu| {
+                    menu.child(separator()).child(
+                        item("menu-sign-out", Icon::SignOut, "Sign out", false)
+                            .on_click(cx.listener(|this, _, window, cx| this.sign_out(window, cx))),
+                    )
+                }),
+        )
+        .with_priority(2)
+        .into_any_element()
+    }
+
+    fn render_header(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let colors = theme(cx);
+        let Screen::Ready(workspace) = &self.screen else {
+            return div().into_any_element();
+        };
+        let page = workspace.page;
+        let email = workspace.client.email();
+        let outline = workspace.outline.clone();
+        let tools = (page == Page::Todos)
+            .then(|| outline.update(cx, |outline, cx| outline.render_tools(window, cx)));
+        let menu = self.menu_open.then(|| self.render_menu(email, page, cx));
+        let bounds = self.account_bounds.clone();
+        let open = self.menu_open;
+        div()
+            .w_full()
+            .flex()
+            .justify_center()
+            .px(px(16.))
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(PAGE_WIDTH))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .pt(px(16.))
+                    .pb(px(16.))
+                    .child(
+                        div()
+                            .id("brand")
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.show_page(Page::Todos, window, cx);
+                            }))
+                            .child(img(APP_ICON).size(px(28.)).flex_none())
+                            .child(
+                                div()
+                                    .text_size(px(20.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(colors.text)
+                                    .child("Nestodo"),
+                            ),
+                    )
+                    .child(div().flex_1())
+                    .children(tools)
+                    .child(
+                        div()
+                            .relative()
+                            .flex()
+                            .child(
+                                icon_button("account", Icon::Person, 20., cx)
+                                    .when(open, |button| button.bg(colors.hover))
+                                    .child(
+                                        canvas(
+                                            move |bounds_now, _, _| bounds.set(bounds_now),
+                                            |_, (), _, _| {},
+                                        )
+                                        .absolute()
+                                        .size_full(),
+                                    )
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_menu(window, cx);
+                                    })),
+                            )
+                            .children(menu),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_login(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = theme(cx);
+        let hint = |text: &'static str| {
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .text_size(px(14.))
+                .text_color(colors.muted)
+                .children(text.split('\n').map(|line| div().child(line)))
+        };
+        let wide = |id: &'static str, label: &'static str, enabled: bool| {
+            div()
+                .id(id)
+                .w_full()
+                .h(px(52.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(26.))
+                .bg(colors.accent)
+                .text_color(gpui::white())
+                .text_size(px(16.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .when(enabled, |button| {
+                    button
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(colors.accent_strong))
+                })
+                .when(!enabled, |button| button.opacity(0.5))
+                .child(label)
+        };
+        let (error, actions): (Option<String>, AnyElement) = match &self.screen {
+            Screen::NoServer(message) => (
+                Some(message.clone()),
+                hint("Build or start the app with NESTODO_BASE_URL set to your server,\nsuch as https://nestodo.example.com.").into_any_element(),
+            ),
+            Screen::Connecting | Screen::Ready(_) => (
+                None,
+                div()
+                    .text_size(px(14.))
+                    .text_color(colors.muted)
+                    .child("Connecting\u{2026}")
+                    .into_any_element(),
+            ),
+            Screen::Unavailable(message) => (
+                Some(message.clone()),
+                wide("retry", "Try again", true)
+                    .on_click(cx.listener(|this, _, window, cx| this.connect(window, cx)))
+                    .into_any_element(),
+            ),
+            Screen::SignedOut { app, error } => {
+                let app = app.clone();
+                (
+                    error.clone(),
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(16.))
+                        .child(
+                            wide("sign-in", "Sign in", true).on_click(cx.listener(
+                                move |this, _, window, cx| this.sign_in(app.clone(), window, cx),
+                            )),
+                        )
+                        .child(hint(
+                            "Opens the Cloudflare Access sign-in in your browser.\nUse the same account as the web app.",
+                        ))
+                        .into_any_element(),
+                )
+            }
+            Screen::Waiting { .. } => (
+                None,
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(16.))
+                    .child(wide("signing-in", "Signing in\u{2026}", false))
+                    .child(hint(
+                        "In the browser, sign in and approve.\nCloudflare calls this app a command-line tool.",
+                    ))
+                    .child(
+                        div()
+                            .id("cancel-sign-in")
+                            .px(px(12.))
+                            .py(px(8.))
+                            .rounded(px(6.))
+                            .text_size(px(14.))
+                            .text_color(colors.accent)
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(colors.hover))
+                            .on_click(cx.listener(|this, _, _, cx| this.cancel_sign_in(cx)))
+                            .child("Cancel"),
+                    )
+                    .into_any_element(),
+            ),
+        };
+        div()
+            .size_full()
+            .flex()
+            .justify_center()
+            .px(px(24.))
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(420.))
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .pb(px(40.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(16.))
+                            .child(img(APP_ICON).size(px(80.)))
+                            .child(
+                                div()
+                                    .text_size(px(32.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .child("Nestodo"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(16.))
+                                    .text_color(colors.muted)
+                                    .child("A todo list for everyone in the family"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(px(16.))
+                            .children(error.map(|error| {
+                                div()
+                                    .w_full()
+                                    .flex()
+                                    .justify_center()
+                                    .text_size(px(14.))
+                                    .text_color(colors.danger)
+                                    .child(SharedString::from(error))
+                            }))
+                            .child(actions),
+                    ),
+            )
+            .into_any_element()
+    }
+}
+
+impl Focusable for Root {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for Root {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = theme(cx);
+        let body: AnyElement = match &self.screen {
+            Screen::Ready(workspace) => {
+                let content: AnyElement = match (workspace.page, &workspace.stats) {
+                    (Page::Stats, Some(stats)) => stats.clone().into_any_element(),
+                    _ => workspace.outline.clone().into_any_element(),
+                };
+                let header = self.render_header(window, cx);
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(header)
+                    .child(div().flex_1().min_h_0().child(content))
+                    .into_any_element()
+            }
+            _ => self.render_login(cx),
+        };
+        let dialog = self.shortcuts_open.then(|| {
+            let close = cx.entity().downgrade();
+            let content = div()
+                .key_context("Dialog")
+                .track_focus(&self.dialog_focus)
+                .on_action(cx.listener(Self::on_close_dialog))
+                .flex()
+                .flex_col()
+                .min_h_0()
+                .child(shortcuts_dialog(
+                    {
+                        let close = close.clone();
+                        move |window, cx| {
+                            close
+                                .update(cx, |this, cx| this.close_shortcuts(window, cx))
+                                .ok();
+                        }
+                    },
+                    cx,
+                ))
+                .into_any_element();
+            modal(
+                px(640.),
+                content,
+                move |window, cx| {
+                    close
+                        .update(cx, |this, cx| this.close_shortcuts(window, cx))
+                        .ok();
+                },
+                window,
+                cx,
+            )
+        });
+        div()
+            .id("root")
+            .key_context("Workspace")
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_show_shortcuts))
+            .on_action(cx.listener(Self::on_show_stats))
+            .on_action(cx.listener(Self::on_show_todos))
+            .on_action(cx.listener(Self::on_toggle_show_done))
+            .size_full()
+            .bg(colors.bg)
+            .text_color(colors.text)
+            .font_family(".SystemUIFont")
+            .line_height(gpui::relative(1.25))
+            .text_size(px(16.))
+            .on_mouse_down(MouseButton::Left, |_, _, _| {})
+            .child(body)
+            .children(dialog)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{TestAppContext, VisualTestContext};
+    use mockito::{Server, ServerGuard};
+    use nestodo_desktop::store::Kind;
+
+    use super::*;
+
+    struct NoTokens;
+
+    impl TokenStore for NoTokens {
+        fn load(&self, _: &str, _: Kind) -> Result<Option<String>, Error> {
+            Ok(None)
+        }
+
+        fn save(&self, _: &str, _: Kind, _: &str) -> Result<(), Error> {
+            Ok(())
+        }
+
+        fn delete(&self, _: &str, _: Kind) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+
+    fn refusing_saves() -> ServerGuard {
+        let mut server = Server::new();
+        server.mock("HEAD", "/").create();
+        server
+            .mock("GET", "/api/v1/todos")
+            .with_body(
+                r#"{"todos":[{"id":1,"parentId":null,"position":0,"title":"Milk","note":"","completedAt":null,"collapsed":false}]}"#,
+            )
+            .create();
+        server
+    }
+
+    fn open<'a>(
+        cx: &'a mut TestAppContext,
+        server: &ServerGuard,
+    ) -> (Entity<Root>, Entity<OutlineView>, &'a mut VisualTestContext) {
+        cx.update(|cx| {
+            cx.bind_keys(crate::ui::text_field::bindings());
+            cx.bind_keys(crate::ui::outline_view::bindings());
+            cx.bind_keys(bindings());
+        });
+        let base = Url::parse(&server.url()).unwrap();
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            Root::new(Ok(base), Arc::new(NoTokens), None, window, cx)
+        });
+        cx.run_until_parked();
+        let outline = root.read_with(cx, |root, _| match &root.screen {
+            Screen::Ready(workspace) => workspace.outline.clone(),
+            _ => panic!("the workspace did not open"),
+        });
+        (root, outline, cx)
+    }
+
+    fn edit_note(outline: &Entity<OutlineView>, cx: &mut VisualTestContext) {
+        outline.update_in(cx, |outline, window, cx| {
+            outline.open_note("t1", window, cx);
+        });
+        cx.run_until_parked();
+        cx.simulate_input("x");
+    }
+
+    fn ask_before_leaving(cx: &mut VisualTestContext) -> Rc<Cell<bool>> {
+        let window = cx.window_handle().downcast::<Root>().unwrap();
+        let quit = Rc::new(Cell::new(false));
+        let quitting = quit.clone();
+        cx.cx
+            .update(|cx| guard_leaving(window, cx, move |_| quitting.set(true)));
+        quit
+    }
+
+    fn wait(cx: &mut VisualTestContext) {
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn cmd_q_right_after_an_edit_the_server_refuses_asks_before_quitting_so_the_edit_is_not_lost_silently(
+        cx: &mut TestAppContext,
+    ) {
+        let server = refusing_saves();
+        let (_, outline, cx) = open(cx, &server);
+        let quit = ask_before_leaving(cx);
+        edit_note(&outline, cx);
+
+        cx.simulate_keystrokes("cmd-q");
+        wait(cx);
+        assert!(cx.has_pending_prompt());
+        assert!(!quit.get());
+
+        cx.simulate_prompt_answer("Leave Anyway");
+        cx.run_until_parked();
+        assert!(quit.get());
+    }
+
+    #[gpui::test]
+    fn closing_the_window_right_after_an_edit_the_server_refuses_asks_before_closing_so_the_edit_is_not_lost_silently(
+        cx: &mut TestAppContext,
+    ) {
+        let server = refusing_saves();
+        let (_, outline, cx) = open(cx, &server);
+        ask_before_leaving(cx);
+        edit_note(&outline, cx);
+
+        let closed = cx.simulate_close();
+        wait(cx);
+
+        assert!(!closed);
+        assert!(cx.has_pending_prompt());
+    }
+
+    #[gpui::test]
+    fn the_view_menu_leaves_the_page_behind_the_shortcuts_dialog_alone_so_escape_still_closes_it(
+        cx: &mut TestAppContext,
+    ) {
+        let server = refusing_saves();
+        let (root, _, cx) = open(cx, &server);
+        cx.dispatch_action(ShowShortcuts);
+
+        cx.dispatch_action(ShowStats);
+        cx.dispatch_action(ShowTodos);
+
+        root.update_in(cx, |root, window, _| {
+            assert!(root.shortcuts_open);
+            assert!(
+                matches!(&root.screen, Screen::Ready(workspace) if workspace.page == Page::Todos)
+            );
+            assert!(root.dialog_focus.is_focused(window));
+        });
+        cx.simulate_keystrokes("escape");
+        root.read_with(cx, |root, _| assert!(!root.shortcuts_open));
+    }
+
+    #[gpui::test]
+    fn leaving_the_account_menu_through_any_item_gives_the_keyboard_back_to_the_page(
+        cx: &mut TestAppContext,
+    ) {
+        let server = refusing_saves();
+        let (root, outline, cx) = open(cx, &server);
+
+        root.update_in(cx, Root::toggle_menu);
+        root.update_in(cx, Root::open_settings);
+        outline.update_in(cx, |outline, window, cx| {
+            assert!(outline.focus_handle(cx).contains_focused(window, cx));
+        });
+
+        cx.dispatch_action(ShowStats);
+        root.update_in(cx, Root::toggle_menu);
+        root.update_in(cx, |root, window, cx| {
+            root.show_page(Page::Stats, window, cx);
+        });
+        root.update_in(cx, |root, window, _| {
+            assert!(root.focus_handle.is_focused(window));
+        });
+    }
+
+    #[gpui::test]
+    fn a_reload_that_ends_on_an_error_screen_keeps_the_keyboard_in_the_window_so_the_help_menu_still_works(
+        cx: &mut TestAppContext,
+    ) {
+        let mut server = refusing_saves();
+        let (root, _, cx) = open(cx, &server);
+        server.reset();
+
+        root.update_in(cx, Root::connect);
+        cx.run_until_parked();
+
+        root.update_in(cx, |root, window, cx| {
+            assert!(matches!(root.screen, Screen::Unavailable(_)));
+            assert!(window.is_action_available(&ShowShortcuts, cx));
+        });
+    }
+
+    #[gpui::test]
+    fn staying_after_sign_out_finds_unsaved_changes_gives_the_keyboard_back_to_the_outline(
+        cx: &mut TestAppContext,
+    ) {
+        let server = refusing_saves();
+        let (root, outline, cx) = open(cx, &server);
+        edit_note(&outline, cx);
+        wait(cx);
+        root.update_in(cx, Root::toggle_menu);
+
+        root.update_in(cx, Root::sign_out);
+        wait(cx);
+        cx.simulate_prompt_answer("Stay");
+        cx.run_until_parked();
+
+        outline.update_in(cx, |outline, window, cx| {
+            assert!(outline.focus_handle(cx).contains_focused(window, cx));
+        });
+    }
+
+    #[test]
+    fn shows_lower_case_error_messages_as_sentences_on_the_sign_in_screen() {
+        assert_eq!(
+            sentence("could not reach http://127.0.0.1:5999/".into()),
+            "Could not reach http://127.0.0.1:5999/"
+        );
+        assert_eq!(sentence(String::new()), "");
+    }
+}
