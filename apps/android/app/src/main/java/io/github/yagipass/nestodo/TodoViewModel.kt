@@ -2,6 +2,7 @@ package io.github.yagipass.nestodo
 
 import android.content.ActivityNotFoundException
 import android.content.Context
+import android.security.NetworkSecurityPolicy
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -16,6 +17,8 @@ import io.github.yagipass.nestodo.data.Connection
 import io.github.yagipass.nestodo.data.PreferenceSettings
 import io.github.yagipass.nestodo.data.Settings
 import io.github.yagipass.nestodo.data.TodoRepository
+import io.github.yagipass.nestodo.data.baseUrlOf
+import io.github.yagipass.nestodo.data.label
 import io.github.yagipass.nestodo.domain.Caret
 import io.github.yagipass.nestodo.domain.Change
 import io.github.yagipass.nestodo.domain.Day
@@ -57,10 +60,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 
 enum class AuthState {
+    NoServer,
+    CheckingServer,
     Checking,
     Unavailable,
     SignedOut,
@@ -81,6 +86,7 @@ sealed interface StatsState {
 data class TodoUiState(
     val auth: AuthState = AuthState.Checking,
     val loginError: String? = null,
+    val server: String? = null,
     val email: String? = null,
     val outline: Outline = Outline(),
     val loaded: Boolean = false,
@@ -104,8 +110,9 @@ data class TodoUiState(
 }
 
 class TodoViewModel(
-    private val backend: Backend,
+    private val backendAt: (HttpUrl) -> Backend,
     private val settings: Settings,
+    private val cleartextAllowed: (String) -> Boolean = { false },
     private val timeZone: () -> String = { ZoneId.systemDefault().id },
     private val timeSource: TimeSource = TimeSource.Monotonic,
 ) : ViewModel() {
@@ -142,6 +149,7 @@ class TodoViewModel(
     private val loginCompleted = Channel<Unit>(Channel.CONFLATED)
     val loginEvents: Flow<Unit> = loginCompleted.receiveAsFlow()
 
+    private var backend: Backend? = null
     private var loginJob: Job? = null
     private var syncJob: Job? = null
     private var typingJob: Job? = null
@@ -166,6 +174,11 @@ class TodoViewModel(
         viewModelScope.launch {
             val shown = settings.showCompleted()
             _state.update { it.copy(showCompleted = shown) }
+            val backend = backend ?: settings.baseUrl()?.let(::open)
+            if (backend == null) {
+                _state.update { it.copy(auth = AuthState.NoServer) }
+                return@launch
+            }
             try {
                 when (val connection = backend.connect()) {
                     is Connection.Ready -> onReady(connection)
@@ -189,7 +202,82 @@ class TodoViewModel(
         }
     }
 
+    fun setServer(address: String) {
+        val base = baseUrlOf(address)
+        if (base == null || !base.isHttps && !cleartextAllowed(base.host)) {
+            _state.update {
+                it.copy(
+                    loginError =
+                        if (base == null) "Enter an address such as nestodo.example.com."
+                        else "Enter an address that starts with https://."
+                )
+            }
+            return
+        }
+        loginJob?.cancel()
+        _state.update { it.copy(auth = AuthState.CheckingServer, loginError = null) }
+        loginJob = viewModelScope.launch {
+            val candidate = backendAt(base)
+            try {
+                val connection = candidate.connect()
+                val todos = (connection as? Connection.Ready)?.todos?.list()
+                try {
+                    settings.setBaseUrl(base)
+                } catch (_: IOException) {
+                    rejectServer("Couldn't save the server. Try again.")
+                    return@launch
+                }
+                backend = candidate
+                _state.update { it.copy(server = base.label()) }
+                when (connection) {
+                    is Connection.Ready -> onReady(connection, todos)
+                    Connection.SignedOut -> _state.update { it.copy(auth = AuthState.SignedOut) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                rejectServer(
+                    when (e) {
+                        is DeviceLockedException -> reason(e)
+                        is IOException ->
+                            "Can't reach this server. Check the address and your connection."
+                        else -> "Couldn't find Nestodo at this address."
+                    }
+                )
+            }
+        }
+    }
+
+    private fun rejectServer(error: String) {
+        _state.update { it.copy(auth = AuthState.NoServer, loginError = error) }
+    }
+
+    fun changeServer() {
+        viewModelScope.launch {
+            try {
+                settings.setBaseUrl(null)
+            } catch (_: IOException) {
+                val error = "Couldn't change the server. Try again."
+                if (current.auth == AuthState.SignedIn) notify(error)
+                else _state.update { it.copy(loginError = error) }
+                return@launch
+            }
+            loginJob?.cancel()
+            disconnect()
+            _state.value =
+                TodoUiState(
+                    auth = AuthState.NoServer,
+                    server = current.server,
+                    showCompleted = current.showCompleted,
+                )
+            val leaving = backend
+            backend = null
+            leaving?.let { logout(it) }
+        }
+    }
+
     fun signIn(open: (String) -> Unit) {
+        val backend = backend ?: return
         loginJob?.cancel()
         loginJob = viewModelScope.launch {
             try {
@@ -220,14 +308,26 @@ class TodoViewModel(
         loginJob?.cancel()
         disconnect()
         _state.value =
-            TodoUiState(auth = AuthState.SignedOut, showCompleted = current.showCompleted)
-        viewModelScope.launch {
-            try {
-                backend.logout()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {}
-        }
+            TodoUiState(
+                auth = AuthState.SignedOut,
+                server = current.server,
+                showCompleted = current.showCompleted,
+            )
+        val backend = backend ?: return
+        viewModelScope.launch { logout(backend) }
+    }
+
+    private suspend fun logout(backend: Backend) {
+        try {
+            backend.logout()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {}
+    }
+
+    private fun open(base: HttpUrl): Backend {
+        _state.update { it.copy(server = base.label()) }
+        return backendAt(base).also { backend = it }
     }
 
     fun refresh() {
@@ -550,13 +650,13 @@ class TodoViewModel(
         channel.trySend(Queued(task, generation))
     }
 
-    private fun onReady(ready: Connection.Ready) {
+    private fun onReady(ready: Connection.Ready, todos: List<Todo>? = null) {
         disconnect()
         _state.update {
             it.copy(auth = AuthState.SignedIn, email = ready.email, loginError = null)
         }
         startSync(ready.todos)
-        enqueue(Task.Load(force = true))
+        if (todos == null) enqueue(Task.Load(force = true)) else show(todos)
     }
 
     private fun startSync(repository: TodoRepository) {
@@ -692,6 +792,7 @@ class TodoViewModel(
                     TodoUiState(
                         auth = AuthState.SignedOut,
                         loginError = "Your sign-in has expired. Sign in again.",
+                        server = current.server,
                         showCompleted = current.showCompleted,
                     )
             }
@@ -715,14 +816,18 @@ class TodoViewModel(
             val appContext = context.applicationContext
             return viewModelFactory {
                 initializer {
-                    TodoViewModel(accessBackend(appContext), PreferenceSettings(appContext))
+                    TodoViewModel(
+                        accessBackends(appContext),
+                        PreferenceSettings(appContext),
+                        NetworkSecurityPolicy.getInstance()::isCleartextTrafficPermitted,
+                    )
                 }
             }
         }
     }
 }
 
-internal fun accessBackend(context: Context): Backend {
+internal fun accessBackends(context: Context): (HttpUrl) -> Backend {
     val http =
         OkHttpClient.Builder()
             .followRedirects(false)
@@ -730,7 +835,8 @@ internal fun accessBackend(context: Context): Backend {
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
-    return AccessBackend(http, BuildConfig.BASE_URL.toHttpUrl(), KeystoreTokenStore(context))
+    val store = KeystoreTokenStore(context)
+    return { base -> AccessBackend(http, base, store) }
 }
 
 private fun editEnd(before: String, after: String): Int {

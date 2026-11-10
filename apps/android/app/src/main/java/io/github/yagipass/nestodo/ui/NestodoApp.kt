@@ -33,6 +33,9 @@ fun NestodoApp(viewModel: TodoViewModel, openInBrowser: (String) -> Unit) {
         LoginScreen(
             auth = state.auth,
             error = state.loginError,
+            server = state.server,
+            onSetServer = viewModel::setServer,
+            onChangeServer = viewModel::changeServer,
             onSignIn = { viewModel.signIn(openInBrowser) },
             onCancel = viewModel::cancelSignIn,
             onRetry = viewModel::connect,

@@ -60,7 +60,7 @@ The app reads `NESTODO_BASE_URL` when it starts and falls back to the value it w
 
 ### Android
 
-Run these in `apps/android`. Gradle needs the address of your server: set `nestodo.baseUrl=https://nestodo.example.com` in `~/.gradle/gradle.properties`, or pass `-Pnestodo.baseUrl=https://nestodo.example.com`, which takes precedence.
+Run these in `apps/android`. The app asks for the address of your server on first launch.
 
 | Command | Purpose |
 |---|---|
@@ -68,7 +68,6 @@ Run these in `apps/android`. Gradle needs the address of your server: set `nesto
 | `./gradlew spotlessCheck test assembleDebug` | check the formatting, run the unit tests and build, as CI does |
 | `./gradlew installDebug` | build and install on every connected device |
 | `./gradlew installRelease` | the same, minified with R8 so it scrolls smoothly |
-| `./gradlew installDebug -Pnestodo.baseUrl=http://10.0.2.2:5173` | install a debug build that uses `vp dev` instead of production, at its address as seen from the emulator |
 
 The release build is signed with the debug key, so it installs over a debug build and keeps the sign-in. Set `ANDROID_SERIAL` to install on one device only.
 
@@ -79,7 +78,7 @@ avdmanager create avd -n nestodo -k "system-images;android-37.0;google_apis;arm6
 emulator -avd nestodo
 ```
 
-Start the web app with `pnpm exec vp dev --host 127.0.0.1` for a debug build on the emulator: plain `vp dev` listens only on `::1`, which the emulator's `10.0.2.2` can't reach.
+To use `vp dev` instead of production, start it with `pnpm exec vp dev --host 127.0.0.1` and enter `http://10.0.2.2:5173` as the server in a debug build on the emulator: plain `vp dev` listens only on `::1`, which the emulator's `10.0.2.2` can't reach. Only a debug build accepts `http://`, and only for `10.0.2.2` and `localhost`.
 
 ## Rules
 

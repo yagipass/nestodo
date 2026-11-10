@@ -12,8 +12,11 @@ import io.github.yagipass.nestodo.data.Settings
 import io.github.yagipass.nestodo.data.TodoRepository
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.Todo
+import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.TestScope
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.rules.TemporaryFolder
 
 class FakeRepository(var todos: List<Todo>) : TodoRepository {
@@ -81,17 +84,34 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
 }
 
 class FakeBackend(private val repository: TodoRepository, var signedIn: Boolean = true) : Backend {
-    override suspend fun connect() =
-        if (signedIn) Connection.Ready(repository, "family@example.com") else Connection.SignedOut
+    var failure: Exception? = null
+    var loggedOut = false
+
+    override suspend fun connect(): Connection {
+        failure?.let { throw it }
+        return if (signedIn) Connection.Ready(repository, "family@example.com")
+        else Connection.SignedOut
+    }
 
     override suspend fun startLogin(): LoginFlow = error("not used")
 
-    override suspend fun logout() {}
+    override suspend fun logout() {
+        loggedOut = true
+    }
 }
 
 class FakeSettings : Settings {
+    var baseUrl: HttpUrl? = "https://nestodo.example.com/".toHttpUrl()
+    var baseUrlFailure: IOException? = null
     var showCompleted = true
     var shareParent: Long? = null
+
+    override suspend fun baseUrl() = baseUrl
+
+    override suspend fun setBaseUrl(value: HttpUrl?) {
+        baseUrlFailure?.let { throw it }
+        baseUrl = value
+    }
 
     override suspend fun showCompleted() = showCompleted
 

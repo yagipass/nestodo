@@ -186,7 +186,13 @@ fun OutlineScreen(
                     ) {
                         Icon(NestodoIcons.Completed, contentDescription = "Show completed")
                     }
-                    state.email?.let { AccountMenu(it, viewModel::openStats, viewModel::signOut) }
+                    AccountMenu(
+                        email = state.email,
+                        server = state.server,
+                        onStats = viewModel::openStats,
+                        onChangeServer = viewModel::changeServer,
+                        onSignOut = viewModel::signOut,
+                    )
                 },
                 colors =
                     TopAppBarDefaults.topAppBarColors(
@@ -383,14 +389,22 @@ internal fun NoMatches() {
 }
 
 @Composable
-private fun AccountMenu(email: String, onStats: () -> Unit, onSignOut: () -> Unit) {
+private fun AccountMenu(
+    email: String?,
+    server: String?,
+    onStats: () -> Unit,
+    onChangeServer: () -> Unit,
+    onSignOut: () -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
             Icon(NestodoIcons.Account, contentDescription = "Account")
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(text = { Text(email) }, onClick = {}, enabled = false)
+            listOfNotNull(email, server).forEach {
+                DropdownMenuItem(text = { Text(it) }, onClick = {}, enabled = false)
+            }
             DropdownMenuItem(
                 text = { Text("Stats") },
                 onClick = {
@@ -399,12 +413,21 @@ private fun AccountMenu(email: String, onStats: () -> Unit, onSignOut: () -> Uni
                 },
             )
             DropdownMenuItem(
-                text = { Text("Sign out") },
+                text = { Text("Change server") },
                 onClick = {
                     expanded = false
-                    onSignOut()
+                    onChangeServer()
                 },
             )
+            if (email != null) {
+                DropdownMenuItem(
+                    text = { Text("Sign out") },
+                    onClick = {
+                        expanded = false
+                        onSignOut()
+                    },
+                )
+            }
         }
     }
 }

@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import okhttp3.HttpUrl
 
 sealed interface ShareState {
     data object Loading : ShareState
@@ -45,7 +46,7 @@ sealed interface ShareState {
 }
 
 class ShareViewModel(
-    private val backend: Backend,
+    private val backendAt: (HttpUrl) -> Backend,
     private val settings: Settings,
     val shared: Shared,
 ) : ViewModel() {
@@ -109,14 +110,16 @@ class ShareViewModel(
         }
     }
 
-    private suspend fun connect(): TodoRepository? =
-        when (val connection = backend.connect()) {
+    private suspend fun connect(): TodoRepository? {
+        val connection = settings.baseUrl()?.let { backendAt(it).connect() } ?: Connection.SignedOut
+        return when (connection) {
             is Connection.Ready -> connection.todos.also { repository = it }
             Connection.SignedOut -> {
                 _state.value = ShareState.SignedOut
                 null
             }
         }
+    }
 
     private fun fail(error: Exception, otherwise: () -> ShareState) {
         _state.value = if (error is ApiException.NotSignedIn) ShareState.SignedOut else otherwise()
@@ -128,7 +131,7 @@ class ShareViewModel(
             return viewModelFactory {
                 initializer {
                     ShareViewModel(
-                        accessBackend(appContext),
+                        accessBackends(appContext),
                         PreferenceSettings(appContext),
                         shared,
                     )
