@@ -30,8 +30,13 @@ Material Icons by Google
 https://github.com/google/material-design-icons
 The add and person icons in
 apps/android/app/src/main/java/io/github/yagipass/nestodo/ui/Icons.kt and the
-person icon in apps/web/pages/layout.tsx come from Material Icons and are under
-the Apache License, Version 2.0.
+person icon in apps/web/pages/layout.tsx and apps/desktop/src/ui/icons.rs come
+from Material Icons and are under the Apache License, Version 2.0.
+
+GPUI by Zed Industries
+https://github.com/zed-industries/zed
+The text input in apps/desktop/src/ui/text_field.rs started from the input
+example of GPUI and was changed. It is under the Apache License, Version 2.0.
 
 --------------------------------------------------------------------------------
 
