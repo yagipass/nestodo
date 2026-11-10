@@ -91,7 +91,9 @@ fun LoginScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                if (error != null && auth != AuthState.NoServer) {
+                if (
+                    error != null && auth != AuthState.NoServer && auth != AuthState.CheckingServer
+                ) {
                     Text(
                         error,
                         color = MaterialTheme.colorScheme.error,
@@ -101,7 +103,14 @@ fun LoginScreen(
                     )
                 }
                 when (auth) {
-                    AuthState.NoServer -> ServerForm(server, error, onSetServer)
+                    AuthState.NoServer,
+                    AuthState.CheckingServer ->
+                        ServerForm(
+                            server,
+                            error,
+                            checking = auth == AuthState.CheckingServer,
+                            onSetServer,
+                        )
                     AuthState.Checking,
                     AuthState.SignedIn -> CircularProgressIndicator()
                     AuthState.Unavailable -> {
@@ -132,9 +141,14 @@ fun LoginScreen(
 }
 
 @Composable
-private fun ServerForm(server: String?, error: String?, onSubmit: (String) -> Unit) {
+private fun ServerForm(
+    server: String?,
+    error: String?,
+    checking: Boolean,
+    onSubmit: (String) -> Unit,
+) {
     val address = rememberTextFieldState(server.orEmpty())
-    val submit = { onSubmit(address.text.toString()) }
+    val submit = { if (!checking) onSubmit(address.text.toString()) }
     OutlinedTextField(
         state = address,
         modifier = Modifier.fillMaxWidth(),
@@ -151,7 +165,11 @@ private fun ServerForm(server: String?, error: String?, onSubmit: (String) -> Un
         onKeyboardAction = { submit() },
         lineLimits = TextFieldLineLimits.SingleLine,
     )
-    WideButton("Continue", submit, enabled = address.text.isNotBlank())
+    WideButton(
+        if (checking) "Checking…" else "Continue",
+        submit,
+        enabled = !checking && address.text.isNotBlank(),
+    )
     Hint("The address you open the web app at.")
 }
 

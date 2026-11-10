@@ -44,8 +44,8 @@ class PreferenceSettings internal constructor(private val store: DataStore<Prefe
 
     override suspend fun baseUrl() = read()[BASE_URL]?.toHttpUrlOrNull()
 
-    override suspend fun setBaseUrl(value: HttpUrl?) = write {
-        if (value == null) it.remove(BASE_URL) else it[BASE_URL] = value.toString()
+    override suspend fun setBaseUrl(value: HttpUrl?) {
+        store.edit { if (value == null) it.remove(BASE_URL) else it[BASE_URL] = value.toString() }
     }
 
     override suspend fun showCompleted() = read()[SHOW_COMPLETED] ?: true

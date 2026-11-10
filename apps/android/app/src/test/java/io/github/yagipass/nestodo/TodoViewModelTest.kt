@@ -1045,7 +1045,7 @@ class TodoViewModelTest {
         settings.baseUrl = null
         val viewModel = viewModel()
 
-        viewModel.setServer(" Nestodo.example.com/today?view=all ")
+        viewModel.setServer(" Nestodo.example.com/today?from=https://example.com/ ")
 
         val state = viewModel.state.value
         assertEquals("https://nestodo.example.com/".toHttpUrl(), settings.baseUrl)
@@ -1053,6 +1053,57 @@ class TodoViewModelTest {
         assertEquals(AuthState.SignedIn, state.auth)
         assertEquals("nestodo.example.com", state.server)
         assertTrue(state.loaded)
+    }
+
+    @Test
+    fun `a server set up here shows the todos it was checked with instead of fetching them again`() {
+        settings.baseUrl = null
+        val viewModel = viewModel()
+
+        viewModel.setServer("nestodo.example.com")
+
+        assertEquals(listOf("GET"), repository.calls)
+        assertEquals(original, viewModel.outline())
+    }
+
+    @Test
+    fun `the address form stays up while the server is checked, so a typo can be fixed without tapping the field again`() {
+        settings.baseUrl = null
+        val viewModel = viewModel()
+        repository.gate = CompletableDeferred()
+
+        viewModel.setServer("nestodo.example.com")
+
+        assertEquals(AuthState.CheckingServer, viewModel.state.value.auth)
+        repository.gate!!.complete(Unit)
+        assertEquals(AuthState.SignedIn, viewModel.state.value.auth)
+    }
+
+    @Test
+    fun `a server the phone fails to save is reported instead of opened, so the next launch does not ask for it again without warning`() {
+        settings.baseUrl = null
+        settings.baseUrlFailure = IOException("disk full")
+        val viewModel = viewModel()
+
+        viewModel.setServer("nestodo.example.com")
+
+        val state = viewModel.state.value
+        assertEquals(AuthState.NoServer, state.auth)
+        assertEquals("Couldn't save the server. Try again.", state.loginError)
+    }
+
+    @Test
+    fun `a server change the phone fails to save keeps the current server, so a restart does not return to a server already signed out of`() {
+        val viewModel = viewModel()
+        settings.baseUrlFailure = IOException("disk full")
+
+        viewModel.changeServer()
+
+        val state = viewModel.state.value
+        assertEquals(AuthState.SignedIn, state.auth)
+        assertEquals("Couldn't change the server. Try again.", state.notice?.text)
+        assertFalse(backend.loggedOut)
+        assertEquals(original, viewModel.outline())
     }
 
     @Test
@@ -1081,7 +1132,6 @@ class TodoViewModelTest {
             "Can't reach this server. Check the address and your connection.",
             state.loginError,
         )
-        assertEquals("nestodo.exmaple.com", state.server)
         assertNull(settings.baseUrl)
     }
 

@@ -12,6 +12,7 @@ import io.github.yagipass.nestodo.data.Settings
 import io.github.yagipass.nestodo.data.TodoRepository
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.Todo
+import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.TestScope
 import okhttp3.HttpUrl
@@ -101,12 +102,14 @@ class FakeBackend(private val repository: TodoRepository, var signedIn: Boolean 
 
 class FakeSettings : Settings {
     var baseUrl: HttpUrl? = "https://nestodo.example.com/".toHttpUrl()
+    var baseUrlFailure: IOException? = null
     var showCompleted = true
     var shareParent: Long? = null
 
     override suspend fun baseUrl() = baseUrl
 
     override suspend fun setBaseUrl(value: HttpUrl?) {
+        baseUrlFailure?.let { throw it }
         baseUrl = value
     }
 

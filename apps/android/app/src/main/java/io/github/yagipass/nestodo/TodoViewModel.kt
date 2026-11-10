@@ -65,6 +65,7 @@ import okhttp3.OkHttpClient
 
 enum class AuthState {
     NoServer,
+    CheckingServer,
     Checking,
     Unavailable,
     SignedOut,
@@ -214,52 +215,63 @@ class TodoViewModel(
             return
         }
         loginJob?.cancel()
-        _state.update {
-            it.copy(auth = AuthState.Checking, loginError = null, server = base.label())
-        }
+        _state.update { it.copy(auth = AuthState.CheckingServer, loginError = null) }
         loginJob = viewModelScope.launch {
             val candidate = backendAt(base)
             try {
                 val connection = candidate.connect()
-                if (connection is Connection.Ready) connection.todos.list()
-                settings.setBaseUrl(base)
+                val todos = (connection as? Connection.Ready)?.todos?.list()
+                try {
+                    settings.setBaseUrl(base)
+                } catch (_: IOException) {
+                    rejectServer("Couldn't save the server. Try again.")
+                    return@launch
+                }
                 backend = candidate
+                _state.update { it.copy(server = base.label()) }
                 when (connection) {
-                    is Connection.Ready -> onReady(connection)
+                    is Connection.Ready -> onReady(connection, todos)
                     Connection.SignedOut -> _state.update { it.copy(auth = AuthState.SignedOut) }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.update {
-                    it.copy(
-                        auth = AuthState.NoServer,
-                        loginError =
-                            when (e) {
-                                is DeviceLockedException -> reason(e)
-                                is IOException ->
-                                    "Can't reach this server. Check the address and your connection."
-                                else -> "Couldn't find Nestodo at this address."
-                            },
-                    )
-                }
+                rejectServer(
+                    when (e) {
+                        is DeviceLockedException -> reason(e)
+                        is IOException ->
+                            "Can't reach this server. Check the address and your connection."
+                        else -> "Couldn't find Nestodo at this address."
+                    }
+                )
             }
         }
     }
 
+    private fun rejectServer(error: String) {
+        _state.update { it.copy(auth = AuthState.NoServer, loginError = error) }
+    }
+
     fun changeServer() {
-        loginJob?.cancel()
-        disconnect()
-        _state.value =
-            TodoUiState(
-                auth = AuthState.NoServer,
-                server = current.server,
-                showCompleted = current.showCompleted,
-            )
-        val leaving = backend
-        backend = null
         viewModelScope.launch {
-            settings.setBaseUrl(null)
+            try {
+                settings.setBaseUrl(null)
+            } catch (_: IOException) {
+                val error = "Couldn't change the server. Try again."
+                if (current.auth == AuthState.SignedIn) notify(error)
+                else _state.update { it.copy(loginError = error) }
+                return@launch
+            }
+            loginJob?.cancel()
+            disconnect()
+            _state.value =
+                TodoUiState(
+                    auth = AuthState.NoServer,
+                    server = current.server,
+                    showCompleted = current.showCompleted,
+                )
+            val leaving = backend
+            backend = null
             leaving?.let { logout(it) }
         }
     }
@@ -638,13 +650,13 @@ class TodoViewModel(
         channel.trySend(Queued(task, generation))
     }
 
-    private fun onReady(ready: Connection.Ready) {
+    private fun onReady(ready: Connection.Ready, todos: List<Todo>? = null) {
         disconnect()
         _state.update {
             it.copy(auth = AuthState.SignedIn, email = ready.email, loginError = null)
         }
         startSync(ready.todos)
-        enqueue(Task.Load(force = true))
+        if (todos == null) enqueue(Task.Load(force = true)) else show(todos)
     }
 
     private fun startSync(repository: TodoRepository) {
