@@ -27,8 +27,8 @@ impl TextHits {
             position.y < origin.y + line.size(placed.line_height).height
         })?;
         let local = point(position.x - origin.x, (position.y - origin.y).max(px(0.)));
-        let index = line.index_for_position(local, placed.line_height).ok()?;
-        Some((start + index).min(placed.visible))
+        let index = start + line.index_for_position(local, placed.line_height).ok()?;
+        (index < placed.visible).then_some(index)
     }
 }
 
@@ -529,6 +529,29 @@ mod tests {
             (wrapped_at, hits.index_for(point(px(99.), px(5.))))
         });
         assert!(wrapped_at < text.len());
+        assert_eq!(found, None);
+    }
+
+    #[gpui::test]
+    fn a_click_on_the_ellipsis_of_a_cut_note_lands_on_no_character_so_it_cannot_open_the_link_it_cut(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let cx = cx.add_empty_window();
+        let shown = format!("see exa{ELLIPSIS}");
+        let cut = "see exa".len();
+        let found = cx.update(|window, _| {
+            let runs = [run(shown.len(), gpui::black())];
+            let (_, line) = shape(&shown, &runs, px(14.), None, window).remove(0);
+            let start = line.position_for_index(cut, px(21.)).unwrap().x;
+            let end = line.position_for_index(shown.len(), px(21.)).unwrap().x;
+            let hits = TextHits::default();
+            hits.0.replace(Some(Placed {
+                paragraphs: vec![(point(px(0.), px(0.)), 0, line)],
+                line_height: px(21.),
+                visible: cut,
+            }));
+            hits.index_for(point((start + end) / 2., px(5.)))
+        });
         assert_eq!(found, None);
     }
 
