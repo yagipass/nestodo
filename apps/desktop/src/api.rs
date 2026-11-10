@@ -194,26 +194,38 @@ pub fn logout(store: &dyn TokenStore, host: &str) -> Result<(), Error> {
     app.and(org)
 }
 
-pub fn parse_base_url(value: &str) -> Result<Url, String> {
-    let url = Url::parse(value).map_err(|error| format!("{value:?} is not a URL: {error}"))?;
-    let origin_only = url.username().is_empty()
-        && url.password().is_none()
-        && url.path() == "/"
-        && url.query().is_none()
-        && url.fragment().is_none();
-    if !origin_only || url.host_str().is_none() {
-        return Err(format!(
-            "{value:?} must be an origin such as https://nestodo.example.com"
-        ));
+pub fn base_url_of(input: &str) -> Result<Url, String> {
+    let address = input.trim();
+    let url = if has_scheme(address) {
+        Url::parse(address)
+    } else {
+        Url::parse(&format!("https://{address}"))
     }
+    .ok()
+    .filter(|url| matches!(url.scheme(), "http" | "https") && url.has_host())
+    .and_then(|url| Url::parse(&url.origin().ascii_serialization()).ok())
+    .ok_or_else(|| "Enter an address such as nestodo.example.com.".to_string())?;
     match (url.scheme(), url.host_str()) {
         ("https", _) => Ok(url),
         ("http", Some(host)) if is_loopback(host) => Ok(url),
-        ("http", _) => Err(format!(
-            "{value:?} uses http://, which is only allowed for localhost"
-        )),
-        _ => Err(format!("{value:?} must start with https://")),
+        _ => Err("Enter an address that starts with https://.".to_string()),
     }
+}
+
+fn has_scheme(address: &str) -> bool {
+    address.split_once("://").is_some_and(|(scheme, _)| {
+        let mut chars = scheme.chars();
+        chars
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic())
+            && chars.all(|char| char.is_ascii_alphanumeric() || matches!(char, '+' | '.' | '-'))
+    })
+}
+
+#[must_use]
+pub fn label(base: &Url) -> String {
+    let shown = base.as_str().trim_end_matches('/');
+    shown.strip_prefix("https://").unwrap_or(shown).to_string()
 }
 
 #[must_use]
@@ -825,15 +837,28 @@ mod tests {
     }
 
     #[test]
-    fn accepts_https_and_local_http_origins() {
-        for ok in [
-            "https://nestodo.example.com",
-            "https://nestodo.example.com/",
-            "http://localhost:5173",
-            "http://127.0.0.1:8787",
-            "http://[::1]:3000",
+    fn an_address_copied_from_the_browser_becomes_the_servers_root_so_the_api_and_the_sign_in_go_to_the_server_and_not_to_that_page()
+     {
+        for (typed, base) in [
+            ("nestodo.example.com", "https://nestodo.example.com/"),
+            (
+                " Nestodo.example.com/today?from=https://example.com/ ",
+                "https://nestodo.example.com/",
+            ),
+            (
+                "https://user:pw@nestodo.example.com:8443/api?x=1#top",
+                "https://nestodo.example.com:8443/",
+            ),
+            (
+                "https://nestodo.example.com:443/",
+                "https://nestodo.example.com/",
+            ),
+            ("localhost:5173", "https://localhost:5173/"),
+            ("http://localhost:5173/today", "http://localhost:5173/"),
+            ("http://127.0.0.1:8787", "http://127.0.0.1:8787/"),
+            ("http://[::1]:3000", "http://[::1]:3000/"),
         ] {
-            assert!(parse_base_url(ok).is_ok(), "{ok}");
+            assert_eq!(base_url_of(typed).unwrap().as_str(), base, "{typed}");
         }
     }
 
@@ -844,21 +869,40 @@ mod tests {
             "http://192.168.1.10:5173",
             "http://localhost.evil.example",
         ] {
-            assert!(parse_base_url(bad).is_err(), "{bad}");
+            assert_eq!(
+                base_url_of(bad).unwrap_err(),
+                "Enter an address that starts with https://.",
+                "{bad}"
+            );
         }
     }
 
     #[test]
-    fn refuses_urls_that_are_not_plain_origins() {
+    fn text_that_is_not_a_web_address_asks_for_one_instead_of_trying_to_connect() {
         for bad in [
+            "",
+            "  ",
+            "my server",
+            "https://",
             "ftp://nestodo.example.com",
-            "https://nestodo.example.com/api",
-            "https://user@nestodo.example.com",
-            "https://nestodo.example.com/?x=1",
-            "nestodo.example.com",
         ] {
-            assert!(parse_base_url(bad).is_err(), "{bad}");
+            assert_eq!(
+                base_url_of(bad).unwrap_err(),
+                "Enter an address such as nestodo.example.com.",
+                "{bad:?}"
+            );
         }
+    }
+
+    #[test]
+    fn names_an_https_server_by_its_host_and_spells_out_http_so_a_dev_server_stands_out() {
+        let label_of = |typed: &str| label(&base_url_of(typed).unwrap());
+        assert_eq!(label_of("nestodo.example.com"), "nestodo.example.com");
+        assert_eq!(
+            label_of("nestodo.example.com:8443"),
+            "nestodo.example.com:8443"
+        );
+        assert_eq!(label_of("http://127.0.0.1:5173"), "http://127.0.0.1:5173");
     }
 
     struct StuckToken(Kind, MemoryStore);

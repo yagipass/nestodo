@@ -53,10 +53,10 @@ The desktop app is built with [GPUI](https://www.gpui.rs) and runs on macOS. It 
 |---|---|
 | `cargo clippy --locked --all-targets -- -D warnings` | lint |
 | `cargo test --locked` | run the unit tests and the UI tests, which drive the outline with simulated keystrokes against an in-memory server |
-| `NESTODO_BASE_URL=http://127.0.0.1:5173 cargo run` | run the app against `vp dev` |
-| `NESTODO_BASE_URL=https://nestodo.example.com ./bundle.sh` | build `target/release/Nestodo.app` for that server |
+| `cargo run` | run the app |
+| `./bundle.sh` | build `target/release/Nestodo.app` |
 
-The app reads `NESTODO_BASE_URL` when it starts and falls back to the value it was built with, since an app opened from Finder gets no shell environment. Start `vp dev` with `--host 127.0.0.1`, as for the Android emulator. No CI job builds the desktop app yet.
+The app asks for the address of your server on first launch. To use `vp dev`, start it with `pnpm exec vp dev --host 127.0.0.1` and enter `http://127.0.0.1:5173`. The app accepts `http://` only for `localhost`, `127.0.0.1` and `[::1]`. `cargo run` and the installed app share the saved server. No CI job builds the desktop app yet.
 
 ### Android
 

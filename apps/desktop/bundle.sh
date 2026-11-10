@@ -2,7 +2,6 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-: "${NESTODO_BASE_URL:?Set NESTODO_BASE_URL to your server, such as https://nestodo.example.com}"
 
 export MACOSX_DEPLOYMENT_TARGET=14.0
 cargo build --release --locked

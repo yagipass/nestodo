@@ -7,7 +7,6 @@ use gpui::{
     WindowOptions, point, px, size,
 };
 
-use nestodo_desktop::api::parse_base_url;
 use nestodo_desktop::prefs;
 use nestodo_desktop::store::SystemStore;
 
@@ -17,15 +16,6 @@ use ui::root::{
     Quit, Root, ShowShortcuts, ShowStats, ShowTodos, ask_before_leaving_unsaved_changes,
 };
 use ui::text_field::{Copy, Cut, Paste, SelectAll};
-
-fn base_url() -> Result<url::Url, String> {
-    let value = std::env::var("NESTODO_BASE_URL")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .or_else(|| option_env!("NESTODO_BASE_URL").map(str::to_string))
-        .ok_or_else(|| "No server is set for this app.".to_string())?;
-    parse_base_url(&value)
-}
 
 fn bind_keys(cx: &mut App) {
     cx.bind_keys(ui::text_field::bindings());
@@ -93,7 +83,7 @@ fn main() {
                 |window, cx| {
                     let store = Arc::new(SystemStore::new());
                     let path = prefs::default_path();
-                    cx.new(|cx| Root::new(base_url(), store, path, window, cx))
+                    cx.new(|cx| Root::new(store, path, window, cx))
                 },
             )
             .expect("the window opens");
