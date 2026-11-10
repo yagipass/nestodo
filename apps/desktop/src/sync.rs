@@ -63,8 +63,9 @@ impl Sync {
                 }
                 Op::Title { key, .. } => self.discard(Field::Title, key),
                 Op::Note { key, .. } => self.discard(Field::Note, key),
-                _ => self.flush(),
+                _ => {}
             }
+            self.flush();
             self.queue.push_back(op.clone());
         }
     }
@@ -569,6 +570,18 @@ mod tests {
             h.server.calls,
             [request("DELETE", "/api/v1/todos/1?recursive=true", None)]
         );
+    }
+
+    #[test]
+    fn sends_typing_on_another_row_before_a_delete_so_a_refused_delete_cannot_hold_it_back() {
+        let server = Server::new(|call| if call.method == "DELETE" { 500 } else { 200 });
+        let mut h = Harness::new(&[("t1", 1), ("t2", 2)], server);
+
+        h.title("t2", "typed just before");
+        h.apply(&[delete_op("t1", &["t1"])]);
+        h.run_all_timers();
+
+        assert_eq!(h.server.paths(), ["/api/v1/todos/2", "/api/v1/todos/1"]);
     }
 
     #[test]
