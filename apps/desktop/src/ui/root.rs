@@ -25,6 +25,7 @@ use crate::ui::icons::{APP_ICON, Icon};
 use crate::ui::outline_view::{OutlineEvent, OutlineView, ToggleShowDone};
 use crate::ui::shortcuts::shortcuts_dialog;
 use crate::ui::stats_view::StatsView;
+use crate::ui::text_field::{FieldEvent, TextField};
 use crate::ui::theme::{sync_theme, theme};
 use crate::ui::widgets::{PAGE_WIDTH, icon, icon_button, modal, shadow};
 
@@ -36,6 +37,7 @@ actions!(
         ShowTodos,
         CloseDialog,
         CloseMenu,
+        SubmitServer,
         Quit
     ]
 );
@@ -44,6 +46,7 @@ pub fn bindings() -> Vec<KeyBinding> {
     vec![
         KeyBinding::new("escape", CloseDialog, Some("Dialog")),
         KeyBinding::new("escape", CloseMenu, Some("AccountMenu")),
+        KeyBinding::new("enter", SubmitServer, Some("ServerForm")),
         KeyBinding::new("cmd-q", Quit, None),
     ]
 }
@@ -62,8 +65,15 @@ struct Workspace {
     _subscription: Subscription,
 }
 
+struct ServerForm {
+    field: Entity<TextField>,
+    error: Option<String>,
+    checking: bool,
+    _subscription: Subscription,
+}
+
 enum Screen {
-    NoServer(String),
+    NoServer(ServerForm),
     Connecting,
     Unavailable(String),
     SignedOut {
@@ -216,9 +226,18 @@ fn load(base: Url, store: Arc<dyn TokenStore>) -> Result<Result<Loaded, AccessAp
     }
 }
 
+fn rejection(error: &Error) -> String {
+    match error {
+        Error::Network { .. } => {
+            "Can\u{2019}t reach this server. Check the address and your connection.".into()
+        }
+        Error::Storage(_) => sentence(error.to_string()),
+        _ => "Couldn\u{2019}t find Nestodo at this address.".into(),
+    }
+}
+
 impl Root {
     pub fn new(
-        base: Result<Url, String>,
         store: Arc<dyn TokenStore>,
         prefs_path: Option<PathBuf>,
         window: &mut Window,
@@ -232,16 +251,16 @@ impl Root {
             }),
             cx.on_focus_lost(window, Self::restore_focus),
         ];
-        let (base, screen) = match base {
-            Ok(base) => (Some(base), Screen::Connecting),
-            Err(message) => (None, Screen::NoServer(message)),
-        };
+        let base = prefs
+            .base_url
+            .as_deref()
+            .and_then(|saved| api::base_url_of(saved).ok());
         let mut root = Self {
             base,
             store,
             prefs_path,
             prefs,
-            screen,
+            screen: Screen::Connecting,
             focus_handle: cx.focus_handle(),
             menu_focus: cx.focus_handle(),
             dialog_focus: cx.focus_handle(),
@@ -250,11 +269,156 @@ impl Root {
             account_bounds: Rc::new(Cell::new(Bounds::default())),
             _subscriptions: subscriptions,
         };
+        window.focus(&root.focus_handle);
         if root.base.is_some() {
             root.connect(window, cx);
+        } else {
+            let saved = root.prefs.base_url.clone().unwrap_or_default();
+            root.ask_for_server(&saved, window, cx);
         }
-        window.focus(&root.focus_handle);
         root
+    }
+
+    fn ask_for_server(&mut self, address: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let field = cx.new(|cx| {
+            let mut field = TextField::new("Server", cx).placeholder("nestodo.example.com");
+            field.set_text(address, address.len(), cx);
+            field
+        });
+        let subscription = cx.subscribe(&field, |_, _, _: &FieldEvent, cx| cx.notify());
+        field.read(cx).focus(window);
+        window.set_window_title("Nestodo");
+        self.menu_open = false;
+        self.screen = Screen::NoServer(ServerForm {
+            field,
+            error: None,
+            checking: false,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    fn submit_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Screen::NoServer(form) = &mut self.screen else {
+            return;
+        };
+        let field = form.field.read(cx);
+        if form.checking || field.is_composing() || field.text().trim().is_empty() {
+            return;
+        }
+        let base = match api::base_url_of(field.text()) {
+            Ok(base) => base,
+            Err(message) => {
+                form.error = Some(message);
+                cx.notify();
+                return;
+            }
+        };
+        form.error = None;
+        form.checking = true;
+        let store = self.store.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let checked = base.clone();
+            let result = cx
+                .background_spawn(async move { load(checked, store) })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.server_checked(base, result, window, cx);
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn server_checked(
+        &mut self,
+        base: Url,
+        result: Result<Result<Loaded, AccessApp>, Error>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Screen::NoServer(form) = &mut self.screen else {
+            return;
+        };
+        form.checking = false;
+        cx.notify();
+        let loaded = match result {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                form.error = Some(rejection(&error));
+                return;
+            }
+        };
+        let previous = self.prefs.base_url.replace(base.to_string());
+        if self.prefs.save(self.prefs_path.as_deref()).is_err() {
+            self.prefs.base_url = previous;
+            form.error = Some("Couldn\u{2019}t save the server. Try again.".into());
+            return;
+        }
+        self.base = Some(base);
+        match loaded {
+            Ok((client, todos)) => self.open_workspace(client, &todos, window, cx),
+            Err(app) => {
+                self.screen = Screen::SignedOut { app, error: None };
+                window.focus(&self.focus_handle);
+            }
+        }
+    }
+
+    fn change_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_then(Self::forget_server, window, cx);
+    }
+
+    fn forget_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(base) = self.base.clone() else {
+            return;
+        };
+        let previous = self.prefs.base_url.take();
+        if let Err(error) = self.prefs.save(self.prefs_path.as_deref()) {
+            self.prefs.base_url = previous;
+            let message = sentence(error.to_string());
+            drop(window.prompt(
+                PromptLevel::Critical,
+                "Couldn\u{2019}t change the server",
+                Some(&message),
+                &["OK"],
+                cx,
+            ));
+            return;
+        }
+        let client = match &self.screen {
+            Screen::Ready(workspace) => Some(workspace.client.clone()),
+            _ => None,
+        };
+        self.base = None;
+        let store = self.store.clone();
+        let host = base.host_str().unwrap_or_default().to_string();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    match client {
+                        Some(client) => client.sign_out(store.as_ref()),
+                        None => api::logout(store.as_ref(), &host),
+                    }
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.ask_for_server(&api::label(&base), window, cx);
+                if let Err(error) = result {
+                    let message = error.to_string();
+                    drop(window.prompt(
+                        PromptLevel::Critical,
+                        "Couldn\u{2019}t sign out of the old server",
+                        Some(&message),
+                        &["OK"],
+                        cx,
+                    ));
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -297,7 +461,7 @@ impl Root {
             cx.subscribe_in(&outline, window, |this, _, event, window, cx| match event {
                 OutlineEvent::ShowDoneChanged(shown) => {
                     this.prefs.show_completed = *shown;
-                    this.prefs.save(this.prefs_path.as_deref());
+                    let _ = this.prefs.save(this.prefs_path.as_deref());
                 }
                 OutlineEvent::ReloadRequested | OutlineEvent::SignedOut => this.connect(window, cx),
             });
@@ -371,18 +535,26 @@ impl Root {
     }
 
     fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_then(Self::forget_login, window, cx);
+    }
+
+    fn leave_then(
+        &mut self,
+        then: fn(&mut Self, &mut Window, &mut Context<Self>),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.close_menu(window, cx);
         let root = cx.entity().downgrade();
         window.defer(cx, move |window, cx| {
-            let forget = {
+            let leave = {
                 let root = root.clone();
                 move |window: &mut Window, cx: &mut App| {
-                    root.update(cx, |this, cx| this.forget_login(window, cx))
-                        .ok();
+                    root.update(cx, |this, cx| then(this, window, cx)).ok();
                 }
             };
-            if leave_when_saved(root, window, cx, forget.clone()) {
-                forget(window, cx);
+            if leave_when_saved(root, window, cx, leave.clone()) {
+                leave(window, cx);
             }
         });
         cx.notify();
@@ -475,12 +647,12 @@ impl Root {
     }
 
     fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Screen::Ready(workspace) = &self.screen
-            && workspace.page == Page::Todos
-        {
-            window.focus(&workspace.outline.focus_handle(cx));
-        } else {
-            window.focus(&self.focus_handle);
+        match &self.screen {
+            Screen::Ready(workspace) if workspace.page == Page::Todos => {
+                window.focus(&workspace.outline.focus_handle(cx));
+            }
+            Screen::NoServer(form) => form.field.read(cx).focus(window),
+            _ => window.focus(&self.focus_handle),
         }
     }
 
@@ -637,18 +809,19 @@ impl Root {
                 )
                 .child(
                     div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
                         .px(px(10.))
                         .py(px(8.))
                         .text_size(px(14.))
                         .text_color(colors.muted)
-                        .truncate()
-                        .child(workspace_email.unwrap_or_else(|| {
+                        .children(workspace_email.map(|email| div().truncate().child(email)))
+                        .children(
                             self.base
                                 .as_ref()
-                                .and_then(|base| base.host_str())
-                                .unwrap_or_default()
-                                .to_string()
-                        })),
+                                .map(|base| div().truncate().child(api::label(base))),
+                        ),
                 )
                 .child(separator())
                 .child(
@@ -666,8 +839,14 @@ impl Root {
                         cx.listener(|this, _, window, cx| this.open_shortcuts(window, cx)),
                     ),
                 )
+                .child(separator())
+                .child(
+                    item("menu-change-server", Icon::Server, "Change server", false).on_click(
+                        cx.listener(|this, _, window, cx| this.change_server(window, cx)),
+                    ),
+                )
                 .when(protected, |menu| {
-                    menu.child(separator()).child(
+                    menu.child(
                         item("menu-sign-out", Icon::SignOut, "Sign out", false)
                             .on_click(cx.listener(|this, _, window, cx| this.sign_out(window, cx))),
                     )
@@ -750,6 +929,38 @@ impl Root {
             .into_any_element()
     }
 
+    fn render_server_line(&self, cx: &Context<Self>) -> AnyElement {
+        let colors = theme(cx);
+        div()
+            .max_w_full()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .children(self.base.as_ref().map(|base| {
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(14.))
+                    .text_color(colors.muted)
+                    .child(api::label(base))
+            }))
+            .child(
+                div()
+                    .id("change-server")
+                    .flex_none()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .rounded(px(6.))
+                    .text_size(px(14.))
+                    .text_color(colors.accent)
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(colors.hover))
+                    .on_click(cx.listener(|this, _, window, cx| this.change_server(window, cx)))
+                    .child("Change server"),
+            )
+            .into_any_element()
+    }
+
     fn render_login(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme(cx);
         let hint = |text: &'static str| {
@@ -784,10 +995,66 @@ impl Root {
                 .child(label)
         };
         let (error, actions): (Option<String>, AnyElement) = match &self.screen {
-            Screen::NoServer(message) => (
-                Some(message.clone()),
-                hint("Build or start the app with NESTODO_BASE_URL set to your server,\nsuch as https://nestodo.example.com.").into_any_element(),
-            ),
+            Screen::NoServer(form) => {
+                let ready = !form.checking && !form.field.read(cx).text().trim().is_empty();
+                let label = if form.checking {
+                    "Checking\u{2026}"
+                } else {
+                    "Continue"
+                };
+                (
+                    None,
+                    div()
+                        .key_context("ServerForm")
+                        .on_action(cx.listener(|this, _: &SubmitServer, window, cx| {
+                            this.submit_server(window, cx);
+                        }))
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(16.))
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.))
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .h(px(44.))
+                                        .flex()
+                                        .items_center()
+                                        .px(px(14.))
+                                        .border_1()
+                                        .border_color(if form.error.is_some() {
+                                            colors.danger
+                                        } else {
+                                            colors.border
+                                        })
+                                        .rounded(px(8.))
+                                        .bg(colors.surface)
+                                        .text_size(px(16.))
+                                        .line_height(px(22.))
+                                        .child(div().flex_1().min_w_0().child(form.field.clone())),
+                                )
+                                .children(form.error.clone().map(|error| {
+                                    div()
+                                        .text_size(px(14.))
+                                        .text_color(colors.danger)
+                                        .child(error)
+                                })),
+                        )
+                        .child(wide("continue", label, ready).when(ready, |button| {
+                            button.on_click(cx.listener(|this, _, window, cx| {
+                                this.submit_server(window, cx);
+                            }))
+                        }))
+                        .child(hint("The address you open the web app at."))
+                        .into_any_element(),
+                )
+            }
             Screen::Connecting | Screen::Ready(_) => (
                 None,
                 div()
@@ -798,8 +1065,17 @@ impl Root {
             ),
             Screen::Unavailable(message) => (
                 Some(message.clone()),
-                wide("retry", "Try again", true)
-                    .on_click(cx.listener(|this, _, window, cx| this.connect(window, cx)))
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(16.))
+                    .child(
+                        wide("retry", "Try again", true)
+                            .on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))),
+                    )
+                    .child(self.render_server_line(cx))
                     .into_any_element(),
             ),
             Screen::SignedOut { app, error } => {
@@ -820,6 +1096,7 @@ impl Root {
                         .child(hint(
                             "Opens the Cloudflare Access sign-in in your browser.\nUse the same account as the web app.",
                         ))
+                        .child(self.render_server_line(cx))
                         .into_any_element(),
                 )
             }
@@ -989,13 +1266,21 @@ impl Render for Root {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::net::TcpListener;
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicUsize;
+
     use gpui::{TestAppContext, VisualTestContext};
     use mockito::{Server, ServerGuard};
     use nestodo_desktop::store::Kind;
 
     use super::*;
 
-    struct NoTokens;
+    #[derive(Default)]
+    struct NoTokens {
+        deleted: Mutex<Vec<String>>,
+    }
 
     impl TokenStore for NoTokens {
         fn load(&self, _: &str, _: Kind) -> Result<Option<String>, Error> {
@@ -1006,9 +1291,45 @@ mod tests {
             Ok(())
         }
 
-        fn delete(&self, _: &str, _: Kind) -> Result<(), Error> {
+        fn delete(&self, host: &str, _: Kind) -> Result<(), Error> {
+            self.deleted.lock().unwrap().push(host.to_string());
             Ok(())
         }
+    }
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "nestodo-desktop-root-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let _ = fs::remove_dir_all(&dir);
+            Self(dir)
+        }
+
+        fn settings(&self) -> PathBuf {
+            self.0.join("settings.json")
+        }
+
+        fn saved_server(&self) -> Option<String> {
+            Prefs::load(Some(&self.settings())).base_url
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct Form {
+        text: String,
+        error: Option<String>,
+        checking: bool,
     }
 
     fn refusing_saves() -> ServerGuard {
@@ -1023,25 +1344,75 @@ mod tests {
         server
     }
 
-    fn open<'a>(
-        cx: &'a mut TestAppContext,
-        server: &ServerGuard,
-    ) -> (Entity<Root>, Entity<OutlineView>, &'a mut VisualTestContext) {
+    fn site(todos_status: usize) -> ServerGuard {
+        let mut server = Server::new();
+        server.mock("HEAD", "/").create();
+        server
+            .mock("GET", "/api/v1/todos")
+            .with_status(todos_status)
+            .with_body(r#"{"todos":[]}"#)
+            .create();
+        server
+    }
+
+    fn closed_port() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", listener.local_addr().unwrap())
+    }
+
+    fn launch(
+        cx: &mut TestAppContext,
+        prefs: PathBuf,
+        store: Arc<NoTokens>,
+    ) -> (Entity<Root>, &mut VisualTestContext) {
         cx.update(|cx| {
             cx.bind_keys(crate::ui::text_field::bindings());
             cx.bind_keys(crate::ui::outline_view::bindings());
             cx.bind_keys(bindings());
         });
-        let base = Url::parse(&server.url()).unwrap();
-        let (root, cx) = cx.add_window_view(|window, cx| {
-            Root::new(Ok(base), Arc::new(NoTokens), None, window, cx)
-        });
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(store, Some(prefs), window, cx));
         cx.run_until_parked();
+        (root, cx)
+    }
+
+    fn remember(server: &ServerGuard, prefs: &TempDir) {
+        Prefs {
+            show_completed: true,
+            base_url: Some(server.url()),
+        }
+        .save(Some(&prefs.settings()))
+        .unwrap();
+    }
+
+    fn open<'a>(
+        cx: &'a mut TestAppContext,
+        server: &ServerGuard,
+        prefs: &TempDir,
+    ) -> (Entity<Root>, Entity<OutlineView>, &'a mut VisualTestContext) {
+        remember(server, prefs);
+        let (root, cx) = launch(cx, prefs.settings(), Arc::default());
         let outline = root.read_with(cx, |root, _| match &root.screen {
             Screen::Ready(workspace) => workspace.outline.clone(),
             _ => panic!("the workspace did not open"),
         });
         (root, outline, cx)
+    }
+
+    fn form(root: &Entity<Root>, cx: &mut VisualTestContext) -> Option<Form> {
+        root.read_with(cx, |root, cx| match &root.screen {
+            Screen::NoServer(form) => Some(Form {
+                text: form.field.read(cx).text().to_string(),
+                error: form.error.clone(),
+                checking: form.checking,
+            }),
+            _ => None,
+        })
+    }
+
+    fn enter_server(address: &str, cx: &mut VisualTestContext) {
+        cx.simulate_input(address);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
     }
 
     fn edit_note(outline: &Entity<OutlineView>, cx: &mut VisualTestContext) {
@@ -1071,7 +1442,8 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let server = refusing_saves();
-        let (_, outline, cx) = open(cx, &server);
+        let prefs = TempDir::new();
+        let (_, outline, cx) = open(cx, &server, &prefs);
         let quit = ask_before_leaving(cx);
         edit_note(&outline, cx);
 
@@ -1090,7 +1462,8 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let server = refusing_saves();
-        let (_, outline, cx) = open(cx, &server);
+        let prefs = TempDir::new();
+        let (_, outline, cx) = open(cx, &server, &prefs);
         ask_before_leaving(cx);
         edit_note(&outline, cx);
 
@@ -1106,7 +1479,8 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let server = refusing_saves();
-        let (root, _, cx) = open(cx, &server);
+        let prefs = TempDir::new();
+        let (root, _, cx) = open(cx, &server, &prefs);
         cx.dispatch_action(ShowShortcuts);
 
         cx.dispatch_action(ShowStats);
@@ -1128,7 +1502,8 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let server = refusing_saves();
-        let (root, outline, cx) = open(cx, &server);
+        let prefs = TempDir::new();
+        let (root, outline, cx) = open(cx, &server, &prefs);
 
         root.update_in(cx, Root::toggle_menu);
         root.update_in(cx, Root::open_settings);
@@ -1151,7 +1526,8 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let mut server = refusing_saves();
-        let (root, _, cx) = open(cx, &server);
+        let prefs = TempDir::new();
+        let (root, _, cx) = open(cx, &server, &prefs);
         server.reset();
 
         root.update_in(cx, Root::connect);
@@ -1168,7 +1544,8 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let server = refusing_saves();
-        let (root, outline, cx) = open(cx, &server);
+        let prefs = TempDir::new();
+        let (root, outline, cx) = open(cx, &server, &prefs);
         edit_note(&outline, cx);
         wait(cx);
         root.update_in(cx, Root::toggle_menu);
@@ -1181,6 +1558,257 @@ mod tests {
         outline.update_in(cx, |outline, window, cx| {
             assert!(outline.focus_handle(cx).contains_focused(window, cx));
         });
+    }
+
+    #[gpui::test]
+    fn a_first_launch_asks_for_the_server_with_the_keyboard_in_the_address_field(
+        cx: &mut TestAppContext,
+    ) {
+        let prefs = TempDir::new();
+        let (root, cx) = launch(cx, prefs.settings(), Arc::default());
+
+        root.update_in(cx, |root, window, cx| {
+            let Screen::NoServer(form) = &root.screen else {
+                panic!("the app did not ask for the server");
+            };
+            assert!(form.field.focus_handle(cx).is_focused(window));
+        });
+    }
+
+    #[gpui::test]
+    fn an_address_copied_from_the_browser_is_saved_as_the_servers_root_and_opens_with_the_todos_it_was_checked_with(
+        cx: &mut TestAppContext,
+    ) {
+        let mut server = Server::new();
+        server.mock("HEAD", "/").create();
+        let todos = server
+            .mock("GET", "/api/v1/todos")
+            .with_body(r#"{"todos":[]}"#)
+            .expect(1)
+            .create();
+        let prefs = TempDir::new();
+        let (root, cx) = launch(cx, prefs.settings(), Arc::default());
+
+        enter_server(
+            &format!("{}/today?from=https://example.com/", server.url()),
+            cx,
+        );
+
+        root.read_with(cx, |root, _| {
+            assert!(matches!(root.screen, Screen::Ready(_)));
+        });
+        assert_eq!(prefs.saved_server(), Some(format!("{}/", server.url())));
+        todos.assert();
+    }
+
+    #[gpui::test]
+    fn an_address_that_cant_be_reached_is_not_saved_so_the_next_launch_asks_again_instead_of_failing_on_a_typo(
+        cx: &mut TestAppContext,
+    ) {
+        let prefs = TempDir::new();
+        let (root, cx) = launch(cx, prefs.settings(), Arc::default());
+        let address = closed_port();
+
+        enter_server(&address, cx);
+
+        let form = form(&root, cx).expect("the address form stays up");
+        assert_eq!(form.text, address);
+        assert_eq!(
+            form.error.as_deref(),
+            Some("Can\u{2019}t reach this server. Check the address and your connection.")
+        );
+        assert_eq!(prefs.saved_server(), None);
+    }
+
+    #[gpui::test]
+    fn a_site_that_answers_without_a_todo_list_is_not_saved_since_the_outline_could_never_load_from_it(
+        cx: &mut TestAppContext,
+    ) {
+        let server = site(404);
+        let prefs = TempDir::new();
+        let (root, cx) = launch(cx, prefs.settings(), Arc::default());
+
+        enter_server(&server.url(), cx);
+
+        assert_eq!(
+            form(&root, cx).and_then(|form| form.error).as_deref(),
+            Some("Couldn\u{2019}t find Nestodo at this address.")
+        );
+        assert_eq!(prefs.saved_server(), None);
+    }
+
+    #[gpui::test]
+    fn text_that_is_not_a_web_address_is_explained_under_the_field_without_trying_to_connect(
+        cx: &mut TestAppContext,
+    ) {
+        let prefs = TempDir::new();
+        let (root, cx) = launch(cx, prefs.settings(), Arc::default());
+
+        enter_server("my server", cx);
+
+        let form = form(&root, cx).expect("the address form stays up");
+        assert!(!form.checking);
+        assert_eq!(
+            form.error.as_deref(),
+            Some("Enter an address such as nestodo.example.com.")
+        );
+    }
+
+    #[gpui::test]
+    fn the_address_form_stays_up_while_the_server_is_checked_and_a_second_enter_does_not_check_it_again(
+        cx: &mut TestAppContext,
+    ) {
+        let mut server = Server::new();
+        let discovery = server.mock("HEAD", "/").expect(1).create();
+        server
+            .mock("GET", "/api/v1/todos")
+            .with_body(r#"{"todos":[]}"#)
+            .create();
+        let prefs = TempDir::new();
+        let (root, cx) = launch(cx, prefs.settings(), Arc::default());
+        cx.simulate_input(&server.url());
+
+        root.update_in(cx, |root, window, cx| {
+            root.submit_server(window, cx);
+            root.submit_server(window, cx);
+        });
+        assert!(form(&root, cx).is_some_and(|form| form.checking));
+        cx.run_until_parked();
+
+        root.read_with(cx, |root, _| {
+            assert!(matches!(root.screen, Screen::Ready(_)));
+        });
+        discovery.assert();
+    }
+
+    #[gpui::test]
+    fn a_server_the_mac_fails_to_save_is_reported_instead_of_opened_so_the_next_launch_does_not_ask_again_without_warning(
+        cx: &mut TestAppContext,
+    ) {
+        let server = site(200);
+        let prefs = TempDir::new();
+        fs::create_dir_all(&prefs.0).unwrap();
+        let blocker = prefs.0.join("not-a-folder");
+        fs::write(&blocker, "").unwrap();
+        let (root, cx) = launch(cx, blocker.join("settings.json"), Arc::default());
+
+        enter_server(&server.url(), cx);
+
+        assert_eq!(
+            form(&root, cx).and_then(|form| form.error).as_deref(),
+            Some("Couldn\u{2019}t save the server. Try again.")
+        );
+    }
+
+    #[gpui::test]
+    fn changing_the_server_signs_out_of_the_old_one_and_forgets_it_so_its_sign_in_is_not_left_on_the_mac(
+        cx: &mut TestAppContext,
+    ) {
+        let server = site(200);
+        let prefs = TempDir::new();
+        remember(&server, &prefs);
+        let store = Arc::new(NoTokens::default());
+        let (root, cx) = launch(cx, prefs.settings(), store.clone());
+        root.update_in(cx, Root::toggle_menu);
+
+        root.update_in(cx, Root::change_server);
+        cx.run_until_parked();
+
+        assert_eq!(
+            form(&root, cx).map(|form| form.text),
+            Some(server.url()),
+            "the form starts from the old address"
+        );
+        assert_eq!(prefs.saved_server(), None);
+        assert!(
+            store
+                .deleted
+                .lock()
+                .unwrap()
+                .contains(&"127.0.0.1".to_string())
+        );
+    }
+
+    #[gpui::test]
+    fn the_address_form_appears_only_after_the_old_sign_in_is_deleted_so_entering_the_same_server_again_keeps_its_new_sign_in(
+        cx: &mut TestAppContext,
+    ) {
+        let server = site(200);
+        let prefs = TempDir::new();
+        remember(&server, &prefs);
+        let store = Arc::new(NoTokens::default());
+        let (root, cx) = launch(cx, prefs.settings(), store.clone());
+
+        root.update_in(cx, Root::change_server);
+        let form_is_up = form(&root, cx).is_some();
+        let old_sign_in_deleted = !store.deleted.lock().unwrap().is_empty();
+        cx.run_until_parked();
+
+        assert!(
+            !form_is_up || old_sign_in_deleted,
+            "the form took an address while the old sign-in was still saved"
+        );
+        assert!(form(&root, cx).is_some());
+    }
+
+    #[gpui::test]
+    fn the_server_can_be_changed_from_the_error_screen_when_it_stops_answering(
+        cx: &mut TestAppContext,
+    ) {
+        let mut server = refusing_saves();
+        let prefs = TempDir::new();
+        let (root, _, cx) = open(cx, &server, &prefs);
+        server.reset();
+        root.update_in(cx, Root::connect);
+        cx.run_until_parked();
+
+        root.update_in(cx, Root::change_server);
+        cx.run_until_parked();
+
+        assert!(form(&root, cx).is_some());
+        assert_eq!(prefs.saved_server(), None);
+    }
+
+    #[gpui::test]
+    fn a_server_change_the_mac_fails_to_save_keeps_the_current_server_so_a_restart_does_not_return_to_a_server_already_signed_out_of(
+        cx: &mut TestAppContext,
+    ) {
+        let server = site(200);
+        let prefs = TempDir::new();
+        remember(&server, &prefs);
+        let store = Arc::new(NoTokens::default());
+        let (root, cx) = launch(cx, prefs.settings(), store.clone());
+        fs::remove_file(prefs.settings()).unwrap();
+        fs::create_dir(prefs.settings()).unwrap();
+
+        root.update_in(cx, Root::change_server);
+        cx.run_until_parked();
+
+        assert!(cx.has_pending_prompt());
+        root.read_with(cx, |root, _| {
+            assert!(matches!(root.screen, Screen::Ready(_)));
+        });
+        assert!(store.deleted.lock().unwrap().is_empty());
+    }
+
+    #[gpui::test]
+    fn changing_the_server_right_after_an_edit_the_server_refuses_asks_first_so_the_edit_is_not_lost_silently(
+        cx: &mut TestAppContext,
+    ) {
+        let server = refusing_saves();
+        let prefs = TempDir::new();
+        let (root, outline, cx) = open(cx, &server, &prefs);
+        edit_note(&outline, cx);
+
+        root.update_in(cx, Root::change_server);
+        wait(cx);
+        cx.simulate_prompt_answer("Stay");
+        cx.run_until_parked();
+
+        root.read_with(cx, |root, _| {
+            assert!(matches!(root.screen, Screen::Ready(_)));
+        });
+        assert_eq!(prefs.saved_server(), Some(server.url()));
     }
 
     #[test]

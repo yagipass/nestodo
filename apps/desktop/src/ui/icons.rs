@@ -12,6 +12,7 @@ pub enum Icon {
     Settings,
     Help,
     SignOut,
+    Server,
     Chevron,
     Note,
     Check,
@@ -28,6 +29,7 @@ impl Icon {
             Icon::Settings => "icons/settings.svg",
             Icon::Help => "icons/help.svg",
             Icon::SignOut => "icons/sign-out.svg",
+            Icon::Server => "icons/server.svg",
             Icon::Chevron => "icons/chevron.svg",
             Icon::Note => "icons/note.svg",
             Icon::Check => "icons/check.svg",
@@ -75,6 +77,11 @@ fn svg_for(path: &str) -> Option<String> {
             "2",
             true,
             r#"<path d="M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4M16 17l5-5-5-5M21 12H9"/>"#,
+        ),
+        "icons/server.svg" => stroked(
+            "2",
+            true,
+            r#"<rect x="4" y="4" width="16" height="6" rx="1.5"/><rect x="4" y="14" width="16" height="6" rx="1.5"/><path d="M8 7h.01M8 17h.01"/>"#,
         ),
         "icons/chevron.svg" => stroked("2.4", true, r#"<path d="M9 6l6 6-6 6"/>"#),
         "icons/note.svg" => stroked(
