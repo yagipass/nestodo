@@ -58,7 +58,7 @@ The desktop app is built with [GPUI](https://www.gpui.rs) and runs on macOS. It 
 
 The app asks for the address of your server on first launch. To use `vp dev`, start it in `apps/web` with `pnpm exec vp dev --host 127.0.0.1` and enter `http://127.0.0.1:5173`. The app accepts `http://` only for `localhost`, `127.0.0.1` and `[::1]`. `cargo run` and the installed app share the saved server.
 
-CI runs these on macOS (Apple silicon).
+CI runs the lint and the tests on macOS (Apple silicon).
 
 ### Android
 
