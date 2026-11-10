@@ -12,7 +12,7 @@ export default defineConfig({
   "cloudflare": {
     "name": "nestodo",
     "d1_databases": [
-      { "binding": "DB", "database_name": "nestodo-db", "migrations_dir": "./db/migrations" }
+      { "binding": "DB", "database_name": "nestodo-db", "database_id": "local", "migrations_dir": "./db/migrations" }
     ],
     ...(routes.length > 0 ? { "routes": routes } : {}),
     "workers_dev": false,
