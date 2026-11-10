@@ -31,6 +31,9 @@ spec:
   - name: dependencies
     description: Pull requests that update a dependency file
     color: 0366d6
+  - name: desktop
+    description: Pull requests that change the shipped desktop app code
+    color: fbca04
   - name: documentation
     description: Improvements or additions to documentation
     color: 0075ca

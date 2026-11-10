@@ -15,3 +15,6 @@ android:
 cli:
   - changed-files:
       - any-glob-to-any-file: ['apps/cli/src/**']
+desktop:
+  - changed-files:
+      - any-glob-to-any-file: ['apps/desktop/src/**']
