@@ -816,12 +816,12 @@ fn adding_a_row_right_after_typing_saves_the_typing_first_so_a_failed_add_cannot
     let (view, cx) = open(cx, &server, true);
     focus(&view, cx, "Trip", END);
     cx.simulate_input(" to Kyoto");
+    server.fail_creates_with(500);
 
     view.update_in(cx, super::OutlineView::add_item);
     settle(cx);
 
-    let methods: Vec<&str> = server.sent().iter().map(|request| request.method).collect();
-    assert_eq!(methods, ["PATCH", "POST"]);
+    assert_eq!(server.tree(), "Groceries\n  Milk\n  Bread\nTrip to Kyoto");
 }
 
 #[gpui::test]
@@ -832,12 +832,12 @@ fn enter_right_after_typing_saves_the_typing_before_the_new_row_so_a_failed_add_
     let (view, cx) = open(cx, &server, true);
     focus(&view, cx, "Trip", END);
     cx.simulate_input(" to Kyoto");
+    server.fail_creates_with(500);
 
     cx.simulate_keystrokes("enter");
     settle(cx);
 
-    let methods: Vec<&str> = server.sent().iter().map(|request| request.method).collect();
-    assert_eq!(methods, ["PATCH", "POST"]);
+    assert_eq!(server.tree(), "Groceries\n  Milk\n  Bread\nTrip to Kyoto");
 }
 
 #[gpui::test]

@@ -25,6 +25,7 @@ struct State {
     rows: Vec<Row>,
     next_id: u64,
     failing: Option<u16>,
+    failing_creates: Option<u16>,
     signed_out: bool,
     sent: Vec<Request>,
 }
@@ -103,6 +104,10 @@ impl FakeServer {
 
     pub fn fail_with(&self, status: u16) {
         self.state.lock().unwrap().failing = Some(status);
+    }
+
+    pub fn fail_creates_with(&self, status: u16) {
+        self.state.lock().unwrap().failing_creates = Some(status);
     }
 
     pub fn expire_sign_in(&self) {
@@ -309,7 +314,8 @@ impl Backend for FakeServer {
             return Err(Error::NotSignedIn);
         }
         state.sent.push(request.clone());
-        if let Some(status) = state.failing {
+        let creating = request.method == "POST";
+        if let Some(status) = state.failing.or(state.failing_creates.filter(|_| creating)) {
             return Ok(Reply {
                 status,
                 body: Some(json!({ "error": "failing" })),
