@@ -392,10 +392,9 @@ impl Root {
             _ => None,
         };
         self.base = None;
-        self.ask_for_server(&api::label(&base), window, cx);
         let store = self.store.clone();
         let host = base.host_str().unwrap_or_default().to_string();
-        cx.spawn_in(window, async move |_, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
                     match client {
@@ -404,9 +403,10 @@ impl Root {
                     }
                 })
                 .await;
-            if let Err(error) = result {
-                let message = error.to_string();
-                cx.update(|window, cx| {
+            this.update_in(cx, |this, window, cx| {
+                this.ask_for_server(&api::label(&base), window, cx);
+                if let Err(error) = result {
+                    let message = error.to_string();
                     drop(window.prompt(
                         PromptLevel::Critical,
                         "Couldn\u{2019}t sign out of the old server",
@@ -414,9 +414,9 @@ impl Root {
                         &["OK"],
                         cx,
                     ));
-                })
-                .ok();
-            }
+                }
+            })
+            .ok();
         })
         .detach();
     }
@@ -1375,17 +1375,21 @@ mod tests {
         (root, cx)
     }
 
-    fn open<'a>(
-        cx: &'a mut TestAppContext,
-        server: &ServerGuard,
-        prefs: &TempDir,
-    ) -> (Entity<Root>, Entity<OutlineView>, &'a mut VisualTestContext) {
+    fn remember(server: &ServerGuard, prefs: &TempDir) {
         Prefs {
             show_completed: true,
             base_url: Some(server.url()),
         }
         .save(Some(&prefs.settings()))
         .unwrap();
+    }
+
+    fn open<'a>(
+        cx: &'a mut TestAppContext,
+        server: &ServerGuard,
+        prefs: &TempDir,
+    ) -> (Entity<Root>, Entity<OutlineView>, &'a mut VisualTestContext) {
+        remember(server, prefs);
         let (root, cx) = launch(cx, prefs.settings(), Arc::default());
         let outline = root.read_with(cx, |root, _| match &root.screen {
             Screen::Ready(workspace) => workspace.outline.clone(),
@@ -1702,12 +1706,7 @@ mod tests {
     ) {
         let server = site(200);
         let prefs = TempDir::new();
-        Prefs {
-            show_completed: true,
-            base_url: Some(server.url()),
-        }
-        .save(Some(&prefs.settings()))
-        .unwrap();
+        remember(&server, &prefs);
         let store = Arc::new(NoTokens::default());
         let (root, cx) = launch(cx, prefs.settings(), store.clone());
         root.update_in(cx, Root::toggle_menu);
@@ -1728,6 +1727,28 @@ mod tests {
                 .unwrap()
                 .contains(&"127.0.0.1".to_string())
         );
+    }
+
+    #[gpui::test]
+    fn the_address_form_appears_only_after_the_old_sign_in_is_deleted_so_entering_the_same_server_again_keeps_its_new_sign_in(
+        cx: &mut TestAppContext,
+    ) {
+        let server = site(200);
+        let prefs = TempDir::new();
+        remember(&server, &prefs);
+        let store = Arc::new(NoTokens::default());
+        let (root, cx) = launch(cx, prefs.settings(), store.clone());
+
+        root.update_in(cx, Root::change_server);
+        let form_is_up = form(&root, cx).is_some();
+        let old_sign_in_deleted = !store.deleted.lock().unwrap().is_empty();
+        cx.run_until_parked();
+
+        assert!(
+            !form_is_up || old_sign_in_deleted,
+            "the form took an address while the old sign-in was still saved"
+        );
+        assert!(form(&root, cx).is_some());
     }
 
     #[gpui::test]
@@ -1754,12 +1775,7 @@ mod tests {
     ) {
         let server = site(200);
         let prefs = TempDir::new();
-        Prefs {
-            show_completed: true,
-            base_url: Some(server.url()),
-        }
-        .save(Some(&prefs.settings()))
-        .unwrap();
+        remember(&server, &prefs);
         let store = Arc::new(NoTokens::default());
         let (root, cx) = launch(cx, prefs.settings(), store.clone());
         fs::remove_file(prefs.settings()).unwrap();

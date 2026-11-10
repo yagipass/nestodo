@@ -44,7 +44,13 @@ impl Prefs {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)?;
         }
-        fs::write(path, serde_json::to_vec_pretty(self)?)
+        let written = path.with_extension("json.tmp");
+        let result = fs::write(&written, serde_json::to_vec_pretty(self)?)
+            .and_then(|()| fs::rename(&written, path));
+        if result.is_err() {
+            let _ = fs::remove_file(&written);
+        }
+        result
     }
 }
 
@@ -134,5 +140,26 @@ mod tests {
                 .is_err()
         );
         assert!(Prefs::default().save(None).is_err());
+    }
+
+    #[test]
+    fn a_save_that_fails_leaves_the_previous_file_whole_so_the_saved_server_survives_a_restart() {
+        let dir = TempDir::new("whole");
+        let path = dir.0.join("settings.json");
+        let saved = Prefs {
+            show_completed: true,
+            base_url: Some("https://nestodo.example.com/".into()),
+        };
+        saved.save(Some(&path)).unwrap();
+        fs::create_dir(path.with_extension("json.tmp")).unwrap();
+
+        let failed = Prefs {
+            show_completed: false,
+            base_url: None,
+        }
+        .save(Some(&path));
+
+        assert!(failed.is_err());
+        assert_eq!(Prefs::load(Some(&path)), saved);
     }
 }
