@@ -30,6 +30,7 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/Nestodo.icns"
 rm -rf "$(dirname "$iconset")"
+cp ../../THIRD_PARTY_NOTICES.txt "$app/Contents/Resources/"
 
 cat >"$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
