@@ -23,8 +23,8 @@ paths = [
 ]
 
 [[allowlists]]
-description = "Cargo.lock holds crate names and checksums, and the CLI test data holds only public keys and a JWT signed by a discarded key."
+description = "Cargo.lock files hold crate names and checksums, and the CLI and desktop test data hold only public keys and a JWT signed by a discarded key."
 paths = [
-  '''^Cargo\.lock$''',
-  '''^apps/cli/src/access/testdata/(login-url\.txt|metadata\.jwt)$''',
+  '''^(apps/desktop/)?Cargo\.lock$''',
+  '''^apps/(cli|desktop)/src/access/testdata/(login-url\.txt|metadata\.jwt)$''',
 ]

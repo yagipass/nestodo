@@ -4,10 +4,10 @@ I develop Nestodo for my family and do not take issues or pull requests from oth
 
 ## Setup
 
-Install [Nix](https://nixos.org/) with flakes and [direnv](https://direnv.net/), then run `direnv allow` at the repo root, in `apps/cli` and in `apps/android`. Each directory loads its dev shell from `flake.nix` and installs the git hooks. Without direnv, use `nix develop`, `nix develop .#cli` or `nix develop .#android`.
+Install [Nix](https://nixos.org/) with flakes and [direnv](https://direnv.net/), then run `direnv allow` at the repo root, in `apps/cli`, in `apps/desktop` and in `apps/android`. Each directory loads its dev shell from `flake.nix` and installs the git hooks. Without direnv, use `nix develop`, `nix develop .#cli` or `nix develop .#android`.
 
 - The root shell provides Node.js and pnpm. Run `pnpm install` at the root.
-- The `cli` shell provides the Rust toolchain.
+- The `cli` shell provides the Rust toolchain. `apps/desktop` uses it too.
 - The `android` shell provides the Android SDK, the emulator (on Apple silicon) and JDK 25, and writes the SDK path to `apps/android/local.properties`. Without direnv, run Gradle from `apps/android` as `nix develop ../..#android -c ./gradlew ...`.
 
 ## Build and test
@@ -72,7 +72,7 @@ Start the web app with `pnpm exec vp dev --host 127.0.0.1` for a debug build on 
 
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/), checked by the `commit-msg` hook. Scope them to the app, such as `feat(web)`, `fix(android)` or `build(nix)`, and say what changes for the user: `feat(web): expand or collapse a todo by clicking its bullet`.
 - Name branches `<type>/<slug>` after the Conventional Commits type, for example `feat/collapse-todos`. `.github/labeler.yml` labels the pull request by it, and the label picks its section of the release notes.
-- tagpr writes `CHANGELOG.md` and the version numbers of the CLI, the Android app and the MCP server. Do not edit them by hand.
+- tagpr writes `CHANGELOG.md` and the version numbers of the CLI, the desktop app, the Android app and the MCP server. Do not edit them by hand.
 
 ## Making a change
 

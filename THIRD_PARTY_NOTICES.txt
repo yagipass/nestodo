@@ -15,6 +15,11 @@ the Apache License, Version 2.0.
   apps/cli/src/access/metadata.rs
   apps/cli/src/access/mod.rs
   apps/cli/src/access/transfer.rs
+  apps/desktop/src/access/exchange.rs
+  apps/desktop/src/access/jwt.rs
+  apps/desktop/src/access/metadata.rs
+  apps/desktop/src/access/mod.rs
+  apps/desktop/src/access/transfer.rs
   apps/android/app/src/main/java/io/github/yagipass/nestodo/access/AccessSession.kt
   apps/android/app/src/main/java/io/github/yagipass/nestodo/access/Exchange.kt
   apps/android/app/src/main/java/io/github/yagipass/nestodo/access/Jwt.kt
