@@ -4,16 +4,17 @@ Manage your todos in a native macOS window, with the same outline editing and ke
 
 ## Install
 
-On macOS (Apple silicon), with Nix, add the package to nix-darwin's `environment.systemPackages` or Home Manager's `home.packages`:
+On macOS (Apple silicon), with Nix, add the flake to your nix-darwin or Home Manager configuration:
 
 ```nix
-{
-  inputs.nestodo.url = "github:yagipass/nestodo";
-}
-```
+# flake.nix
+inputs.nestodo.url = "github:yagipass/nestodo";
 
-```nix
-inputs.nestodo.packages.aarch64-darwin.nestodo-desktop
+# nix-darwin
+environment.systemPackages = [ inputs.nestodo.packages.aarch64-darwin.nestodo-desktop ];
+
+# or Home Manager
+home.packages = [ inputs.nestodo.packages.aarch64-darwin.nestodo-desktop ];
 ```
 
 To download it instead of building it, add `https://nestodo.cachix.org` to your substituters, with the key in [flake.nix](../../flake.nix).
