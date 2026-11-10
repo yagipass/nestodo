@@ -1,0 +1,45 @@
+name: Desktop
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/desktop/**
+      - apps/web/public/icon.svg
+      - apps/web/public/icon-512.png
+      - THIRD_PARTY_NOTICES.txt
+      - flake.nix
+      - flake.lock
+      - .github/workflows/desktop.yml
+  pull_request:
+    paths:
+      - apps/desktop/**
+      - apps/web/public/icon.svg
+      - apps/web/public/icon-512.png
+      - THIRD_PARTY_NOTICES.txt
+      - flake.nix
+      - flake.lock
+      - .github/workflows/desktop.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@v31.11.3
+      - run: nix develop ../..#cli --command cargo clippy --locked --all-targets -- -D warnings
+      - run: nix develop ../..#cli --command cargo test --locked

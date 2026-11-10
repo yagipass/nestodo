@@ -51,12 +51,14 @@ The desktop app is built with [GPUI](https://www.gpui.rs) and runs on macOS. It 
 
 | Command | Purpose |
 |---|---|
-| `cargo clippy --locked --all-targets -- -D warnings` | lint |
-| `cargo test --locked` | run the unit tests and the UI tests, which drive the outline with simulated keystrokes against an in-memory server |
+| `cargo clippy --locked --all-targets -- -D warnings` | lint, as CI does |
+| `cargo test --locked` | run the unit tests and the UI tests, which drive the outline with simulated keystrokes against an in-memory server, as CI does |
 | `cargo run` | run the app |
 | `./bundle.sh` | build `target/release/Nestodo.app` |
 
-The app asks for the address of your server on first launch. To use `vp dev`, start it in `apps/web` with `pnpm exec vp dev --host 127.0.0.1` and enter `http://127.0.0.1:5173`. The app accepts `http://` only for `localhost`, `127.0.0.1` and `[::1]`. `cargo run` and the installed app share the saved server. No CI job builds the desktop app yet.
+The app asks for the address of your server on first launch. To use `vp dev`, start it in `apps/web` with `pnpm exec vp dev --host 127.0.0.1` and enter `http://127.0.0.1:5173`. The app accepts `http://` only for `localhost`, `127.0.0.1` and `[::1]`. `cargo run` and the installed app share the saved server.
+
+CI runs the lint and the tests on macOS (Apple silicon).
 
 ### Android
 
