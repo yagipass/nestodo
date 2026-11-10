@@ -1,0 +1,37 @@
+[package]
+name = "nestodo-desktop"
+version = "0.9.3"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+license = "MIT AND Apache-2.0"
+
+[lib]
+name = "nestodo_desktop"
+path = "src/lib.rs"
+
+[dependencies]
+base64 = "0.23.1"
+crypto_box = "0.9.1"
+dirs = "7.0.0"
+keyring = "4.2.0"
+ring = "0.17.14"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+unicode-segmentation = "1.12"
+ureq = "3.5.0"
+url = "2.5.8"
+
+[dev-dependencies]
+mockito = "1.7.2"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+cast_precision_loss = "allow"
+implicit_hasher = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+too_many_lines = "allow"
+unreadable_literal = "allow"
+
+[workspace]
