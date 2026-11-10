@@ -19,6 +19,7 @@ workflows:
         - 'nix-community/cache-nix-action@v7.0.2'
     '.github/workflows/desktop.yml':
         - 'actions/checkout@v7.0.1'
+        - 'cachix/cachix-action@v17'
         - 'cachix/install-nix-action@v31.11.3'
     '.github/workflows/labeler.yml':
         - 'actions/labeler@v7.0.0'

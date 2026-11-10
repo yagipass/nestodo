@@ -140,6 +140,9 @@
           packages = rec {
             nestodo = pkgs.callPackage ./apps/cli/package.nix { };
             default = nestodo;
+          }
+          // lib.optionalAttrs (system == "aarch64-darwin") {
+            nestodo-desktop = pkgs.callPackage ./apps/desktop/package.nix { };
           };
 
           devShells = {
