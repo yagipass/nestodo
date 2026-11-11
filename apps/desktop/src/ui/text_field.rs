@@ -304,6 +304,11 @@ impl TextField {
     }
 
     #[cfg(test)]
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    #[cfg(test)]
     pub fn is_masked(&self) -> bool {
         self.masked
     }

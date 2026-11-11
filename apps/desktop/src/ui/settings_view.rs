@@ -74,6 +74,17 @@ impl Editor {
                 .flat_map(|header| [&header.name, &header.value]),
         )
     }
+
+    fn dirty(&self) -> bool {
+        self.form != WebhookForm::of(self.form.existing.as_ref())
+    }
+
+    fn set_saving(&mut self, saving: bool, cx: &mut Context<SettingsView>) {
+        self.saving = saving;
+        for field in self.fields() {
+            field.update(cx, |field, cx| field.set_read_only(saving, cx));
+        }
+    }
 }
 
 pub struct SettingsView {
@@ -122,7 +133,10 @@ impl SettingsView {
         self.generation += 1;
         let generation = self.generation;
         self.load = Load::Loading;
-        self.editor = None;
+        self.editor = self.editor.take().filter(Editor::dirty);
+        if let Some(editor) = &mut self.editor {
+            editor.set_saving(false, cx);
+        }
         self.analytics_saving = false;
         self.analytics_failed = false;
         let backend = self.backend.clone();
@@ -155,6 +169,9 @@ impl SettingsView {
     fn show(&mut self, loaded: Loaded, cx: &mut Context<Self>) {
         let empty = loaded.webhooks.available && loaded.webhooks.webhook.is_none();
         self.load = Load::Ready(loaded);
+        if self.editor.as_ref().is_some_and(Editor::dirty) {
+            return;
+        }
         self.editor = None;
         if empty {
             self.open_editor(None, cx);
@@ -272,6 +289,9 @@ impl SettingsView {
         let Some(editor) = &mut self.editor else {
             return;
         };
+        if editor.saving {
+            return;
+        }
         editor.form.url_secret = !editor.form.url_secret;
         let masked = editor.form.url_secret;
         editor
@@ -285,6 +305,9 @@ impl SettingsView {
         let Some(editor) = &mut self.editor else {
             return;
         };
+        if editor.saving {
+            return;
+        }
         editor.form.token = None;
         editor
             .token
@@ -294,7 +317,7 @@ impl SettingsView {
     }
 
     fn add_header(&mut self, cx: &mut Context<Self>) {
-        if self.editor.is_none() {
+        if self.editor.as_ref().is_none_or(|editor| editor.saving) {
             return;
         }
         let fields = HeaderFields {
@@ -320,6 +343,9 @@ impl SettingsView {
         let Some(editor) = &mut self.editor else {
             return;
         };
+        if editor.saving {
+            return;
+        }
         let (Some(header), Some(fields)) = (
             editor.form.headers.get_mut(index),
             editor.headers.get(index),
@@ -339,6 +365,9 @@ impl SettingsView {
         let Some(editor) = &mut self.editor else {
             return;
         };
+        if editor.saving {
+            return;
+        }
         if index < editor.headers.len() {
             editor.form.headers.remove(index);
             editor.headers.remove(index);
@@ -354,7 +383,7 @@ impl SettingsView {
         if editor.saving || editor.fields().any(|field| field.read(cx).is_composing()) {
             return;
         }
-        editor.saving = true;
+        editor.set_saving(true, cx);
         editor.errors.clear();
         editor.failure = None;
         let edit = editor.form.edit();
@@ -373,7 +402,7 @@ impl SettingsView {
                     Err(Error::NotSignedIn) => cx.emit(SettingsEvent::SignedOut),
                     Err(error) => {
                         if let Some(editor) = &mut this.editor {
-                            editor.saving = false;
+                            editor.set_saving(false, cx);
                             match error {
                                 Error::Refused(fields) => editor.errors = fields,
                                 error => {
@@ -429,7 +458,7 @@ impl SettingsView {
                     if this.generation != generation || editor.saving {
                         return false;
                     }
-                    editor.saving = true;
+                    editor.set_saving(true, cx);
                     editor.failure = None;
                     cx.notify();
                     true
@@ -455,7 +484,7 @@ impl SettingsView {
                     Err(Error::NotSignedIn) => cx.emit(SettingsEvent::SignedOut),
                     Err(error) => {
                         if let Some(editor) = &mut this.editor {
-                            editor.saving = false;
+                            editor.set_saving(false, cx);
                             editor.failure =
                                 Some(format!("Couldn\u{2019}t remove the webhook: {error}"));
                         }
@@ -1497,5 +1526,79 @@ mod tests {
         cx.run_until_parked();
 
         assert!(signed_out.get());
+    }
+
+    #[gpui::test]
+    fn leaving_settings_and_coming_back_keeps_a_half_typed_webhook(cx: &mut TestAppContext) {
+        let (view, cx) = open(cx, Server::with(None));
+        type_into(
+            &view,
+            cx,
+            |editor| editor.url.clone(),
+            "https://example.com/hook",
+        );
+
+        view.update(cx, SettingsView::reload);
+        cx.run_until_parked();
+
+        let url = field_of(&view, cx, |editor| editor.url.clone());
+        assert_eq!(
+            url.read_with(cx, |field, _| field.text().to_string()),
+            "https://example.com/hook"
+        );
+    }
+
+    #[gpui::test]
+    fn coming_back_to_an_untouched_form_shows_what_changed_on_the_server_meanwhile(
+        cx: &mut TestAppContext,
+    ) {
+        let server = Server::with(Some(saved_webhook()));
+        let (view, cx) = open(cx, server.clone());
+        view.update(cx, SettingsView::edit);
+        server.state().webhooks.webhook = Some(Webhook {
+            project: "Work".into(),
+            ..saved_webhook()
+        });
+
+        view.update(cx, SettingsView::reload);
+        cx.run_until_parked();
+
+        let (editing, project) = view.read_with(cx, |view, _| {
+            (
+                view.editor.is_some(),
+                view.webhook().map(|webhook| webhook.project.clone()),
+            )
+        });
+        assert!(!editing);
+        assert_eq!(project.as_deref(), Some("Work"));
+    }
+
+    #[gpui::test]
+    fn the_form_is_locked_while_saving_so_nothing_changed_during_the_request_is_silently_dropped(
+        cx: &mut TestAppContext,
+    ) {
+        let server = Server::with(None);
+        server.state().refuse = Some(vec![("url".into(), "Enter a URL".into())]);
+        let (view, cx) = open(cx, server);
+        type_into(&view, cx, |editor| editor.project.clone(), "Work");
+
+        let (locked, still_secret) = view.update(cx, |view, cx| {
+            view.save(cx);
+            view.toggle_url_secret(cx);
+            let editor = view.editor.as_ref().expect("the form is open");
+            (
+                editor.fields().all(|field| field.read(cx).is_read_only()),
+                editor.form.url_secret,
+            )
+        });
+        assert!(locked);
+        assert!(still_secret);
+
+        cx.run_until_parked();
+        let unlocked = view.read_with(cx, |view, cx| {
+            let editor = view.editor.as_ref().expect("the refused form stays open");
+            editor.fields().all(|field| !field.read(cx).is_read_only())
+        });
+        assert!(unlocked);
     }
 }
