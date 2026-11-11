@@ -363,9 +363,21 @@ impl Root {
             .take()
             .filter(|old| old.host_str() != base.host_str());
         self.base = Some(base);
-        if let Some(old) = left {
-            self.sign_out_of(&old, window, cx);
+        match left {
+            Some(old) => {
+                form.checking = true;
+                self.sign_out_then_open(&old, loaded, window, cx);
+            }
+            None => self.open_checked(loaded, window, cx),
         }
+    }
+
+    fn open_checked(
+        &mut self,
+        loaded: Result<Loaded, AccessApp>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match loaded {
             Ok((client, todos)) => self.open_workspace(client, &todos, window, cx),
             Err(app) => {
@@ -375,15 +387,23 @@ impl Root {
         }
     }
 
-    fn sign_out_of(&self, server: &Url, window: &mut Window, cx: &mut Context<Self>) {
+    fn sign_out_then_open(
+        &self,
+        old: &Url,
+        loaded: Result<Loaded, AccessApp>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let store = self.store.clone();
-        let host = server.host_str().unwrap_or_default().to_string();
+        let host = old.host_str().unwrap_or_default().to_string();
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move { api::logout(store.as_ref(), &host) })
                 .await;
-            if let Err(error) = result {
-                this.update_in(cx, |_, window, cx| {
+            this.update_in(cx, |this, window, cx| {
+                this.open_checked(loaded, window, cx);
+                cx.notify();
+                if let Err(error) = result {
                     let message = error.to_string();
                     drop(window.prompt(
                         PromptLevel::Critical,
@@ -392,9 +412,9 @@ impl Root {
                         &["OK"],
                         cx,
                     ));
-                })
-                .ok();
-            }
+                }
+            })
+            .ok();
         })
         .detach();
     }
@@ -1773,6 +1793,43 @@ mod tests {
         });
         assert_eq!(prefs.saved_server(), Some(format!("{}/", server.url())));
         assert_eq!(*store.deleted.lock().unwrap(), ["localhost", "localhost"]);
+    }
+
+    #[gpui::test]
+    fn the_new_server_opens_only_after_the_old_sign_in_is_deleted_so_switching_straight_back_cannot_lose_a_new_sign_in(
+        cx: &mut TestAppContext,
+    ) {
+        let server = site(200);
+        let prefs = TempDir::new();
+        remember_address(&unreachable_localhost(), &prefs);
+        let store = Arc::new(NoTokens::default());
+        let (root, cx) = launch(cx, prefs.settings(), store.clone());
+        let opened_early = Rc::new(Cell::new(false));
+        cx.update(|_, cx| {
+            let opened_early = opened_early.clone();
+            let store = store.clone();
+            cx.observe(&root, move |root, cx| {
+                if matches!(root.read(cx).screen, Screen::Ready(_))
+                    && store.deleted.lock().unwrap().is_empty()
+                {
+                    opened_early.set(true);
+                }
+            })
+            .detach();
+        });
+
+        root.update_in(cx, Root::change_server);
+        cx.run_until_parked();
+        cx.simulate_keystrokes("cmd-a");
+        enter_server(&server.url(), cx);
+
+        assert!(
+            !opened_early.get(),
+            "the new server opened while the old sign-in was still saved"
+        );
+        root.read_with(cx, |root, _| {
+            assert!(matches!(root.screen, Screen::Ready(_)));
+        });
     }
 
     #[gpui::test]
