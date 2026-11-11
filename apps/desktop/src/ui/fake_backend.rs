@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 use nestodo_desktop::api::StatsResponse;
 use nestodo_desktop::error::Error;
+use nestodo_desktop::webhook::{Analytics, WebhookEdit, Webhooks};
 use nestodo_desktop::wire::{Reply, Request, Todo};
 
 use crate::ui::backend::Backend;
@@ -329,5 +330,31 @@ impl Backend for FakeServer {
             time_zone: time_zone.to_string(),
             days: Vec::new(),
         })
+    }
+
+    fn webhooks(&self) -> Result<Webhooks, Error> {
+        Ok(Webhooks {
+            available: false,
+            webhook: None,
+        })
+    }
+
+    fn save_webhook(&self, _: &WebhookEdit) -> Result<Webhooks, Error> {
+        Err(Error::Invalid("this server cannot store webhooks".into()))
+    }
+
+    fn remove_webhook(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn analytics(&self) -> Result<Analytics, Error> {
+        Ok(Analytics {
+            available: false,
+            enabled: false,
+        })
+    }
+
+    fn set_analytics(&self, enabled: bool) -> Result<bool, Error> {
+        Ok(enabled)
     }
 }

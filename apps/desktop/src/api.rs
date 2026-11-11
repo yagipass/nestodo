@@ -12,9 +12,12 @@ use crate::error::Error;
 use crate::http::{Call, Http, Response, is_loopback};
 use crate::stats::Day;
 use crate::store::{Kind, TokenStore};
+use crate::webhook::{Analytics, WebhookEdit, Webhooks};
 use crate::wire::{Reply, Request, Todo};
 
 const LOGIN_PATH: &str = "/cdn-cgi/access/login";
+const WEBHOOK_PATH: &str = "/api/v1/webhook";
+const ANALYTICS_PATH: &str = "/api/v1/analytics";
 
 pub struct Client {
     http: Http,
@@ -37,6 +40,11 @@ pub struct StatsResponse {
 #[derive(Deserialize)]
 struct Many {
     todos: Vec<Todo>,
+}
+
+#[derive(Deserialize)]
+struct Consent {
+    enabled: bool,
 }
 
 impl Client {
@@ -138,32 +146,59 @@ impl Client {
         self.get(format!("/api/v1/stats?tz={time_zone}"))
     }
 
-    fn get<T: DeserializeOwned>(&self, path: String) -> Result<T, Error> {
+    pub fn webhooks(&self) -> Result<Webhooks, Error> {
+        self.get(WEBHOOK_PATH.into())
+    }
+
+    pub fn save_webhook(&self, edit: &WebhookEdit) -> Result<Webhooks, Error> {
+        let body = serde_json::to_value(edit)
+            .map_err(|error| Error::Invalid(format!("the webhook could not be sent: {error}")))?;
         let reply = self.request(&Request {
+            method: "PUT",
+            path: WEBHOOK_PATH.into(),
+            body: Some(body),
+        })?;
+        if reply.status == StatusCode::BAD_REQUEST.as_u16()
+            && let Some(fields) = reply.body.as_ref().map(refused_fields)
+            && !fields.is_empty()
+        {
+            return Err(Error::Refused(fields));
+        }
+        decoded(reply)
+    }
+
+    pub fn remove_webhook(&self) -> Result<(), Error> {
+        let reply = self.request(&Request {
+            method: "DELETE",
+            path: WEBHOOK_PATH.into(),
+            body: None,
+        })?;
+        if reply.is_success() {
+            Ok(())
+        } else {
+            Err(failure(&reply))
+        }
+    }
+
+    pub fn analytics(&self) -> Result<Analytics, Error> {
+        self.get(ANALYTICS_PATH.into())
+    }
+
+    pub fn set_analytics(&self, enabled: bool) -> Result<bool, Error> {
+        let reply = self.request(&Request {
+            method: "PUT",
+            path: ANALYTICS_PATH.into(),
+            body: Some(serde_json::json!({ "enabled": enabled })),
+        })?;
+        Ok(decoded::<Consent>(reply)?.enabled)
+    }
+
+    fn get<T: DeserializeOwned>(&self, path: String) -> Result<T, Error> {
+        decoded(self.request(&Request {
             method: "GET",
             path,
             body: None,
-        })?;
-        let status = reply.status;
-        if !reply.is_success() {
-            return Err(Error::Server {
-                status,
-                message: reply.body.as_ref().and_then(message).unwrap_or_else(|| {
-                    StatusCode::from_u16(status)
-                        .ok()
-                        .and_then(|status| status.canonical_reason())
-                        .unwrap_or_default()
-                        .to_string()
-                }),
-            });
-        }
-        reply
-            .body
-            .and_then(|body| serde_json::from_value(body).ok())
-            .ok_or_else(|| Error::Server {
-                status,
-                message: "the response is not the expected JSON".into(),
-            })
+        })?)
     }
 
     fn token_for(&self, url: &Url) -> Option<String> {
@@ -186,6 +221,64 @@ impl Client {
         }
         self.http.send(call)
     }
+}
+
+fn failure(reply: &Reply) -> Error {
+    let status = reply.status;
+    Error::Server {
+        status,
+        message: reply.body.as_ref().and_then(message).unwrap_or_else(|| {
+            StatusCode::from_u16(status)
+                .ok()
+                .and_then(|status| status.canonical_reason())
+                .unwrap_or_default()
+                .to_string()
+        }),
+    }
+}
+
+fn decoded<T: DeserializeOwned>(reply: Reply) -> Result<T, Error> {
+    if !reply.is_success() {
+        return Err(failure(&reply));
+    }
+    let status = reply.status;
+    reply
+        .body
+        .and_then(|body| serde_json::from_value(body).ok())
+        .ok_or_else(|| Error::Server {
+            status,
+            message: "the response is not the expected JSON".into(),
+        })
+}
+
+fn issues(body: &Value) -> impl Iterator<Item = &Value> {
+    body.get("issues")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|slot| {
+            slot.get("issues")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+}
+
+fn refused_fields(body: &Value) -> Vec<(String, String)> {
+    let mut fields: Vec<(String, String)> = Vec::new();
+    for issue in issues(body) {
+        let (Some(path), Some(message)) = (
+            issue.get("path").and_then(Value::as_str),
+            issue.get("message").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        let field = path.split('.').next().unwrap_or_default();
+        if !fields.iter().any(|(known, _)| known == field) {
+            fields.push((field.to_string(), message.to_string()));
+        }
+    }
+    fields
 }
 
 pub fn logout(store: &dyn TokenStore, host: &str) -> Result<(), Error> {
@@ -250,17 +343,7 @@ fn message(body: &Value) -> Option<String> {
     if let Some(message) = body.get("message").and_then(Value::as_str) {
         return Some(message.to_string());
     }
-    let issues: Vec<&str> = body
-        .get("issues")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .flat_map(|slot| {
-            slot.get("issues")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-        })
+    let issues: Vec<&str> = issues(body)
         .filter_map(|issue| issue.get("message").and_then(Value::as_str))
         .collect();
     if !issues.is_empty() {
@@ -962,5 +1045,123 @@ mod tests {
         logout(&store, "nestodo.example.com").unwrap_err();
 
         assert_eq!(store.load("nestodo.example.com", Kind::App).unwrap(), None);
+    }
+
+    fn webhook_edit(url: &str, token: Option<&str>) -> crate::webhook::WebhookEdit {
+        crate::webhook::WebhookEdit {
+            url: url.into(),
+            url_secret: true,
+            token: token.map(str::to_string),
+            headers: vec![crate::webhook::WebhookHeader {
+                name: "X-Api-Key".into(),
+                value: String::new(),
+                secret: true,
+            }],
+            project: "Work".into(),
+        }
+    }
+
+    #[test]
+    fn removing_the_saved_token_sends_an_explicit_null_because_a_blank_token_keeps_the_saved_one() {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        let put = server
+            .mock("PUT", "/api/v1/webhook")
+            .match_body(Matcher::Json(json!({
+                "url": "",
+                "urlSecret": true,
+                "token": null,
+                "headers": [{"name": "X-Api-Key", "value": "", "secret": true}],
+                "project": "Work"
+            })))
+            .with_body(r#"{"available":true,"webhook":{"url":null,"hasToken":false,"unreadable":false,"headers":[],"project":"Work","lastSentAt":null,"lastError":null}}"#)
+            .create();
+
+        let saved = signed_in(&server, &store)
+            .unwrap()
+            .save_webhook(&webhook_edit("", None))
+            .unwrap();
+
+        put.assert();
+        assert!(saved.available);
+        assert_eq!(saved.webhook.map(|webhook| webhook.has_token), Some(false));
+    }
+
+    #[test]
+    fn a_refused_webhook_value_names_its_field_so_the_form_can_show_the_message_under_it() {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        server
+            .mock("PUT", "/api/v1/webhook")
+            .with_status(400)
+            .with_body(
+                r#"{"error":"Validation failed","issues":[{"slot":"body","issues":[
+                    {"message":"Enter an http or https URL","path":"url"},
+                    {"message":"A header name is required","path":"headers.0.name"},
+                    {"message":"Another problem with the URL","path":"url"}
+                ]}]}"#,
+            )
+            .create();
+
+        let refused = signed_in(&server, &store)
+            .unwrap()
+            .save_webhook(&webhook_edit("ftp://example.com", Some("")));
+
+        let Err(Error::Refused(fields)) = refused else {
+            panic!("expected the save to be refused field by field, got {refused:?}");
+        };
+        assert_eq!(
+            fields,
+            [
+                ("url".to_string(), "Enter an http or https URL".to_string()),
+                (
+                    "headers".to_string(),
+                    "A header name is required".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn removing_the_webhook_deletes_it_on_the_server_and_reports_a_failure_instead_of_pretending() {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        let delete = server
+            .mock("DELETE", "/api/v1/webhook")
+            .with_status(204)
+            .create();
+        let client = signed_in(&server, &store).unwrap();
+
+        client.remove_webhook().unwrap();
+        delete.assert();
+
+        server
+            .mock("DELETE", "/api/v1/webhook")
+            .with_status(503)
+            .with_body(r#"{"message":"The database is busy"}"#)
+            .create();
+        assert!(matches!(
+            client.remove_webhook(),
+            Err(Error::Server { status: 503, .. })
+        ));
+    }
+
+    #[test]
+    fn turning_usage_data_on_sends_the_choice_and_returns_what_the_server_saved() {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        let put = server
+            .mock("PUT", "/api/v1/analytics")
+            .match_body(Matcher::Json(json!({"enabled": true})))
+            .with_body(r#"{"enabled":true}"#)
+            .create();
+
+        assert!(
+            signed_in(&server, &store)
+                .unwrap()
+                .set_analytics(true)
+                .unwrap()
+        );
+        put.assert();
     }
 }

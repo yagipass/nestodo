@@ -9,6 +9,7 @@ pub enum Error {
     Login(String),
     Cancelled,
     Invalid(String),
+    Refused(Vec<(String, String)>),
     Server { status: u16, message: String },
     Storage(String),
 }
@@ -32,6 +33,11 @@ impl fmt::Display for Error {
             Error::Login(reason) => write!(f, "sign-in failed: {reason}"),
             Error::Cancelled => write!(f, "sign-in was cancelled"),
             Error::Invalid(message) => write!(f, "{message}"),
+            Error::Refused(fields) => {
+                let messages: Vec<&str> =
+                    fields.iter().map(|(_, message)| message.as_str()).collect();
+                write!(f, "{}", messages.join("; "))
+            }
             Error::Server { status, message } => {
                 write!(f, "the server returned {status}: {message}")
             }
