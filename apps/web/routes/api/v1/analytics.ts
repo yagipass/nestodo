@@ -1,6 +1,6 @@
 import { defineHandler } from "void";
 import { requireUser } from "../../../src/access";
-import { analyticsAvailable } from "../../../src/analytics";
+import { analyticsAvailable } from "../../../src/analytics-token";
 import { analyticsConsentBody } from "../../../src/analytics-schemas";
 import { analyticsConsentOf, setAnalyticsConsent } from "../../../src/analytics-service";
 
