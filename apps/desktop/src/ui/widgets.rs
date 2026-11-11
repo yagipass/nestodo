@@ -74,12 +74,14 @@ pub fn shadow(colors: &Theme, large: bool) -> Vec<BoxShadow> {
             offset: point(px(0.), px(y)),
             blur_radius: px(blur),
             spread_radius: px(0.),
+            inset: false,
         },
         BoxShadow {
             color: edge,
             offset: point(px(0.), px(1.)),
             blur_radius: px(2.),
             spread_radius: px(0.),
+            inset: false,
         },
     ]
 }

@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
@@ -118,7 +119,7 @@ pub enum FieldEvent {
 #[derive(Clone)]
 struct Paragraph {
     start: usize,
-    line: WrappedLine,
+    line: Rc<WrappedLine>,
     top: Pixels,
 }
 
@@ -331,10 +332,6 @@ impl TextField {
 
     pub fn is_at_start(&self) -> bool {
         self.selected_range == (0..0)
-    }
-
-    pub fn focus(&self, window: &mut Window) {
-        window.focus(&self.focus_handle);
     }
 
     fn reset_blink(&mut self, cx: &mut Context<Self>) {
@@ -747,7 +744,7 @@ impl TextField {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         self.goal_x = None;
         let index = self.index_for_mouse(event.position);
         match event.click_count {
@@ -1159,7 +1156,11 @@ fn shape_paragraphs(
             .and_then(|mut lines| lines.pop())
             .unwrap_or_default();
         let height = line.size(line_height).height.max(line_height);
-        paragraphs.push(Paragraph { start, line, top });
+        paragraphs.push(Paragraph {
+            start,
+            line: Rc::new(line),
+            top,
+        });
         top += height;
         start += piece.len() + 1;
     }
@@ -1422,7 +1423,7 @@ impl Element for FieldElement {
                     text: String::new(),
                     paragraphs: vec![Paragraph {
                         start: 0,
-                        line: WrappedLine::default(),
+                        line: Rc::default(),
                         top: px(0.),
                     }],
                     origin: bounds.origin,
@@ -1539,7 +1540,9 @@ mod tests {
         cx.update(|cx| cx.set_global(Theme::light()));
         let (field, cx) = cx.add_window_view(|_, cx| TextField::new("Title", cx));
         cx.update(|window, _| window.activate_window());
-        field.update_in(cx, |field, window, _| field.focus(window));
+        field.update_in(cx, |field, window, cx| {
+            window.focus(&field.focus_handle, cx);
+        });
         cx.run_until_parked();
         assert!(field.read_with(cx, |field, _| field.blink_task.is_some()));
 

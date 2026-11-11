@@ -3,8 +3,8 @@ mod ui;
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext, Application, Bounds, Menu, MenuItem, TitlebarOptions, WindowBounds,
-    WindowOptions, point, px, size,
+    App, AppContext, Bounds, Menu, MenuItem, TitlebarOptions, WindowBounds, WindowOptions, point,
+    px, size,
 };
 
 use nestodo_desktop::prefs;
@@ -26,69 +26,59 @@ fn bind_keys(cx: &mut App) {
 
 fn set_menus(cx: &mut App) {
     cx.set_menus(vec![
-        Menu {
-            name: "Nestodo".into(),
-            items: vec![MenuItem::action("Quit Nestodo", Quit)],
-        },
-        Menu {
-            name: "Edit".into(),
-            items: vec![
-                MenuItem::action("Cut", Cut),
-                MenuItem::action("Copy", Copy),
-                MenuItem::action("Paste", Paste),
-                MenuItem::action("Select All", SelectAll),
-            ],
-        },
-        Menu {
-            name: "View".into(),
-            items: vec![
-                MenuItem::action("Todos", ShowTodos),
-                MenuItem::action("Stats", ShowStats),
-                MenuItem::separator(),
-                MenuItem::action("Show Completed", ToggleShowDone),
-            ],
-        },
-        Menu {
-            name: "Help".into(),
-            items: vec![MenuItem::action("Keyboard Shortcuts", ShowShortcuts)],
-        },
+        Menu::new("Nestodo").items([MenuItem::action("Quit Nestodo", Quit)]),
+        Menu::new("Edit").items([
+            MenuItem::action("Cut", Cut),
+            MenuItem::action("Copy", Copy),
+            MenuItem::action("Paste", Paste),
+            MenuItem::action("Select All", SelectAll),
+        ]),
+        Menu::new("View").items([
+            MenuItem::action("Todos", ShowTodos),
+            MenuItem::action("Stats", ShowStats),
+            MenuItem::separator(),
+            MenuItem::action("Show Completed", ToggleShowDone),
+        ]),
+        Menu::new("Help").items([MenuItem::action("Keyboard Shortcuts", ShowShortcuts)]),
     ]);
 }
 
 fn main() {
-    Application::new().with_assets(Assets).run(|cx: &mut App| {
-        bind_keys(cx);
-        set_menus(cx);
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
+    gpui_platform::application()
+        .with_assets(Assets)
+        .run(|cx: &mut App| {
+            bind_keys(cx);
+            set_menus(cx);
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
 
-        let bounds = Bounds::centered(None, size(px(900.), px(820.)), cx);
-        let window = cx
-            .open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Nestodo".into()),
-                        appears_transparent: false,
-                        traffic_light_position: Some(point(px(12.), px(12.))),
-                    }),
-                    window_min_size: Some(size(px(360.), px(400.))),
-                    app_id: Some("io.github.yagipass.nestodo".into()),
-                    ..Default::default()
-                },
-                |window, cx| {
-                    let store = Arc::new(SystemStore::new());
-                    let path = prefs::default_path();
-                    cx.new(|cx| Root::new(store, path, window, cx))
-                },
-            )
-            .expect("the window opens");
+            let bounds = Bounds::centered(None, size(px(900.), px(820.)), cx);
+            let window = cx
+                .open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        titlebar: Some(TitlebarOptions {
+                            title: Some("Nestodo".into()),
+                            appears_transparent: false,
+                            traffic_light_position: Some(point(px(12.), px(12.))),
+                        }),
+                        window_min_size: Some(size(px(360.), px(400.))),
+                        app_id: Some("io.github.yagipass.nestodo".into()),
+                        ..Default::default()
+                    },
+                    |window, cx| {
+                        let store = Arc::new(SystemStore::new());
+                        let path = prefs::default_path();
+                        cx.new(|cx| Root::new(store, path, window, cx))
+                    },
+                )
+                .expect("the window opens");
 
-        ask_before_leaving_unsaved_changes(window, cx);
-        cx.activate(true);
-    });
+            ask_before_leaving_unsaved_changes(window, cx);
+            cx.activate(true);
+        });
 }

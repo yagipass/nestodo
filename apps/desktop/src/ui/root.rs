@@ -271,7 +271,7 @@ impl Root {
             account_bounds: Rc::new(Cell::new(Bounds::default())),
             _subscriptions: subscriptions,
         };
-        window.focus(&root.focus_handle);
+        window.focus(&root.focus_handle, cx);
         if root.base.is_some() {
             root.connect(window, cx);
         } else {
@@ -288,7 +288,7 @@ impl Root {
             field
         });
         let subscription = cx.subscribe(&field, |_, _, _: &FieldEvent, cx| cx.notify());
-        field.read(cx).focus(window);
+        window.focus(&field.focus_handle(cx), cx);
         window.set_window_title("Nestodo");
         self.menu_open = false;
         self.screen = Screen::NoServer(ServerForm {
@@ -382,7 +382,7 @@ impl Root {
             Ok((client, todos)) => self.open_workspace(client, &todos, window, cx),
             Err(app) => {
                 self.screen = Screen::SignedOut { app, error: None };
-                window.focus(&self.focus_handle);
+                window.focus(&self.focus_handle, cx);
             }
         }
     }
@@ -481,7 +481,7 @@ impl Root {
                 }
                 OutlineEvent::ReloadRequested | OutlineEvent::SignedOut => this.connect(window, cx),
             });
-        window.focus(&outline.focus_handle(cx));
+        window.focus(&outline.focus_handle(cx), cx);
         window.set_window_title("Todos | Nestodo");
         self.screen = Screen::Ready(Workspace {
             client,
@@ -618,7 +618,7 @@ impl Root {
         match page {
             Page::Todos => {
                 window.set_window_title("Todos | Nestodo");
-                window.focus(&workspace.outline.focus_handle(cx));
+                window.focus(&workspace.outline.focus_handle(cx), cx);
                 workspace
                     .outline
                     .update(cx, super::outline_view::OutlineView::refresh);
@@ -633,7 +633,7 @@ impl Root {
                     Some(stats) => stats.update(cx, super::stats_view::StatsView::reload),
                     None => workspace.stats = Some(cx.new(|cx| StatsView::new(backend, cx))),
                 }
-                window.focus(&self.focus_handle);
+                window.focus(&self.focus_handle, cx);
             }
         }
         cx.notify();
@@ -652,7 +652,7 @@ impl Root {
     fn open_shortcuts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.menu_open = false;
         self.shortcuts_open = true;
-        window.focus(&self.dialog_focus);
+        window.focus(&self.dialog_focus, cx);
         cx.notify();
     }
 
@@ -665,17 +665,17 @@ impl Root {
     fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match &self.screen {
             Screen::Ready(workspace) if workspace.page == Page::Todos => {
-                window.focus(&workspace.outline.focus_handle(cx));
+                window.focus(&workspace.outline.focus_handle(cx), cx);
             }
-            Screen::NoServer(form) => form.field.read(cx).focus(window),
-            _ => window.focus(&self.focus_handle),
+            Screen::NoServer(form) => window.focus(&form.field.focus_handle(cx), cx),
+            _ => window.focus(&self.focus_handle, cx),
         }
     }
 
     fn toggle_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.menu_open = !self.menu_open;
         if self.menu_open {
-            window.focus(&self.menu_focus);
+            window.focus(&self.menu_focus, cx);
         } else {
             self.restore_focus(window, cx);
         }

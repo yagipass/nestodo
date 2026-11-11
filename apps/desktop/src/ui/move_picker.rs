@@ -71,7 +71,7 @@ impl MovePicker {
                 cx.notify();
             }
         });
-        field.read(cx).focus(window);
+        window.focus(&field.focus_handle(cx), cx);
         Self {
             outline,
             moving,

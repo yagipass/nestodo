@@ -499,7 +499,7 @@ impl OutlineView {
             field.set_read_only(self.sync.failed, cx);
         });
         self.editing = Some(target);
-        field.read(cx).focus(window);
+        window.focus(&field.focus_handle(cx), cx);
         self.scroll.scroll_to_item(self.row_child_offset() + index);
         cx.notify();
     }
@@ -518,7 +518,7 @@ impl OutlineView {
                 self.note_key = None;
             }
             self.flush_now(cx);
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
             return;
         }
         let text = if editing.note {
@@ -607,7 +607,7 @@ impl OutlineView {
 
     pub fn open_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.filtering = true;
-        self.filter_field.read(cx).focus(window);
+        window.focus(&self.filter_field.focus_handle(cx), cx);
         cx.notify();
     }
 
@@ -617,7 +617,7 @@ impl OutlineView {
         self.filtering = false;
         self.filter_field
             .update(cx, |field, cx| field.set_text("", 0, cx));
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
@@ -1253,7 +1253,7 @@ impl OutlineView {
             self.leave_editor(window, cx);
             self.editing = None;
         }
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
     }
 
     fn toggle_row(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {

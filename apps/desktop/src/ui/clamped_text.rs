@@ -1,11 +1,12 @@
 use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui::{
     App, AvailableSpace, Bounds, ContentMask, Element, ElementId, GlobalElementId, Hsla,
     InspectorElementId, IntoElement, LayoutId, Pixels, Point, SharedString, Style, TextAlign,
-    TextRun, Window, WrappedLine, point, px, size,
+    TextRun, Window, WrappedLine, WrappedLineLayout, point, px, size,
 };
 
 pub const ELLIPSIS: &str = "\u{2026}";
@@ -14,7 +15,7 @@ pub const ELLIPSIS: &str = "\u{2026}";
 pub struct TextHits(Rc<RefCell<Option<Placed>>>);
 
 struct Placed {
-    paragraphs: Vec<(Point<Pixels>, usize, WrappedLine)>,
+    paragraphs: Vec<(Point<Pixels>, usize, Arc<WrappedLineLayout>)>,
     line_height: Pixels,
     visible: usize,
 }
@@ -339,7 +340,7 @@ impl Element for ClampedText {
             .map(|(start, line)| {
                 let origin = point(bounds.left(), top);
                 top += line.size(line_height).height;
-                (origin, *start, line.clone())
+                (origin, *start, Arc::clone(line))
             })
             .collect();
         self.hits.0.replace(Some(Placed {
@@ -486,7 +487,7 @@ mod tests {
         let (_, line) = shape(text, &runs, px(14.), None, window).remove(0);
         let hits = TextHits::default();
         hits.0.replace(Some(Placed {
-            paragraphs: vec![(point(px(0.), px(0.)), 0, line.clone())],
+            paragraphs: vec![(point(px(0.), px(0.)), 0, Arc::clone(&line))],
             line_height: px(21.),
             visible: text.len(),
         }));
@@ -522,7 +523,7 @@ mod tests {
             let wrapped_at = line.runs()[boundary.run_ix].glyphs[boundary.glyph_ix].index;
             let hits = TextHits::default();
             hits.0.replace(Some(Placed {
-                paragraphs: vec![(point(px(0.), px(0.)), 0, line)],
+                paragraphs: vec![(point(px(0.), px(0.)), 0, Arc::clone(&line))],
                 line_height: px(21.),
                 visible: text.len(),
             }));
@@ -546,7 +547,7 @@ mod tests {
             let end = line.position_for_index(shown.len(), px(21.)).unwrap().x;
             let hits = TextHits::default();
             hits.0.replace(Some(Placed {
-                paragraphs: vec![(point(px(0.), px(0.)), 0, line)],
+                paragraphs: vec![(point(px(0.), px(0.)), 0, Arc::clone(&line))],
                 line_height: px(21.),
                 visible: cut,
             }));
