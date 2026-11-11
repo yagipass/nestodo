@@ -44,6 +44,14 @@ describe("consent to usage analytics", () => {
     expect(await (await signedInUser()).analytics()).toBe(false);
   });
 
+  it("tells the apps that this server sends usage data, so they show the switch only where turning it on does something", async () => {
+    const member = await signedInUser();
+
+    const res = await member.request("/api/v1/analytics", { origin: null });
+
+    expect(await res.json()).toEqual({ available: true, enabled: false });
+  });
+
   it("rejects anything but a yes or no, so a malformed request cannot record consent", async () => {
     const member = await signedInUser();
 

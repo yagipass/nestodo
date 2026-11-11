@@ -82,6 +82,7 @@ export default async function setup(project: TestProject) {
     ACCESS_AUD: access.audience,
     ACCESS_MCP_AUD: access.mcpAudience,
     WEBHOOK_SECRET_KEY,
+    VITE_POSTHOG_PROJECT_TOKEN: "phc_e2e",
   }).catch(async (error) => {
     await certs.stop();
     await receiver.stop();

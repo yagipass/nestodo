@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, inject, it } from "vite-plus/test";
-import { corruptStoredWebhook, deleteAllWebhooks, json, runCron, Session, signedInUser, storedWebhook, triggerCron, type WebhookHeader } from "./helpers";
+import { corruptStoredWebhook, deleteAllWebhooks, json, runCron, Session, signedInUser, storedWebhook, triggerCron, type WebhookHeader, type WebhookSettings } from "./helpers";
 
 const EVERY_TEN_MINUTES = "*/10 * * * *";
 const MINUTE = 60_000;
@@ -425,5 +425,100 @@ describe("a webhook's custom headers", () => {
     await runCron(EVERY_TEN_MINUTES, later(5 * MINUTE));
 
     expect(await received()).toMatchObject([{ authorization: "Basic e2e" }]);
+  });
+});
+
+describe("the webhook through the API", () => {
+  type Settings = { available: boolean; webhook: WebhookSettings | null };
+  type Refusal = { issues: { issues: { path: string; message: string }[] }[] };
+
+  const pageSettings = async (client: Session): Promise<Settings> => {
+    const { available, webhook } = await client.settings();
+    return { available, webhook };
+  };
+
+  const refusedFields = async (res: Response) => (await json<Refusal>(res)).issues.flatMap((slot) => slot.issues.map((issue) => issue.path));
+
+  it("sets up a webhook from an app, so the Android and desktop apps do not need the browser for it", async () => {
+    const client = await signedInUser();
+
+    const res = await client.apiSaveWebhook({ url: hook("mine"), urlSecret: false, token: "e2e-token", headers: [plain("X-Api-Version", "2")], project: PROJECT });
+
+    expect(res.status).toBe(200);
+    expect(await json<Settings>(res)).toEqual(await pageSettings(client));
+    await addUnderProject(client, "read the Workers changelog");
+    await runCron(EVERY_TEN_MINUTES, later(5 * MINUTE));
+    expect(await received()).toMatchObject([{ path: "/hook/mine", authorization: "Bearer e2e-token", version: "2" }]);
+  });
+
+  it("shows an app what the Settings page shows and no more, so the API is no way around a hidden secret", async () => {
+    const client = await memberWithWebhook(hook("secret-path"), "e2e-secret-token", [secret("X-Api-Key", "e2e-secret-key")]);
+
+    const res = await client.apiWebhook();
+    const body = await res.text();
+
+    expect(JSON.parse(body)).toEqual(await pageSettings(client));
+    expect(body).not.toContain("secret-path");
+    expect(body).not.toContain(new URL(receiver.url).host);
+    expect(body).not.toContain("e2e-secret-token");
+    expect(body).not.toContain("e2e-secret-key");
+  });
+
+  it("keeps the saved URL and token when an app leaves them blank, as the Settings page does, so an app can rename the project without the secrets", async () => {
+    const client = await memberWithWebhook(hook("mine"), "e2e-token");
+
+    await client.apiSaveWebhook({ url: "", token: "", project: "Work" });
+    const root = await client.createTodo("Work");
+    await client.createTodo("prepare the review", { parentId: root.id });
+    await runCron(EVERY_TEN_MINUTES, later(5 * MINUTE));
+
+    expect(await received()).toMatchObject([{ path: "/hook/mine", authorization: "Bearer e2e-token", body: { project: "Work" } }]);
+  });
+
+  it("names the field of every refused value, so an app can show the message next to it", async () => {
+    const client = await signedInUser();
+
+    const badUrl = await client.apiSaveWebhook({ url: "ftp://example.com/hook", token: "", project: PROJECT });
+    const badToken = await client.apiSaveWebhook({ url: hook("mine"), token: "a\nb", project: PROJECT });
+    const twoSchemes = await client.apiSaveWebhook({ url: hook("mine"), token: "e2e-token", headers: [secret("Authorization", "Basic e2e")], project: PROJECT });
+
+    expect([badUrl.status, badToken.status, twoSchemes.status]).toEqual([400, 400, 400]);
+    expect(await refusedFields(badUrl)).toEqual(["url"]);
+    expect(await refusedFields(badToken)).toEqual(["token"]);
+    expect(await refusedFields(twoSchemes)).toEqual(["headers"]);
+    expect(await json<Settings>(await client.apiWebhook())).toMatchObject({ webhook: null });
+  });
+
+  it("removes the webhook from an app, so the sends stop without the browser", async () => {
+    const client = await memberWithWebhook(hook("mine"));
+    await addUnderProject(client, "read the Workers changelog");
+
+    const res = await client.apiRemoveWebhook();
+    await runCron(EVERY_TEN_MINUTES, later(5 * MINUTE));
+
+    expect(res.status).toBe(204);
+    expect(await received()).toEqual([]);
+    expect(await json<Settings>(await client.apiWebhook())).toMatchObject({ webhook: null });
+  });
+
+  it("refuses someone who is not signed in, since these settings send a member's todos elsewhere", async () => {
+    const stranger = new Session();
+
+    expect((await stranger.apiWebhook()).status).toBe(401);
+    expect((await stranger.apiSaveWebhook({ url: hook("mine"), token: "", project: PROJECT })).status).toBe(401);
+    expect((await stranger.apiRemoveWebhook()).status).toBe(401);
+  });
+
+  it("refuses a save from another site, so a page the member visits cannot redirect their todos", async () => {
+    const client = await signedInUser();
+
+    const res = await client.request("/api/v1/webhook", {
+      method: "PUT",
+      origin: "https://evil.example",
+      body: { url: hook("evil"), urlSecret: true, token: "", headers: [], project: PROJECT },
+    });
+
+    expect(res.status).toBe(403);
+    expect((await client.settings()).webhook).toBeNull();
   });
 });
