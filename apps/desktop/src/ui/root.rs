@@ -27,7 +27,9 @@ use crate::ui::shortcuts::shortcuts_dialog;
 use crate::ui::stats_view::StatsView;
 use crate::ui::text_field::{FieldEvent, TextField};
 use crate::ui::theme::{sync_theme, theme};
-use crate::ui::widgets::{PAGE_WIDTH, icon, icon_button, modal, shadow};
+use crate::ui::widgets::{
+    TITLE_BAR_HEIGHT, TRAFFIC_LIGHTS_WIDTH, icon, icon_button, modal, shadow,
+};
 
 actions!(
     nestodo,
@@ -101,6 +103,7 @@ pub struct Root {
     menu_open: bool,
     shortcuts_open: bool,
     account_bounds: Rc<Cell<Bounds<Pixels>>>,
+    moving_window: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -269,6 +272,7 @@ impl Root {
             menu_open: false,
             shortcuts_open: false,
             account_bounds: Rc::new(Cell::new(Bounds::default())),
+            moving_window: false,
             _subscriptions: subscriptions,
         };
         window.focus(&root.focus_handle, cx);
@@ -872,10 +876,42 @@ impl Root {
         .into_any_element()
     }
 
-    fn render_header(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_title_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme(cx);
+        let bar = div()
+            .id("title-bar")
+            .flex_none()
+            .w_full()
+            .h(px(TITLE_BAR_HEIGHT))
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .pl(px(if window.is_fullscreen() {
+                16.
+            } else {
+                TRAFFIC_LIGHTS_WIDTH
+            }))
+            .pr(px(12.))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.moving_window = true),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.moving_window = false),
+            )
+            .on_mouse_move(cx.listener(|this, _, window, _| {
+                if std::mem::take(&mut this.moving_window) {
+                    window.start_window_move();
+                }
+            }))
+            .on_click(|event, window, _| {
+                if event.click_count() == 2 {
+                    window.titlebar_double_click();
+                }
+            });
         let Screen::Ready(workspace) = &self.screen else {
-            return div().into_any_element();
+            return bar.into_any_element();
         };
         let page = workspace.page;
         let email = workspace.client.email();
@@ -885,62 +921,53 @@ impl Root {
         let menu = self.menu_open.then(|| self.render_menu(email, page, cx));
         let bounds = self.account_bounds.clone();
         let open = self.menu_open;
-        div()
-            .w_full()
-            .flex()
-            .justify_center()
-            .px(px(16.))
+        bar.border_b_1()
+            .border_color(colors.border)
             .child(
                 div()
-                    .w_full()
-                    .max_w(px(PAGE_WIDTH))
+                    .id("brand")
+                    .debug_selector(|| "brand".into())
                     .flex()
                     .items_center()
-                    .gap(px(12.))
-                    .pt(px(16.))
-                    .pb(px(16.))
+                    .gap(px(8.))
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_page(Page::Todos, window, cx);
+                    }))
+                    .child(img(APP_ICON).size(px(24.)).flex_none())
                     .child(
                         div()
-                            .id("brand")
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.show_page(Page::Todos, window, cx);
-                            }))
-                            .child(img(APP_ICON).size(px(28.)).flex_none())
-                            .child(
-                                div()
-                                    .text_size(px(20.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(colors.text)
-                                    .child("Nestodo"),
-                            ),
-                    )
-                    .child(div().flex_1())
-                    .children(tools)
-                    .child(
-                        div()
-                            .relative()
-                            .flex()
-                            .child(
-                                icon_button("account", Icon::Person, 20., cx)
-                                    .when(open, |button| button.bg(colors.hover))
-                                    .child(
-                                        canvas(
-                                            move |bounds_now, _, _| bounds.set(bounds_now),
-                                            |_, (), _, _| {},
-                                        )
-                                        .absolute()
-                                        .size_full(),
-                                    )
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.toggle_menu(window, cx);
-                                    })),
-                            )
-                            .children(menu),
+                            .text_size(px(16.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.text)
+                            .child("Nestodo"),
                     ),
+            )
+            .child(div().flex_1())
+            .children(tools)
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        icon_button("account", Icon::Person, 20., cx)
+                            .debug_selector(|| "account".into())
+                            .when(open, |button| button.bg(colors.hover))
+                            .child(
+                                canvas(
+                                    move |bounds_now, _, _| bounds.set(bounds_now),
+                                    |_, (), _, _| {},
+                                )
+                                .absolute()
+                                .size_full(),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_menu(window, cx);
+                            })),
+                    )
+                    .children(menu),
             )
             .into_any_element()
     }
@@ -1230,23 +1257,19 @@ impl Focusable for Root {
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = theme(cx);
-        let body: AnyElement = match &self.screen {
-            Screen::Ready(workspace) => {
-                let content: AnyElement = match (workspace.page, &workspace.stats) {
-                    (Page::Stats, Some(stats)) => stats.clone().into_any_element(),
-                    _ => workspace.outline.clone().into_any_element(),
-                };
-                let header = self.render_header(window, cx);
-                div()
-                    .size_full()
-                    .flex()
-                    .flex_col()
-                    .child(header)
-                    .child(div().flex_1().min_h_0().child(content))
-                    .into_any_element()
-            }
+        let content: AnyElement = match &self.screen {
+            Screen::Ready(workspace) => match (workspace.page, &workspace.stats) {
+                (Page::Stats, Some(stats)) => stats.clone().into_any_element(),
+                _ => workspace.outline.clone().into_any_element(),
+            },
             _ => self.render_login(cx),
         };
+        let body = div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(self.render_title_bar(window, cx))
+            .child(div().flex_1().min_h_0().child(content));
         let dialog = self.shortcuts_open.then(|| {
             let close = cx.entity().downgrade();
             let content = div()
@@ -1563,6 +1586,42 @@ mod tests {
         root.update_in(cx, |root, window, _| {
             assert!(root.focus_handle.is_focused(window));
         });
+    }
+
+    fn press_with_a_wobble(selector: &'static str, cx: &mut VisualTestContext) {
+        let at = cx
+            .debug_bounds(selector)
+            .expect("the control was drawn")
+            .center();
+        let moved = at + gpui::point(px(2.), px(1.));
+        cx.simulate_mouse_down(at, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_move(moved, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(moved, MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn a_title_bar_control_pressed_with_a_shaky_hand_still_works_instead_of_dragging_the_window(
+        cx: &mut TestAppContext,
+    ) {
+        let server = refusing_saves();
+        let prefs = TempDir::new();
+        let (root, _, cx) = open(cx, &server, &prefs);
+        cx.dispatch_action(ShowStats);
+        cx.run_until_parked();
+
+        press_with_a_wobble("brand", cx);
+        root.read_with(cx, |root, _| {
+            assert!(
+                matches!(&root.screen, Screen::Ready(workspace) if workspace.page == Page::Todos)
+            );
+        });
+
+        press_with_a_wobble("show-completed", cx);
+        root.read_with(cx, |root, _| assert!(!root.prefs.show_completed));
+
+        press_with_a_wobble("account", cx);
+        root.read_with(cx, |root, _| assert!(root.menu_open));
     }
 
     #[gpui::test]

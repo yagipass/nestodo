@@ -1337,6 +1337,7 @@ impl OutlineView {
         let pressed = self.show_done;
         let show_done = div()
             .id("show-completed")
+            .debug_selector(|| "show-completed".into())
             .flex()
             .flex_none()
             .items_center()
@@ -1360,6 +1361,7 @@ impl OutlineView {
             .items_center()
             .gap(px(4.))
             .min_w_0()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(filter)
             .child(show_done)
             .into_any_element()

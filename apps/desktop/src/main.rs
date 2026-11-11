@@ -63,9 +63,10 @@ fn main() {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
                         titlebar: Some(TitlebarOptions {
                             title: Some("Nestodo".into()),
-                            appears_transparent: false,
-                            traffic_light_position: Some(point(px(12.), px(12.))),
+                            appears_transparent: true,
+                            traffic_light_position: Some(point(px(20.), px(19.))),
                         }),
+                        app_owns_titlebar_drag: true,
                         window_min_size: Some(size(px(360.), px(400.))),
                         app_id: Some("io.github.yagipass.nestodo".into()),
                         ..Default::default()

@@ -8,6 +8,8 @@ use crate::ui::icons::Icon;
 use crate::ui::theme::{Theme, theme};
 
 pub const PAGE_WIDTH: f32 = 728.;
+pub const TITLE_BAR_HEIGHT: f32 = 52.;
+pub const TRAFFIC_LIGHTS_WIDTH: f32 = 84.;
 
 pub fn icon(icon: Icon, size: f32, color: Hsla) -> Svg {
     svg()
