@@ -23,8 +23,11 @@ updates:
       prefix: build(web)
     labels: [dependencies]
     groups:
+      vite-plus:
+        patterns: ["vite-plus"]
       minor-and-patch:
         patterns: ["*"]
+        exclude-patterns: ["vite-plus"]
         update-types: [minor, patch]
 
   - package-ecosystem: cargo
