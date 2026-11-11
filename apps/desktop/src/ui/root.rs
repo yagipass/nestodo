@@ -38,6 +38,7 @@ actions!(
         CloseDialog,
         CloseMenu,
         SubmitServer,
+        CancelServerChange,
         Quit
     ]
 );
@@ -47,6 +48,7 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("escape", CloseDialog, Some("Dialog")),
         KeyBinding::new("escape", CloseMenu, Some("AccountMenu")),
         KeyBinding::new("enter", SubmitServer, Some("ServerForm")),
+        KeyBinding::new("escape", CancelServerChange, Some("ServerForm")),
         KeyBinding::new("cmd-q", Quit, None),
     ]
 }
@@ -356,7 +358,14 @@ impl Root {
             form.error = Some("Couldn\u{2019}t save the server. Try again.".into());
             return;
         }
+        let left = self
+            .base
+            .take()
+            .filter(|old| old.host_str() != base.host_str());
         self.base = Some(base);
+        if let Some(old) = left {
+            self.sign_out_of(&old, window, cx);
+        }
         match loaded {
             Ok((client, todos)) => self.open_workspace(client, &todos, window, cx),
             Err(app) => {
@@ -366,46 +375,15 @@ impl Root {
         }
     }
 
-    fn change_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.leave_then(Self::forget_server, window, cx);
-    }
-
-    fn forget_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(base) = self.base.clone() else {
-            return;
-        };
-        let previous = self.prefs.base_url.take();
-        if let Err(error) = self.prefs.save(self.prefs_path.as_deref()) {
-            self.prefs.base_url = previous;
-            let message = sentence(error.to_string());
-            drop(window.prompt(
-                PromptLevel::Critical,
-                "Couldn\u{2019}t change the server",
-                Some(&message),
-                &["OK"],
-                cx,
-            ));
-            return;
-        }
-        let client = match &self.screen {
-            Screen::Ready(workspace) => Some(workspace.client.clone()),
-            _ => None,
-        };
-        self.base = None;
+    fn sign_out_of(&self, server: &Url, window: &mut Window, cx: &mut Context<Self>) {
         let store = self.store.clone();
-        let host = base.host_str().unwrap_or_default().to_string();
+        let host = server.host_str().unwrap_or_default().to_string();
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
-                .background_spawn(async move {
-                    match client {
-                        Some(client) => client.sign_out(store.as_ref()),
-                        None => api::logout(store.as_ref(), &host),
-                    }
-                })
+                .background_spawn(async move { api::logout(store.as_ref(), &host) })
                 .await;
-            this.update_in(cx, |this, window, cx| {
-                this.ask_for_server(&api::label(&base), window, cx);
-                if let Err(error) = result {
+            if let Err(error) = result {
+                this.update_in(cx, |_, window, cx| {
                     let message = error.to_string();
                     drop(window.prompt(
                         PromptLevel::Critical,
@@ -414,11 +392,29 @@ impl Root {
                         &["OK"],
                         cx,
                     ));
-                }
-            })
-            .ok();
+                })
+                .ok();
+            }
         })
         .detach();
+    }
+
+    fn change_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_then(Self::edit_server, window, cx);
+    }
+
+    fn edit_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(base) = &self.base else {
+            return;
+        };
+        let address = api::label(base);
+        self.ask_for_server(&address, window, cx);
+    }
+
+    fn cancel_server_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(&self.screen, Screen::NoServer(form) if !form.checking) {
+            self.connect(window, cx);
+        }
     }
 
     fn connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -994,9 +990,34 @@ impl Root {
                 .when(!enabled, |button| button.opacity(0.5))
                 .child(label)
         };
+        let link = |id: &'static str, label: &'static str, enabled: bool| {
+            div()
+                .id(id)
+                .px(px(12.))
+                .py(px(8.))
+                .rounded(px(6.))
+                .text_size(px(14.))
+                .text_color(colors.accent)
+                .when(enabled, |link| {
+                    link.cursor_pointer()
+                        .hover(move |style| style.bg(colors.hover))
+                })
+                .when(!enabled, |link| link.opacity(0.5))
+                .child(label)
+        };
         let (error, actions): (Option<String>, AnyElement) = match &self.screen {
             Screen::NoServer(form) => {
                 let ready = !form.checking && !form.field.read(cx).text().trim().is_empty();
+                let cancel = self.base.is_some().then(|| {
+                    link("cancel-server-change", "Cancel", !form.checking).when(
+                        !form.checking,
+                        |link| {
+                            link.on_click(cx.listener(|this, _, window, cx| {
+                                this.cancel_server_change(window, cx);
+                            }))
+                        },
+                    )
+                });
                 let label = if form.checking {
                     "Checking\u{2026}"
                 } else {
@@ -1008,6 +1029,9 @@ impl Root {
                         .key_context("ServerForm")
                         .on_action(cx.listener(|this, _: &SubmitServer, window, cx| {
                             this.submit_server(window, cx);
+                        }))
+                        .on_action(cx.listener(|this, _: &CancelServerChange, window, cx| {
+                            this.cancel_server_change(window, cx);
                         }))
                         .w_full()
                         .flex()
@@ -1052,6 +1076,7 @@ impl Root {
                             }))
                         }))
                         .child(hint("The address you open the web app at."))
+                        .children(cancel)
                         .into_any_element(),
                 )
             }
@@ -1113,17 +1138,8 @@ impl Root {
                         "In the browser, sign in and approve.\nCloudflare calls this app a command-line tool.",
                     ))
                     .child(
-                        div()
-                            .id("cancel-sign-in")
-                            .px(px(12.))
-                            .py(px(8.))
-                            .rounded(px(6.))
-                            .text_size(px(14.))
-                            .text_color(colors.accent)
-                            .cursor_pointer()
-                            .hover(move |style| style.bg(colors.hover))
-                            .on_click(cx.listener(|this, _, _, cx| this.cancel_sign_in(cx)))
-                            .child("Cancel"),
+                        link("cancel-sign-in", "Cancel", true)
+                            .on_click(cx.listener(|this, _, _, cx| this.cancel_sign_in(cx))),
                     )
                     .into_any_element(),
             ),
@@ -1360,6 +1376,10 @@ mod tests {
         format!("http://{}", listener.local_addr().unwrap())
     }
 
+    fn unreachable_localhost() -> String {
+        closed_port().replace("127.0.0.1", "localhost")
+    }
+
     fn launch(
         cx: &mut TestAppContext,
         prefs: PathBuf,
@@ -1376,9 +1396,13 @@ mod tests {
     }
 
     fn remember(server: &ServerGuard, prefs: &TempDir) {
+        remember_address(&server.url(), prefs);
+    }
+
+    fn remember_address(address: &str, prefs: &TempDir) {
         Prefs {
             show_completed: true,
-            base_url: Some(server.url()),
+            base_url: Some(address.to_string()),
         }
         .save(Some(&prefs.settings()))
         .unwrap();
@@ -1701,7 +1725,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn changing_the_server_signs_out_of_the_old_one_and_forgets_it_so_its_sign_in_is_not_left_on_the_mac(
+    fn clicking_change_server_by_mistake_keeps_the_server_and_its_sign_in_so_escape_goes_back_without_signing_in_again(
         cx: &mut TestAppContext,
     ) {
         let server = site(200);
@@ -1713,24 +1737,46 @@ mod tests {
 
         root.update_in(cx, Root::change_server);
         cx.run_until_parked();
-
         assert_eq!(
             form(&root, cx).map(|form| form.text),
             Some(server.url()),
-            "the form starts from the old address"
+            "the form starts from the current address"
         );
-        assert_eq!(prefs.saved_server(), None);
-        assert!(
-            store
-                .deleted
-                .lock()
-                .unwrap()
-                .contains(&"127.0.0.1".to_string())
-        );
+        assert_eq!(prefs.saved_server(), Some(server.url()));
+
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+
+        root.read_with(cx, |root, _| {
+            assert!(matches!(root.screen, Screen::Ready(_)));
+        });
+        assert!(store.deleted.lock().unwrap().is_empty());
     }
 
     #[gpui::test]
-    fn the_address_form_appears_only_after_the_old_sign_in_is_deleted_so_entering_the_same_server_again_keeps_its_new_sign_in(
+    fn entering_another_server_signs_out_of_the_old_one_so_its_sign_in_is_not_left_on_the_mac(
+        cx: &mut TestAppContext,
+    ) {
+        let server = site(200);
+        let prefs = TempDir::new();
+        remember_address(&unreachable_localhost(), &prefs);
+        let store = Arc::new(NoTokens::default());
+        let (root, cx) = launch(cx, prefs.settings(), store.clone());
+
+        root.update_in(cx, Root::change_server);
+        cx.run_until_parked();
+        cx.simulate_keystrokes("cmd-a");
+        enter_server(&server.url(), cx);
+
+        root.read_with(cx, |root, _| {
+            assert!(matches!(root.screen, Screen::Ready(_)));
+        });
+        assert_eq!(prefs.saved_server(), Some(format!("{}/", server.url())));
+        assert_eq!(*store.deleted.lock().unwrap(), ["localhost", "localhost"]);
+    }
+
+    #[gpui::test]
+    fn entering_the_same_server_again_keeps_its_sign_in_instead_of_signing_out_of_it(
         cx: &mut TestAppContext,
     ) {
         let server = site(200);
@@ -1740,15 +1786,14 @@ mod tests {
         let (root, cx) = launch(cx, prefs.settings(), store.clone());
 
         root.update_in(cx, Root::change_server);
-        let form_is_up = form(&root, cx).is_some();
-        let old_sign_in_deleted = !store.deleted.lock().unwrap().is_empty();
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
         cx.run_until_parked();
 
-        assert!(
-            !form_is_up || old_sign_in_deleted,
-            "the form took an address while the old sign-in was still saved"
-        );
-        assert!(form(&root, cx).is_some());
+        root.read_with(cx, |root, _| {
+            assert!(matches!(root.screen, Screen::Ready(_)));
+        });
+        assert!(store.deleted.lock().unwrap().is_empty());
     }
 
     #[gpui::test]
@@ -1766,16 +1811,15 @@ mod tests {
         cx.run_until_parked();
 
         assert!(form(&root, cx).is_some());
-        assert_eq!(prefs.saved_server(), None);
     }
 
     #[gpui::test]
-    fn a_server_change_the_mac_fails_to_save_keeps_the_current_server_so_a_restart_does_not_return_to_a_server_already_signed_out_of(
+    fn another_server_the_mac_fails_to_save_keeps_the_current_one_and_its_sign_in_so_a_restart_does_not_return_to_a_server_already_signed_out_of(
         cx: &mut TestAppContext,
     ) {
         let server = site(200);
         let prefs = TempDir::new();
-        remember(&server, &prefs);
+        remember_address(&unreachable_localhost(), &prefs);
         let store = Arc::new(NoTokens::default());
         let (root, cx) = launch(cx, prefs.settings(), store.clone());
         fs::remove_file(prefs.settings()).unwrap();
@@ -1783,12 +1827,22 @@ mod tests {
 
         root.update_in(cx, Root::change_server);
         cx.run_until_parked();
+        cx.simulate_keystrokes("cmd-a");
+        enter_server(&server.url(), cx);
 
-        assert!(cx.has_pending_prompt());
-        root.read_with(cx, |root, _| {
-            assert!(matches!(root.screen, Screen::Ready(_)));
-        });
+        assert_eq!(
+            form(&root, cx).and_then(|form| form.error).as_deref(),
+            Some("Couldn\u{2019}t save the server. Try again.")
+        );
         assert!(store.deleted.lock().unwrap().is_empty());
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        root.read_with(cx, |root, _| {
+            assert!(
+                matches!(root.screen, Screen::Unavailable(_)),
+                "going back reconnects to the old server, not the one that failed to save"
+            );
+        });
     }
 
     #[gpui::test]
