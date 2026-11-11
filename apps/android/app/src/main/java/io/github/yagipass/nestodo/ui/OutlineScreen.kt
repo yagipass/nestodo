@@ -168,7 +168,15 @@ fun OutlineScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.app_name)) },
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        AppIcon(28.dp)
+                        Text(stringResource(R.string.app_name))
+                    }
+                },
                 actions = {
                     if (editing == null && state.canUndo) {
                         IconButton(onClick = viewModel::undo) {
