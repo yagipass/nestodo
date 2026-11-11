@@ -1541,7 +1541,7 @@ mod tests {
         let (field, cx) = cx.add_window_view(|_, cx| TextField::new("Title", cx));
         cx.update(|window, _| window.activate_window());
         field.update_in(cx, |field, window, cx| {
-            window.focus(&field.focus_handle, cx)
+            window.focus(&field.focus_handle, cx);
         });
         cx.run_until_parked();
         assert!(field.read_with(cx, |field, _| field.blink_task.is_some()));
