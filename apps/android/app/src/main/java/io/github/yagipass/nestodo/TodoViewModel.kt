@@ -229,10 +229,9 @@ class TodoViewModel(
                     rejectServer("Couldn't save the server. Try again.")
                     return@launch
                 }
-                val leaving = backend.takeIf { saved != null && saved.host != base.host }
+                backend.takeIf { saved != null && saved.host != base.host }?.let { logout(it) }
                 backend = candidate
                 _state.update { it.copy(server = base.label(), changingServer = false) }
-                leaving?.let { viewModelScope.launch { logout(it) } }
                 when (connection) {
                     is Connection.Ready -> onReady(connection, todos)
                     Connection.SignedOut -> _state.update { it.copy(auth = AuthState.SignedOut) }

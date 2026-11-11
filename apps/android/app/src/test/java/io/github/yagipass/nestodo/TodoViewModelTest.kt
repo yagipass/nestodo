@@ -1226,6 +1226,20 @@ class TodoViewModelTest {
     }
 
     @Test
+    fun `the new server opens only after the old sign-in is deleted, so switching straight back cannot lose a new sign-in`() {
+        val viewModel = viewModel()
+        viewModel.changeServer()
+        backend.logoutGate = CompletableDeferred()
+
+        viewModel.setServer("other.example.com")
+        assertEquals(AuthState.CheckingServer, viewModel.state.value.auth)
+
+        backend.logoutGate!!.complete(Unit)
+        assertEquals(AuthState.SignedIn, viewModel.state.value.auth)
+        assertTrue(backend.loggedOut)
+    }
+
+    @Test
     fun `entering the same server again keeps its sign-in instead of signing out of it`() {
         val viewModel = viewModel()
         viewModel.changeServer()
