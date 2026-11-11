@@ -1,5 +1,6 @@
 package io.github.yagipass.nestodo.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -47,10 +48,12 @@ fun LoginScreen(
     server: String?,
     onSetServer: (String) -> Unit,
     onChangeServer: () -> Unit,
+    onCancelServerChange: (() -> Unit)?,
     onSignIn: () -> Unit,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
 ) {
+    if (onCancelServerChange != null) BackHandler(onBack = onCancelServerChange)
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
         Column(
             modifier =
@@ -110,6 +113,7 @@ fun LoginScreen(
                             error,
                             checking = auth == AuthState.CheckingServer,
                             onSetServer,
+                            onCancelServerChange,
                         )
                     AuthState.Checking,
                     AuthState.SignedIn -> CircularProgressIndicator()
@@ -146,6 +150,7 @@ private fun ServerForm(
     error: String?,
     checking: Boolean,
     onSubmit: (String) -> Unit,
+    onCancel: (() -> Unit)?,
 ) {
     val address = rememberTextFieldState(server.orEmpty())
     val submit = { if (!checking) onSubmit(address.text.toString()) }
@@ -171,6 +176,9 @@ private fun ServerForm(
         enabled = !checking && address.text.isNotBlank(),
     )
     Hint("The address you open the web app at.")
+    if (onCancel != null) {
+        TextButton(onClick = onCancel, enabled = !checking) { Text("Cancel") }
+    }
 }
 
 @Composable

@@ -1093,17 +1093,18 @@ class TodoViewModelTest {
     }
 
     @Test
-    fun `a server change the phone fails to save keeps the current server, so a restart does not return to a server already signed out of`() {
+    fun `another server the phone fails to save keeps the current one and its sign-in, so a restart does not return to a server already signed out of`() {
         val viewModel = viewModel()
+        viewModel.changeServer()
         settings.baseUrlFailure = IOException("disk full")
 
-        viewModel.changeServer()
+        viewModel.setServer("other.example.com")
 
         val state = viewModel.state.value
-        assertEquals(AuthState.SignedIn, state.auth)
-        assertEquals("Couldn't change the server. Try again.", state.notice?.text)
+        assertEquals(AuthState.NoServer, state.auth)
+        assertEquals("Couldn't save the server. Try again.", state.loginError)
         assertFalse(backend.loggedOut)
-        assertEquals(original, viewModel.outline())
+        assertEquals("https://nestodo.example.com/".toHttpUrl(), settings.baseUrl)
     }
 
     @Test
@@ -1192,17 +1193,60 @@ class TodoViewModelTest {
     }
 
     @Test
-    fun `changing the server signs out of the old one and forgets it, so its sign-in is not left on the phone`() {
+    fun `tapping Change server by mistake keeps the server and its sign-in, so Cancel goes back without signing in again`() {
         val viewModel = viewModel()
 
         viewModel.changeServer()
+        val form = viewModel.state.value
+        assertEquals(AuthState.NoServer, form.auth)
+        assertTrue(form.changingServer)
+        assertEquals("nestodo.example.com", form.server)
+        assertEquals("https://nestodo.example.com/".toHttpUrl(), settings.baseUrl)
+
+        viewModel.cancelChangeServer()
+
+        assertEquals(AuthState.SignedIn, viewModel.state.value.auth)
+        assertEquals(original, viewModel.outline())
+        assertFalse(backend.loggedOut)
+    }
+
+    @Test
+    fun `entering another server signs out of the old one, so its sign-in is not left on the phone`() {
+        val viewModel = viewModel()
+        viewModel.changeServer()
+
+        viewModel.setServer("other.example.com")
+
+        val state = viewModel.state.value
+        assertEquals(AuthState.SignedIn, state.auth)
+        assertFalse(state.changingServer)
+        assertEquals("other.example.com", state.server)
+        assertEquals("https://other.example.com/".toHttpUrl(), settings.baseUrl)
+        assertTrue(backend.loggedOut)
+    }
+
+    @Test
+    fun `entering the same server again keeps its sign-in instead of signing out of it`() {
+        val viewModel = viewModel()
+        viewModel.changeServer()
+
+        viewModel.setServer("nestodo.example.com")
+
+        assertEquals(AuthState.SignedIn, viewModel.state.value.auth)
+        assertFalse(backend.loggedOut)
+    }
+
+    @Test
+    fun `a first launch has no server to go back to, so the address form offers no Cancel`() {
+        settings.baseUrl = null
+        val viewModel = viewModel()
+
+        viewModel.cancelChangeServer()
 
         val state = viewModel.state.value
         assertEquals(AuthState.NoServer, state.auth)
-        assertTrue(state.rows.isEmpty())
-        assertTrue(backend.loggedOut)
-        assertNull(settings.baseUrl)
-        assertEquals("nestodo.example.com", state.server)
+        assertFalse(state.changingServer)
+        assertTrue(opened.isEmpty())
     }
 
     @Test

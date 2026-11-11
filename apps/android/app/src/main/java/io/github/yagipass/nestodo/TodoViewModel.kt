@@ -87,6 +87,7 @@ data class TodoUiState(
     val auth: AuthState = AuthState.Checking,
     val loginError: String? = null,
     val server: String? = null,
+    val changingServer: Boolean = false,
     val email: String? = null,
     val outline: Outline = Outline(),
     val loaded: Boolean = false,
@@ -221,14 +222,17 @@ class TodoViewModel(
             try {
                 val connection = candidate.connect()
                 val todos = (connection as? Connection.Ready)?.todos?.list()
+                val saved = settings.baseUrl()
                 try {
                     settings.setBaseUrl(base)
                 } catch (_: IOException) {
                     rejectServer("Couldn't save the server. Try again.")
                     return@launch
                 }
+                val leaving = backend.takeIf { saved != null && saved.host != base.host }
                 backend = candidate
-                _state.update { it.copy(server = base.label()) }
+                _state.update { it.copy(server = base.label(), changingServer = false) }
+                leaving?.let { viewModelScope.launch { logout(it) } }
                 when (connection) {
                     is Connection.Ready -> onReady(connection, todos)
                     Connection.SignedOut -> _state.update { it.copy(auth = AuthState.SignedOut) }
@@ -253,27 +257,21 @@ class TodoViewModel(
     }
 
     fun changeServer() {
-        viewModelScope.launch {
-            try {
-                settings.setBaseUrl(null)
-            } catch (_: IOException) {
-                val error = "Couldn't change the server. Try again."
-                if (current.auth == AuthState.SignedIn) notify(error)
-                else _state.update { it.copy(loginError = error) }
-                return@launch
-            }
-            loginJob?.cancel()
-            disconnect()
-            _state.value =
-                TodoUiState(
-                    auth = AuthState.NoServer,
-                    server = current.server,
-                    showCompleted = current.showCompleted,
-                )
-            val leaving = backend
-            backend = null
-            leaving?.let { logout(it) }
-        }
+        loginJob?.cancel()
+        disconnect()
+        _state.value =
+            TodoUiState(
+                auth = AuthState.NoServer,
+                server = current.server,
+                showCompleted = current.showCompleted,
+                changingServer = true,
+            )
+    }
+
+    fun cancelChangeServer() {
+        if (!current.changingServer || current.auth == AuthState.CheckingServer) return
+        _state.update { it.copy(changingServer = false) }
+        connect()
     }
 
     fun signIn(open: (String) -> Unit) {
