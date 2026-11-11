@@ -36,6 +36,8 @@ fun NestodoApp(viewModel: TodoViewModel, openInBrowser: (String) -> Unit) {
             server = state.server,
             onSetServer = viewModel::setServer,
             onChangeServer = viewModel::changeServer,
+            onCancelServerChange =
+                if (state.changingServer) viewModel::cancelChangeServer else null,
             onSignIn = { viewModel.signIn(openInBrowser) },
             onCancel = viewModel::cancelSignIn,
             onRetry = viewModel::connect,

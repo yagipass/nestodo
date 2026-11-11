@@ -86,6 +86,7 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
 class FakeBackend(private val repository: TodoRepository, var signedIn: Boolean = true) : Backend {
     var failure: Exception? = null
     var loggedOut = false
+    var logoutGate: CompletableDeferred<Unit>? = null
 
     override suspend fun connect(): Connection {
         failure?.let { throw it }
@@ -96,6 +97,7 @@ class FakeBackend(private val repository: TodoRepository, var signedIn: Boolean 
     override suspend fun startLogin(): LoginFlow = error("not used")
 
     override suspend fun logout() {
+        logoutGate?.await()
         loggedOut = true
     }
 }
