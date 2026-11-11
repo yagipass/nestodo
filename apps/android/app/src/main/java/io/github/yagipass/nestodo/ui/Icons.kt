@@ -41,6 +41,7 @@ internal fun AppIcon(size: Dp) {
 internal object NestodoIcons {
     val Add = icon("Add", "M19,13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z")
     val Back = stroke("Back", "M19 12H5M12 19l-7-7 7-7")
+    val Close = stroke("Close", "M18 6L6 18M6 6l12 12")
     val Account =
         icon(
             "Account",

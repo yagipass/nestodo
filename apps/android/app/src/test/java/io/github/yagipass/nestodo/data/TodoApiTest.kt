@@ -1,9 +1,15 @@
 package io.github.yagipass.nestodo.data
 
+import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.Todo
+import io.github.yagipass.nestodo.domain.Webhook
+import io.github.yagipass.nestodo.domain.WebhookEdit
+import io.github.yagipass.nestodo.domain.WebhookHeader
+import io.github.yagipass.nestodo.domain.Webhooks
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import mockwebserver3.MockResponse
@@ -271,5 +277,106 @@ class TodoApiTest {
             """{"todos":[{"id":1,"parentId":null,"position":0,"title":"a","completedAt":null,"collapsed":false,"createdAt":"x"}]}""",
         )
         assertEquals("a", api().list().single().title)
+    }
+
+    @Test
+    fun `the webhook is read with its secrets hidden and whether the server can send webhooks`() =
+        runTest {
+            respond(
+                200,
+                """{"available":true,"webhook":{"hasToken":true,"unreadable":false,"url":null,
+                    "headers":[{"name":"X-Api-Key","value":"","secret":true}],
+                    "project":"Side projects","lastSentAt":"2026-11-11 09:00:00","lastError":null}}""",
+            )
+            assertEquals(
+                Webhooks(
+                    available = true,
+                    webhook =
+                        Webhook(
+                            url = null,
+                            hasToken = true,
+                            headers = listOf(WebhookHeader("X-Api-Key", "", secret = true)),
+                            project = "Side projects",
+                            lastSentAt = "2026-11-11 09:00:00",
+                        ),
+                ),
+                api().webhooks(),
+            )
+            assertEquals("/api/v1/webhook", server.takeRequest().url.encodedPath)
+        }
+
+    @Test
+    fun `removing the saved token sends an explicit null, because a blank token keeps the saved one`() =
+        runTest {
+            respond(200, """{"available":true,"webhook":{"hasToken":false,"project":"Work"}}""")
+            api()
+                .saveWebhook(
+                    WebhookEdit(
+                        url = "",
+                        urlSecret = true,
+                        token = null,
+                        headers = listOf(WebhookHeader("X-Api-Key", "", secret = true)),
+                        project = "Work",
+                    )
+                )
+            val request = server.takeRequest()
+            assertEquals("PUT", request.method)
+            assertEquals("/api/v1/webhook", request.url.encodedPath)
+            val body = request.json()
+            assertEquals(JsonNull, body["token"])
+            assertEquals(JsonPrimitive(""), body["url"])
+            assertEquals(
+                Json.parseToJsonElement("""[{"name":"X-Api-Key","value":"","secret":true}]"""),
+                body["headers"],
+            )
+        }
+
+    @Test
+    fun `a refused webhook value names its field, so the form can show the message under it`() =
+        runTest {
+            respond(
+                400,
+                """{"error":"Validation failed","issues":[{"slot":"body","issues":[
+                    {"message":"Enter an http or https URL","path":"url"},
+                    {"message":"A header name is required","path":"headers.0.name"}
+                ]}]}""",
+            )
+            val refused =
+                failsWith<ApiException.Invalid> {
+                    api().saveWebhook(WebhookEdit("ftp://x", true, "", emptyList(), "Work"))
+                }
+            assertEquals(
+                mapOf(
+                    "url" to "Enter an http or https URL",
+                    "headers" to "A header name is required",
+                ),
+                refused.fields,
+            )
+        }
+
+    @Test
+    fun `removing the webhook asks the server to delete it`() = runTest {
+        respond(204)
+        api().removeWebhook()
+        val request = server.takeRequest()
+        assertEquals("DELETE", request.method)
+        assertEquals("/api/v1/webhook", request.url.encodedPath)
+    }
+
+    @Test
+    fun `usage data counts as unavailable on a server that does not say, so an older server shows no switch`() =
+        runTest {
+            respond(200, """{"enabled":true}""")
+            assertEquals(Analytics(available = false, enabled = true), api().analytics())
+        }
+
+    @Test
+    fun `turning usage data on sends the choice and returns what the server saved`() = runTest {
+        respond(200, """{"enabled":true}""")
+        assertEquals(true, api().setAnalytics(true))
+        val request = server.takeRequest()
+        assertEquals("PUT", request.method)
+        assertEquals("/api/v1/analytics", request.url.encodedPath)
+        assertEquals(JsonPrimitive(true), request.json()["enabled"])
     }
 }
