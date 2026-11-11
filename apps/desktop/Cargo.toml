@@ -19,7 +19,8 @@ base64 = "0.23.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 crypto_box = "0.9.1"
 dirs = "7.0.0"
-gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "runtime_shaders"] }
+gpui = { package = "gpui-pre", version = "=0.3.12", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", default-features = false, features = ["font-kit", "runtime_shaders"] }
 iana-time-zone = "0.1"
 keyring = "4.2.0"
 ring = "0.17.14"
@@ -30,7 +31,7 @@ ureq = "3.5.0"
 url = "2.5.8"
 
 [dev-dependencies]
-gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "runtime_shaders", "test-support"] }
+gpui = { package = "gpui-pre", version = "=0.3.12", default-features = false, features = ["test-support"] }
 mockito = "1.7.2"
 
 [lints.clippy]
