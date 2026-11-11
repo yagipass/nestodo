@@ -28,7 +28,7 @@ use crate::ui::stats_view::StatsView;
 use crate::ui::text_field::{FieldEvent, TextField};
 use crate::ui::theme::{sync_theme, theme};
 use crate::ui::widgets::{
-    TITLE_BAR_HEIGHT, TRAFFIC_LIGHTS_WIDTH, icon, icon_button, modal, shadow,
+    NAMED_TITLE_BAR_WIDTH, TITLE_BAR_HEIGHT, TRAFFIC_LIGHTS_WIDTH, icon, icon_button, modal, shadow,
 };
 
 actions!(
@@ -880,6 +880,7 @@ impl Root {
         let colors = theme(cx);
         let bar = div()
             .id("title-bar")
+            .debug_selector(|| "title-bar".into())
             .flex_none()
             .w_full()
             .h(px(TITLE_BAR_HEIGHT))
@@ -897,6 +898,10 @@ impl Root {
                 cx.listener(|this, _, _, _| this.moving_window = true),
             )
             .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.moving_window = false),
+            )
+            .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| this.moving_window = false),
             )
@@ -921,6 +926,7 @@ impl Root {
         let menu = self.menu_open.then(|| self.render_menu(email, page, cx));
         let bounds = self.account_bounds.clone();
         let open = self.menu_open;
+        let named = window.viewport_size().width >= px(NAMED_TITLE_BAR_WIDTH);
         bar.border_b_1()
             .border_color(colors.border)
             .child(
@@ -936,13 +942,15 @@ impl Root {
                         this.show_page(Page::Todos, window, cx);
                     }))
                     .child(img(APP_ICON).size(px(24.)).flex_none())
-                    .child(
-                        div()
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(colors.text)
-                            .child("Nestodo"),
-                    ),
+                    .when(named, |brand| {
+                        brand.child(
+                            div()
+                                .text_size(px(16.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(colors.text)
+                                .child("Nestodo"),
+                        )
+                    }),
             )
             .child(div().flex_1())
             .children(tools)
@@ -1335,6 +1343,7 @@ mod tests {
     use nestodo_desktop::store::Kind;
 
     use super::*;
+    use crate::ui::widgets::MIN_WINDOW_WIDTH;
 
     #[derive(Default)]
     struct NoTokens {
@@ -1622,6 +1631,54 @@ mod tests {
 
         press_with_a_wobble("account", cx);
         root.read_with(cx, |root, _| assert!(root.menu_open));
+    }
+
+    #[gpui::test]
+    fn a_title_bar_press_released_below_the_bar_does_not_move_the_window_when_the_mouse_next_passes_over_it(
+        cx: &mut TestAppContext,
+    ) {
+        let server = refusing_saves();
+        let prefs = TempDir::new();
+        let (_, _, cx) = open(cx, &server, &prefs);
+        let bar = cx
+            .debug_bounds("title-bar")
+            .expect("the title bar was drawn");
+        let brand = cx.debug_bounds("brand").expect("the brand was drawn");
+        let empty = gpui::point(brand.right() + px(40.), bar.center().y);
+        let below = gpui::point(empty.x, bar.bottom() + px(40.));
+
+        cx.simulate_mouse_down(empty, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_move(below, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(below, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_move(empty, None, gpui::Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn the_title_bar_controls_neither_overlap_nor_leave_the_narrowest_window_while_the_filter_is_open(
+        cx: &mut TestAppContext,
+    ) {
+        let server = refusing_saves();
+        let prefs = TempDir::new();
+        let (_, outline, cx) = open(cx, &server, &prefs);
+        cx.simulate_resize(gpui::size(px(MIN_WINDOW_WIDTH), px(400.)));
+        outline.update_in(cx, OutlineView::open_filter);
+        cx.run_until_parked();
+
+        let mut edge = px(0.);
+        for control in ["brand", "filter", "show-completed", "account"] {
+            let bounds = cx.debug_bounds(control).expect("the control was drawn");
+            assert!(
+                bounds.left() >= edge,
+                "{control} starts at {:?}, over what ends at {edge:?}",
+                bounds.left()
+            );
+            edge = bounds.right();
+        }
+        assert!(
+            edge <= px(MIN_WINDOW_WIDTH),
+            "the account button ends at {edge:?}, past the window's {MIN_WINDOW_WIDTH}px"
+        );
     }
 
     #[gpui::test]

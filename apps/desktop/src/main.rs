@@ -16,6 +16,7 @@ use ui::root::{
     Quit, Root, ShowShortcuts, ShowStats, ShowTodos, ask_before_leaving_unsaved_changes,
 };
 use ui::text_field::{Copy, Cut, Paste, SelectAll};
+use ui::widgets::MIN_WINDOW_WIDTH;
 
 fn bind_keys(cx: &mut App) {
     cx.bind_keys(ui::text_field::bindings());
@@ -67,7 +68,7 @@ fn main() {
                             traffic_light_position: Some(point(px(20.), px(19.))),
                         }),
                         app_owns_titlebar_drag: true,
-                        window_min_size: Some(size(px(360.), px(400.))),
+                        window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(400.))),
                         app_id: Some("io.github.yagipass.nestodo".into()),
                         ..Default::default()
                     },

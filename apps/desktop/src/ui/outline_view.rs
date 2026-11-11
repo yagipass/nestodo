@@ -1290,6 +1290,7 @@ impl OutlineView {
         let filter: AnyElement = if self.filtering {
             div()
                 .id("filter")
+                .debug_selector(|| "filter".into())
                 .on_action(cx.listener(Self::on_close_filter))
                 .flex()
                 .flex_1()
