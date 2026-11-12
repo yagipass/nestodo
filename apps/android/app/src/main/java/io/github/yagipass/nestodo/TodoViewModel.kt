@@ -23,6 +23,7 @@ import io.github.yagipass.nestodo.data.UsageAnalytics
 import io.github.yagipass.nestodo.data.baseUrlOf
 import io.github.yagipass.nestodo.data.label
 import io.github.yagipass.nestodo.domain.Analytics
+import io.github.yagipass.nestodo.domain.Avatar
 import io.github.yagipass.nestodo.domain.Caret
 import io.github.yagipass.nestodo.domain.Change
 import io.github.yagipass.nestodo.domain.Day
@@ -31,6 +32,7 @@ import io.github.yagipass.nestodo.domain.MAX_NOTE_LENGTH
 import io.github.yagipass.nestodo.domain.MAX_TITLE_LENGTH
 import io.github.yagipass.nestodo.domain.Outline
 import io.github.yagipass.nestodo.domain.OutlineRow
+import io.github.yagipass.nestodo.domain.Profile
 import io.github.yagipass.nestodo.domain.Todo
 import io.github.yagipass.nestodo.domain.Viewport
 import io.github.yagipass.nestodo.domain.WebhookEdit
@@ -103,6 +105,11 @@ sealed interface SettingsState {
         val saving: Boolean = false,
         val analyticsSaving: Boolean = false,
         val analyticsFailed: Boolean = false,
+        val name: String = "",
+        val profileProblem: String? = null,
+        val profileErrors: Map<String, String> = emptyMap(),
+        val profileSaving: Boolean = false,
+        val imageUnreadable: Boolean = false,
     ) : SettingsState {
         fun showing(webhooks: Webhooks): Loaded =
             copy(
@@ -123,6 +130,8 @@ data class TodoUiState(
     val server: String? = null,
     val changingServer: Boolean = false,
     val email: String? = null,
+    val profile: Profile? = null,
+    val avatar: Avatar? = null,
     val outline: Outline = Outline(),
     val loaded: Boolean = false,
     val showCompleted: Boolean = true,
@@ -170,6 +179,8 @@ class TodoViewModel(
         data class Stats(val request: Long) : Task
 
         data class Settings(val request: Long, val call: SettingsCall) : Task
+
+        data object LoadProfile : Task
     }
 
     private sealed interface SettingsCall {
@@ -180,6 +191,12 @@ class TodoViewModel(
         data object Remove : SettingsCall
 
         data class SetAnalytics(val enabled: Boolean) : SettingsCall
+
+        data class SaveName(val name: String) : SettingsCall
+
+        class SaveAvatar(val image: ByteArray) : SettingsCall
+
+        data object RemoveAvatar : SettingsCall
     }
 
     private data class Queued(val task: Task, val generation: Int)
@@ -618,6 +635,34 @@ class TodoViewModel(
         enqueue(Task.Settings(settingsRequest, SettingsCall.SetAnalytics(enabled)))
     }
 
+    fun changeName(name: String) = updateSettings { it.copy(name = name) }
+
+    fun saveName() {
+        val settings = current.settings as? SettingsState.Loaded ?: return
+        callProfile(SettingsCall.SaveName(settings.name))
+    }
+
+    fun uploadAvatar(image: ByteArray) {
+        callProfile(SettingsCall.SaveAvatar(image))
+    }
+
+    fun avatarUnreadable() = updateSettings {
+        if (it.profileSaving) it else it.copy(imageUnreadable = true, profileErrors = emptyMap())
+    }
+
+    fun removeAvatar() {
+        callProfile(SettingsCall.RemoveAvatar)
+    }
+
+    private fun callProfile(call: SettingsCall) {
+        val settings = current.settings as? SettingsState.Loaded ?: return
+        if (settings.profileSaving) return
+        updateSettings {
+            it.copy(profileSaving = true, profileErrors = emptyMap(), imageUnreadable = false)
+        }
+        enqueue(Task.Settings(settingsRequest, call))
+    }
+
     private fun callSettings(call: SettingsCall) {
         val settings = current.settings as? SettingsState.Loaded ?: return
         if (settings.saving) return
@@ -774,6 +819,7 @@ class TodoViewModel(
         }
         startSync(ready.todos)
         if (todos == null) enqueue(Task.Load(force = true)) else show(todos)
+        enqueue(Task.LoadProfile)
         startAnalytics(ready.todos)
     }
 
@@ -802,7 +848,8 @@ class TodoViewModel(
                     if (
                         queued.generation == generation ||
                             queued.task is Task.Stats ||
-                            queued.task is Task.Settings
+                            queued.task is Task.Settings ||
+                            queued.task is Task.LoadProfile
                     ) {
                         execute(repository, queued.task)
                     }
@@ -848,15 +895,58 @@ class TodoViewModel(
             is Task.Stats ->
                 showStats(task.request, StatsState.Loaded(repository.stats(timeZone())))
             is Task.Settings -> settle(repository, task)
+            Task.LoadProfile -> showProfile(repository, repository.profile())
         }
     }
 
     private suspend fun settle(repository: TodoRepository, task: Task.Settings) {
         when (val call = task.call) {
             SettingsCall.Load -> {
-                val loaded = SettingsState.Loaded(repository.webhooks(), repository.analytics())
-                usage?.consent(loaded.analytics)
+                val webhooks = repository.webhooks()
+                val analytics = repository.analytics()
+                usage?.consent(analytics)
+                val loaded =
+                    try {
+                        val profile = repository.profile()
+                        showProfile(repository, profile)
+                        SettingsState.Loaded(webhooks, analytics, name = profile.name.orEmpty())
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: ApiException.NotSignedIn) {
+                        throw e
+                    } catch (e: Exception) {
+                        SettingsState.Loaded(webhooks, analytics, profileProblem = reason(e))
+                    }
                 showSettings(task.request) { loaded.showing(loaded.webhooks) }
+            }
+            is SettingsCall.SaveName -> {
+                val profile = repository.saveName(call.name)
+                _state.update { it.copy(profile = profile) }
+                showSettings(task.request) { settings ->
+                    settings.loaded()?.let {
+                        it.copy(
+                            name = if (it.name == call.name) profile.name.orEmpty() else it.name,
+                            profileSaving = false,
+                        )
+                    }
+                }
+            }
+            is SettingsCall.SaveAvatar -> {
+                val profile = repository.saveAvatar(call.image)
+                _state.update {
+                    it.copy(
+                        profile = profile,
+                        avatar = profile.avatarUrl?.let { url -> Avatar(url, call.image) },
+                    )
+                }
+                showSettings(task.request) { it.loaded()?.copy(profileSaving = false) }
+            }
+            SettingsCall.RemoveAvatar -> {
+                repository.removeAvatar()
+                _state.update {
+                    it.copy(profile = it.profile?.copy(avatarUrl = null), avatar = null)
+                }
+                showSettings(task.request) { it.loaded()?.copy(profileSaving = false) }
             }
             is SettingsCall.Save -> {
                 val webhooks = repository.saveWebhook(call.edit)
@@ -884,6 +974,29 @@ class TodoViewModel(
     }
 
     private fun SettingsState.loaded(): SettingsState.Loaded? = this as? SettingsState.Loaded
+
+    private suspend fun showProfile(repository: TodoRepository, profile: Profile) {
+        val avatar = avatarOf(repository, profile)
+        _state.update { it.copy(profile = profile, avatar = avatar) }
+    }
+
+    private suspend fun avatarOf(repository: TodoRepository, profile: Profile): Avatar? {
+        val url = profile.avatarUrl ?: return null
+        current.avatar
+            ?.takeIf { it.url == url }
+            ?.let {
+                return it
+            }
+        return try {
+            Avatar(url, repository.avatar(url))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ApiException.NotSignedIn) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     private suspend fun send(repository: TodoRepository, change: Change) {
         fun id(key: Long): Long = serverIds[key] ?: key
@@ -963,6 +1076,10 @@ class TodoViewModel(
             recoverSettings(error, task)
             return
         }
+        if (task is Task.LoadProfile) {
+            if (error is ApiException.NotSignedIn) fail(error, retry = null)
+            return
+        }
         discardPending()
         history.clear()
         _state.update { it.copy(canUndo = false) }
@@ -985,6 +1102,15 @@ class TodoViewModel(
             SettingsCall.Remove -> {
                 val fields = (error as? ApiException.Invalid)?.fields.orEmpty()
                 showSettings(task.request) { it.loaded()?.copy(saving = false, errors = fields) }
+                if (fields.isEmpty() && task.request == settingsRequest) fail(error, retry = null)
+            }
+            is SettingsCall.SaveName,
+            is SettingsCall.SaveAvatar,
+            SettingsCall.RemoveAvatar -> {
+                val fields = (error as? ApiException.Invalid)?.fields.orEmpty()
+                showSettings(task.request) {
+                    it.loaded()?.copy(profileSaving = false, profileErrors = fields)
+                }
                 if (fields.isEmpty() && task.request == settingsRequest) fail(error, retry = null)
             }
         }

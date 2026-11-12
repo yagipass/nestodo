@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import io.github.yagipass.nestodo.access.DeviceLockedException
 import io.github.yagipass.nestodo.data.ApiException
 import io.github.yagipass.nestodo.domain.Caret
+import io.github.yagipass.nestodo.domain.Profile
 import io.github.yagipass.nestodo.domain.Todo
 import io.github.yagipass.nestodo.domain.Webhook
 import io.github.yagipass.nestodo.domain.WebhookEdit
@@ -19,6 +20,7 @@ import kotlinx.coroutines.test.setMain
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -1066,7 +1068,7 @@ class TodoViewModelTest {
 
         viewModel.setServer("nestodo.example.com")
 
-        assertEquals(listOf("GET"), repository.calls)
+        assertEquals(listOf("GET", "GET profile"), repository.calls)
         assertEquals(original, viewModel.outline())
     }
 
@@ -1376,7 +1378,7 @@ class TodoViewModelTest {
 
         viewModel.openSettings()
 
-        assertEquals(listOf("GET webhook", "GET analytics"), repository.calls)
+        assertEquals(listOf("GET webhook", "GET analytics", "GET profile"), repository.calls)
         val settings = viewModel.settings()
         assertEquals(savedWebhook, settings.webhooks.webhook)
         assertEquals(repository.analytics, settings.analytics)
@@ -1401,7 +1403,10 @@ class TodoViewModelTest {
 
         repository.gate!!.complete(Unit)
 
-        assertEquals(listOf("GET", "GET webhook", "GET analytics"), repository.calls)
+        assertEquals(
+            listOf("GET", "GET webhook", "GET analytics", "GET profile"),
+            repository.calls,
+        )
         assertTrue(viewModel.state.value.settings is SettingsState.Loaded)
     }
 
@@ -1490,7 +1495,10 @@ class TodoViewModelTest {
 
         viewModel.removeWebhook()
 
-        assertEquals(listOf("GET webhook", "GET analytics", "DELETE webhook"), repository.calls)
+        assertEquals(
+            listOf("GET webhook", "GET analytics", "GET profile", "DELETE webhook"),
+            repository.calls,
+        )
         assertNull(viewModel.settings().webhooks.webhook)
         assertEquals(WebhookForm.of(null), viewModel.settings().form)
     }
@@ -1561,5 +1569,284 @@ class TodoViewModelTest {
         assertEquals(AuthState.SignedOut, state.auth)
         assertNull(state.settings)
         assertNotNull(state.loginError)
+    }
+
+    private val picture = byteArrayOf(0x52, 0x49, 0x46, 0x46, 1, 2, 3)
+
+    private fun withPicture(name: String? = "Kim") {
+        repository.avatars["/api/v1/avatars/1"] = picture
+        repository.profile = Profile("family@example.com", name, "/api/v1/avatars/1")
+    }
+
+    @Test
+    fun `signing in loads the name and picture for the account button, so the member sees whose todos these are`() {
+        withPicture()
+
+        val state = viewModel().state.value
+
+        assertEquals("Kim", state.profile?.name)
+        assertArrayEquals(picture, state.avatar?.bytes)
+    }
+
+    @Test
+    fun `a profile that fails to load keeps the email and the generic icon without a message, because the outline still works`() {
+        repository.profileFailure = IOException("offline")
+
+        val state = viewModel().state.value
+
+        assertNull(state.profile)
+        assertNull(state.avatar)
+        assertNull(state.notice)
+        assertTrue(state.loaded)
+    }
+
+    @Test
+    fun `a picture that fails to download still shows the name, so one missing image does not hide the rest`() {
+        repository.profile = Profile("family@example.com", "Kim", "/api/v1/avatars/gone")
+
+        val state = viewModel().state.value
+
+        assertEquals("Kim", state.profile?.name)
+        assertNull(state.avatar)
+    }
+
+    @Test
+    fun `a picture already shown is not downloaded again while its URL stays the same, because the server gives a new picture a new URL`() {
+        withPicture()
+        val viewModel = viewModel()
+
+        viewModel.openSettings()
+
+        assertEquals(listOf("GET webhook", "GET analytics", "GET profile"), repository.calls)
+        assertArrayEquals(picture, viewModel.state.value.avatar?.bytes)
+    }
+
+    @Test
+    fun `a picture changed on another device is downloaded when Settings opens, because its new URL means new bytes`() {
+        withPicture()
+        val viewModel = viewModel()
+        val changed = byteArrayOf(7, 7, 7)
+        repository.avatars["/api/v1/avatars/2"] = changed
+        repository.profile = repository.profile.copy(avatarUrl = "/api/v1/avatars/2")
+
+        viewModel.openSettings()
+
+        assertTrue(repository.calls.contains("GET /api/v1/avatars/2"))
+        assertArrayEquals(changed, viewModel.state.value.avatar?.bytes)
+    }
+
+    @Test
+    fun `an expired sign-in found while loading the profile returns to the login screen, so the app does not act signed in on a session that is gone`() {
+        repository.profileFailure = ApiException.NotSignedIn()
+
+        val state = viewModel().state.value
+
+        assertEquals(AuthState.SignedOut, state.auth)
+        assertNotNull(state.loginError)
+    }
+
+    @Test
+    fun `an expired sign-in found while downloading the picture returns to the login screen instead of only hiding the picture`() {
+        withPicture()
+        repository.avatarFailure = ApiException.NotSignedIn()
+
+        val state = viewModel().state.value
+
+        assertEquals(AuthState.SignedOut, state.auth)
+        assertNotNull(state.loginError)
+    }
+
+    @Test
+    fun `a profile that fails to load in Settings still shows the webhook and usage data, and the Profile card says why`() {
+        repository.webhooks = repository.webhooks.copy(webhook = savedWebhook)
+        val viewModel = viewModel()
+        repository.profileFailure = IOException("offline")
+
+        viewModel.openSettings()
+
+        val settings = viewModel.settings()
+        assertEquals(savedWebhook, settings.webhooks.webhook)
+        assertEquals(repository.analytics, settings.analytics)
+        assertEquals("Can't connect. Check your connection.", settings.profileProblem)
+        assertEquals("", settings.name)
+        assertNull(viewModel.state.value.notice)
+    }
+
+    @Test
+    fun `an expired sign-in found by the Settings profile request returns to the login screen`() {
+        val viewModel = viewModel()
+        repository.profileFailure = ApiException.NotSignedIn()
+
+        viewModel.openSettings()
+
+        val state = viewModel.state.value
+        assertEquals(AuthState.SignedOut, state.auth)
+        assertNull(state.settings)
+    }
+
+    @Test
+    fun `Settings starts the name field from the saved name, so saving without typing keeps it`() {
+        withPicture()
+        val viewModel = viewModel()
+
+        viewModel.openSettings()
+
+        assertEquals("Kim", viewModel.settings().name)
+    }
+
+    @Test
+    fun `a saved name is shown as the server keeps it, in the field and the account menu at once`() {
+        val viewModel = viewModel()
+        viewModel.openSettings()
+        viewModel.changeName("  Kim  ")
+
+        viewModel.saveName()
+
+        assertTrue(repository.calls.contains("PUT name \"  Kim  \""))
+        assertEquals("Kim", viewModel.state.value.profile?.name)
+        assertEquals("Kim", viewModel.settings().name)
+        assertFalse(viewModel.settings().profileSaving)
+    }
+
+    @Test
+    fun `a name typed while the save is on its way stays in the field, so the second edit is not lost`() {
+        val viewModel = viewModel()
+        viewModel.openSettings()
+        viewModel.changeName("Kim")
+        repository.gate = CompletableDeferred()
+        viewModel.saveName()
+
+        viewModel.changeName("Kim Lee")
+        repository.gate!!.complete(Unit)
+
+        assertEquals("Kim", viewModel.state.value.profile?.name)
+        assertEquals("Kim Lee", viewModel.settings().name)
+    }
+
+    @Test
+    fun `a name the server refuses stays in the field with the message under it, so nothing typed is lost`() {
+        val viewModel = viewModel()
+        viewModel.openSettings()
+        viewModel.changeName("x".repeat(51))
+        repository.failure =
+            ApiException.Invalid(mapOf("name" to "The name must be 50 characters or fewer"))
+
+        viewModel.saveName()
+
+        val settings = viewModel.settings()
+        assertEquals("x".repeat(51), settings.name)
+        assertEquals(
+            mapOf("name" to "The name must be 50 characters or fewer"),
+            settings.profileErrors,
+        )
+        assertFalse(settings.profileSaving)
+        assertNull(viewModel.state.value.profile?.name)
+        assertNull(viewModel.state.value.notice)
+    }
+
+    @Test
+    fun `an uploaded picture shows at once without downloading it again, because the server keeps the bytes as sent`() {
+        val viewModel = viewModel()
+        viewModel.openSettings()
+
+        viewModel.uploadAvatar(picture)
+
+        val state = viewModel.state.value
+        assertEquals(
+            listOf("GET webhook", "GET analytics", "GET profile", "PUT avatar"),
+            repository.calls,
+        )
+        assertEquals("/api/v1/avatars/1", state.avatar?.url)
+        assertArrayEquals(picture, state.avatar?.bytes)
+        assertEquals("/api/v1/avatars/1", state.profile?.avatarUrl)
+        assertFalse(viewModel.settings().profileSaving)
+    }
+
+    @Test
+    fun `a picture that fails to upload keeps the old one and says why, so it can be tried again`() {
+        withPicture()
+        val viewModel = viewModel()
+        viewModel.openSettings()
+        repository.failure = IOException("offline")
+
+        viewModel.uploadAvatar(byteArrayOf(9))
+
+        val state = viewModel.state.value
+        assertArrayEquals(picture, state.avatar?.bytes)
+        assertEquals("Can't connect. Check your connection.", state.notice?.text)
+        assertFalse(viewModel.settings().profileSaving)
+    }
+
+    @Test
+    fun `a picture the server refuses shows the reason next to the picture instead of a passing message`() {
+        val viewModel = viewModel()
+        viewModel.openSettings()
+        repository.failure =
+            ApiException.Invalid(mapOf("image" to "The image must be a PNG, JPEG or WebP file"))
+
+        viewModel.uploadAvatar(byteArrayOf(9))
+
+        assertEquals(
+            mapOf("image" to "The image must be a PNG, JPEG or WebP file"),
+            viewModel.settings().profileErrors,
+        )
+        assertNull(viewModel.state.value.notice)
+        assertNull(viewModel.state.value.avatar)
+    }
+
+    @Test
+    fun `a second picture chosen while one is uploading is ignored, so only one upload is on its way at a time`() {
+        val viewModel = viewModel()
+        viewModel.openSettings()
+        repository.gate = CompletableDeferred()
+
+        viewModel.uploadAvatar(picture)
+        viewModel.uploadAvatar(byteArrayOf(9))
+        viewModel.removeAvatar()
+        repository.gate!!.complete(Unit)
+
+        assertEquals(1, repository.calls.count { it == "PUT avatar" })
+        assertFalse(repository.calls.contains("DELETE avatar"))
+        assertArrayEquals(picture, viewModel.state.value.avatar?.bytes)
+    }
+
+    @Test
+    fun `removing the picture goes back to the generic icon everywhere`() {
+        withPicture()
+        val viewModel = viewModel()
+        viewModel.openSettings()
+
+        viewModel.removeAvatar()
+
+        assertTrue(repository.calls.contains("DELETE avatar"))
+        assertNull(viewModel.state.value.avatar)
+        assertNull(viewModel.state.value.profile?.avatarUrl)
+        assertEquals("Kim", viewModel.state.value.profile?.name)
+    }
+
+    @Test
+    fun `a picture the phone cannot read says so without sending anything, and the next upload clears the message`() {
+        val viewModel = viewModel()
+        viewModel.openSettings()
+
+        viewModel.avatarUnreadable()
+
+        assertTrue(viewModel.settings().imageUnreadable)
+        assertEquals(listOf("GET webhook", "GET analytics", "GET profile"), repository.calls)
+
+        viewModel.uploadAvatar(picture)
+
+        assertFalse(viewModel.settings().imageUnreadable)
+    }
+
+    @Test
+    fun `signing out forgets the name and picture, so the next account does not show them`() {
+        withPicture()
+        val viewModel = viewModel()
+
+        viewModel.signOut()
+
+        assertNull(viewModel.state.value.profile)
+        assertNull(viewModel.state.value.avatar)
     }
 }

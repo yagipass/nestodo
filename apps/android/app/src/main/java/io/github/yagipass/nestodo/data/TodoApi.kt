@@ -4,9 +4,11 @@ import io.github.yagipass.nestodo.access.HttpResult
 import io.github.yagipass.nestodo.access.fetch
 import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Day
+import io.github.yagipass.nestodo.domain.Profile
 import io.github.yagipass.nestodo.domain.Todo
 import io.github.yagipass.nestodo.domain.WebhookEdit
 import io.github.yagipass.nestodo.domain.Webhooks
+import java.util.Base64
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
@@ -66,6 +68,16 @@ interface TodoRepository {
     suspend fun analytics(): Analytics
 
     suspend fun setAnalytics(enabled: Boolean): Boolean
+
+    suspend fun profile(): Profile
+
+    suspend fun saveName(name: String): Profile
+
+    suspend fun saveAvatar(image: ByteArray): Profile
+
+    suspend fun removeAvatar()
+
+    suspend fun avatar(url: String): ByteArray
 }
 
 class TodoApi(
@@ -153,6 +165,26 @@ class TodoApi(
         parse<Consent>(call("PUT", url(ANALYTICS), buildJsonObject { put("enabled", enabled) }))
             .enabled
 
+    override suspend fun profile(): Profile = parse(call("GET", url(PROFILE)))
+
+    override suspend fun saveName(name: String): Profile =
+        parse(call("PUT", url(PROFILE), buildJsonObject { put("name", name) }))
+
+    override suspend fun saveAvatar(image: ByteArray): Profile =
+        parse(
+            call(
+                "PUT",
+                url(AVATAR),
+                buildJsonObject { put("image", Base64.getEncoder().encodeToString(image)) },
+            )
+        )
+
+    override suspend fun removeAvatar() {
+        call("DELETE", url(AVATAR))
+    }
+
+    override suspend fun avatar(url: String): ByteArray = call("GET", url(url)).body
+
     private suspend fun patch(id: Long, body: JsonObject): Todo =
         parse<One>(call("PATCH", url(item(id)), body, id)).todo
 
@@ -229,6 +261,8 @@ class TodoApi(
         const val STATS = "/api/v1/stats"
         const val WEBHOOK = "/api/v1/webhook"
         const val ANALYTICS = "/api/v1/analytics"
+        const val PROFILE = "/api/v1/profile"
+        const val AVATAR = "/api/v1/profile/avatar"
         const val LOGIN_PATH = "/cdn-cgi/access/login"
         val JSON = "application/json".toMediaType()
         val json = Json { ignoreUnknownKeys = true }
