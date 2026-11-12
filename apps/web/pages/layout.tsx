@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ComponentProps, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { Link, useRouter, useShared } from "@void/react";
 import { startAnalytics } from "../src/analytics";
+import { Icon } from "../src/icons";
 import "../src/styles.css";
 
 type Shortcut = [action: string, keys: string, note?: string];
@@ -72,9 +73,7 @@ function ShortcutsDialog({ ref, onClose }: { ref: RefObject<HTMLDialogElement | 
       <div className="shortcuts-head">
         <h2 id="shortcuts-title">Keyboard shortcuts</h2>
         <button type="button" className="icon-button" aria-label="Close" onClick={() => ref.current?.close()}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-            <path d="M6 6l12 12M18 6L6 18" />
-          </svg>
+          <Icon name="close" size={18} />
         </button>
       </div>
       <div className="shortcuts-groups">
@@ -135,25 +134,17 @@ function AccountMenu({ email }: { email: string }) {
         aria-controls="account-menu"
         onClick={() => setOpen(!open)}
       >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
-        </svg>
+        <Icon name="account" size={20} />
       </button>
       <div id="account-menu" className="account-menu" hidden={!open}>
         <p className="account-email">{email}</p>
         <hr />
         <Link href="/stats" aria-current={path === "/stats" ? "page" : undefined} onClick={() => setOpen(false)}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-            <path d="M5 20v-8M12 20V4M19 20V9" />
-          </svg>
+          <Icon name="stats" size={18} />
           Stats
         </Link>
         <Link href="/settings" aria-current={path === "/settings" ? "page" : undefined} onClick={() => setOpen(false)}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-            <path d="M4 7h10M18 7h2M4 17h2M10 17h10" />
-            <circle cx="16" cy="7" r="2" />
-            <circle cx="8" cy="17" r="2" />
-          </svg>
+          <Icon name="settings" size={18} />
           Settings
         </Link>
         <button
@@ -164,17 +155,12 @@ function AccountMenu({ email }: { email: string }) {
             shortcuts.current?.showModal();
           }}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="9" />
-            <path d="M9.6 9.2a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .9-1 1.6v.4M12 17h.01" />
-          </svg>
+          <Icon name="help" size={18} />
           Help
         </button>
         <hr />
         <a href="/cdn-cgi/access/logout">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4M16 17l5-5-5-5M21 12H9" />
-          </svg>
+          <Icon name="signOut" size={18} />
           Sign out
         </a>
       </div>
@@ -189,7 +175,7 @@ export function AppHeader({ children }: { children?: ReactNode }) {
   return (
     <header className="app-header">
       <Link href="/" className="brand">
-        <img src="/icon.svg" alt="" width="28" height="28" />
+        <img src="/icon.svg" alt="" width="32" height="32" />
         Nestodo
       </Link>
       {children}

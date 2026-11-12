@@ -103,6 +103,25 @@ export function visibleRows(outline: Outline, showDone: boolean, query = "", kee
   return rows;
 }
 
+export type Guide = { through: boolean[]; stem: boolean };
+
+export function guides(rows: readonly Row[]): Guide[] {
+  const followed = new Array<boolean>(rows.length);
+  const later: boolean[] = [];
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const { depth } = rows[i];
+    followed[i] = later[depth] ?? false;
+    later.length = depth;
+    later[depth] = true;
+  }
+  const open: boolean[] = [];
+  return rows.map((row, i) => {
+    open.length = row.depth;
+    open[row.depth] = followed[i];
+    return { through: open.slice(1), stem: (rows[i + 1]?.depth ?? 0) > row.depth };
+  });
+}
+
 function shownSibling(siblings: readonly string[], from: number, step: number, shown: ReadonlySet<string>) {
   for (let i = from + step; i >= 0 && i < siblings.length; i += step) {
     if (shown.has(siblings[i])) return i;

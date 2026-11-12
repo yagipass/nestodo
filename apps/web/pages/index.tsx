@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
 import { AppHeader, useBackdropClose } from "./layout";
+import { Icon } from "../src/icons";
 import type { Props } from "./index.server";
 import {
   ROOT,
@@ -8,6 +9,7 @@ import {
   caretIn,
   destinations,
   fromTodos,
+  guides,
   indent,
   keyFor,
   mergeIntoPrevious,
@@ -114,6 +116,7 @@ function Tokens({ text, query }: { text: string; query: string }) {
             data-to={part.to}
           >
             {part.text}
+            <Icon name="link" size={12} strokeWidth={2.6} />
           </a>
         ) : (
           <span key={index} className={part.className} data-from={part.from} data-to={part.to}>
@@ -169,10 +172,7 @@ function MovePicker({
   return (
     <dialog ref={dialog} className="move-to" aria-label={`Move "${name}" to`} onClose={onClose} {...backdrop}>
       <label className="search">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-          <circle cx="11" cy="11" r="7" />
-          <path d="M20 20l-3.5-3.5" />
-        </svg>
+        <Icon name="filter" size={18} />
         <input
           role="combobox"
           aria-label={`Move "${name}" to`}
@@ -244,6 +244,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
   const filterButton = useRef<HTMLButtonElement>(null);
 
   const rows = visibleRows(outline, showDone, query, kept);
+  const lines = guides(rows);
   const shownKeys = new Set(rows.map((row) => row.key));
   const match = query.trim().toLowerCase();
 
@@ -556,10 +557,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
                 if (!query && !event.currentTarget.contains(event.relatedTarget)) setFiltering(false);
               }}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                <circle cx="11" cy="11" r="7" />
-                <path d="M20 20l-3.5-3.5" />
-              </svg>
+              <Icon name="filter" size={18} />
               <input
                 ref={filterInput}
                 type="search"
@@ -577,17 +575,12 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
                 }}
               />
               <button type="button" className="icon-button" aria-label="Close filter" onClick={closeFilter}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                  <path d="M6 6l12 12M18 6L6 18" />
-                </svg>
+                <Icon name="close" size={16} />
               </button>
             </label>
           ) : (
             <button ref={filterButton} type="button" className="icon-button" aria-label="Filter" data-tip="Filter (/)" onClick={openFilter}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                <circle cx="11" cy="11" r="7" />
-                <path d="M20 20l-3.5-3.5" />
-              </svg>
+              <Icon name="filter" size={20} />
             </button>
           )}
           <button
@@ -598,10 +591,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
             data-tip="Show completed (Ctrl/⌘ O)"
             onClick={toggleShowDone}
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="9" />
-              <path d="M8.5 12.5l2.5 2.5 4.5-5" />
-            </svg>
+            <Icon name="completed" size={20} />
           </button>
         </div>
       </AppHeader>
@@ -626,17 +616,18 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
         )}
 
         <ul className="outline">
-          {rows.map((row) => {
+          {rows.map((row, index) => {
             const item = outline[row.key];
             const name = item.title || "empty item";
             const hasChildren = item.children.length > 0;
+            const { through, stem } = lines[index];
             const toggle = () => apply(setCollapsed(outline, row.key, !item.collapsed));
             return (
-              <li key={row.key} className={["row", item.done ? "done" : row.under ? "under" : ""].join(" ").trim()}>
-                {Array.from({ length: row.depth }, (_, level) => (
-                  <span key={level} className="guide" aria-hidden="true" />
+              <li key={row.key} className={["row", hasChildren && "parent", item.done ? "done" : row.under && "under"].filter(Boolean).join(" ")}>
+                {through.map((continues, level) => (
+                  <span key={level} className={["guide", continues && "continues", level === row.depth - 1 && "branch"].filter(Boolean).join(" ")} aria-hidden="true" />
                 ))}
-                <span className="marker">
+                <span className={stem ? "marker stem" : "marker"}>
                   {hasChildren && (
                     <button
                       type="button"
@@ -645,9 +636,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
                       aria-expanded={!item.collapsed}
                       onClick={toggle}
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M9 6l6 6-6 6" />
-                      </svg>
+                      <Icon name="expand" size={16} strokeWidth={2.2} />
                     </button>
                   )}
                   <button
@@ -658,7 +647,13 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
                     disabled={!hasChildren}
                     onClick={toggle}
                   >
-                    <span className="dot" />
+                    {item.done ? (
+                      <span className="done-box">
+                        <Icon name="tick" size={11} strokeWidth={3.6} />
+                      </span>
+                    ) : (
+                      <span className="dot" />
+                    )}
                   </button>
                 </span>
                 <span className="title">
@@ -737,9 +732,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => (noteKey === row.key ? focusRow({ key: row.key, pos: -1 }) : openNote(row.key))}
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M6 3h9l4 4v14H6zM15 3v4h4M9 12h7M9 16h5" />
-                  </svg>
+                  <Icon name="note" size={18} />
                 </button>
                 <button
                   type="button"
@@ -748,9 +741,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
                   aria-pressed={item.done}
                   onClick={() => apply(toggleDone(outline, row.key))}
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M5 12l5 5 9-10" />
-                  </svg>
+                  <Icon name={item.done ? "completed" : "done"} size={18} />
                 </button>
               </li>
             );
@@ -760,7 +751,8 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
         {query && rows.length === 0 && <p className="empty">No matches.</p>}
 
         <button type="button" className="add-item" onClick={() => apply(append(outline, ROOT, fresh()))}>
-          + Add item
+          <Icon name="add" size={18} />
+          Add item
         </button>
       </main>
 

@@ -6,6 +6,7 @@ import {
   caretIn,
   destinations,
   fromTodos,
+  guides,
   indent,
   mergeIntoPrevious,
   moveBy,
@@ -400,5 +401,41 @@ describe("visibleRows", () => {
 
   it("keeps rows created during a filter visible even though their text does not match yet", () => {
     expect(visibleRows(outline, true, "inside", new Set(["t1"])).map((row) => row.key)).toEqual(["t1", "t3", "t4"]);
+  });
+});
+
+describe("guides", () => {
+  const outline = fromTodos([
+    todo(1, "moving"),
+    todo(2, "boxes", 1),
+    todo(3, "quotes", 2),
+    todo(4, "address", 1),
+    todo(5, "bank", 4),
+    todo(6, "tax"),
+    todo(7, "done step", 6, { done: true }),
+  ]);
+
+  it("runs each line from a parent's bullet down to its last child and no further", () => {
+    expect(guides(visibleRows(outline, true))).toEqual([
+      { through: [], stem: true },
+      { through: [true], stem: true },
+      { through: [true, false], stem: false },
+      { through: [false], stem: true },
+      { through: [false, false], stem: false },
+      { through: [], stem: true },
+      { through: [false], stem: false },
+    ]);
+  });
+
+  it("draws no stem under a parent whose children are all hidden, so no line leads to nothing", () => {
+    const rows = visibleRows(outline, false);
+    expect(guides(rows).map(({ stem }, index) => [rows[index].key, stem])).toEqual([
+      ["t1", true],
+      ["t2", true],
+      ["t3", false],
+      ["t4", true],
+      ["t5", false],
+      ["t6", false],
+    ]);
   });
 });

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { action, Form, useForm } from "@void/react";
 import { analyticsAvailable, applyAnalyticsConsent } from "../src/analytics";
+import { Icon } from "../src/icons";
 import { AppHeader } from "./layout";
 import type { Props } from "./settings.server";
 
@@ -92,7 +93,7 @@ function WebhookForm({ webhook, onDone }: { webhook: Webhook | null; onDone: () 
           />
           {tokenKept && (
             <button type="button" className="icon-button" aria-label="Remove the token" onClick={() => setData("token", null)}>
-              ×
+              <Icon name="close" size={18} />
             </button>
           )}
         </div>
@@ -133,7 +134,7 @@ function WebhookForm({ webhook, onDone }: { webhook: Webhook | null; onDone: () 
                 )
               }
             >
-              ×
+              <Icon name="close" size={18} />
             </button>
           </div>
         ))}
