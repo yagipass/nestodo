@@ -16,6 +16,7 @@ use crate::ui::widgets::{PAGE_WIDTH, sheet_shadow};
 
 const WEEKDAY_LABELS: [&str; 7] = ["", "Mon", "", "Wed", "", "Fri", ""];
 const TICK_GUTTER: f32 = 28.;
+const CARD_PADDING: f32 = 20.;
 
 enum Load {
     Loading,
@@ -98,7 +99,7 @@ impl StatsView {
 
     fn card(colors: &Theme) -> gpui::Div {
         div()
-            .px(px(20.))
+            .px(px(CARD_PADDING))
             .py(px(18.))
             .border_1()
             .border_color(colors.border)
@@ -115,7 +116,7 @@ impl StatsView {
             .map_or(0, |first| first.weekday().num_days_from_sunday() as usize);
         let weeks = (blanks + days.len()).div_ceil(7);
         let gap = px(3.);
-        let inner = width - px(32.) - px(2.);
+        let inner = width - px(2. * CARD_PADDING) - px(2.);
         let cell = ((inner - px(TICK_GUTTER) - gap * weeks as f32) / weeks as f32).max(px(4.));
         let activity = |day: &Day| day.added + day.completed;
         let busiest = days.iter().map(activity).max().unwrap_or(0);
@@ -240,7 +241,7 @@ impl StatsView {
 
     fn render_chart(&self, days: &[Day], width: Pixels, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme(cx);
-        let plot_width = width - px(32.) - px(2.) - px(TICK_GUTTER);
+        let plot_width = width - px(2. * CARD_PADDING) - px(2.) - px(TICK_GUTTER);
         let count = days.len().max(1);
         let scale = ticks(
             days.iter()
