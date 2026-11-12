@@ -1378,7 +1378,7 @@ class TodoViewModelTest {
 
         viewModel.openSettings()
 
-        assertEquals(listOf("GET profile", "GET webhook", "GET analytics"), repository.calls)
+        assertEquals(listOf("GET webhook", "GET analytics", "GET profile"), repository.calls)
         val settings = viewModel.settings()
         assertEquals(savedWebhook, settings.webhooks.webhook)
         assertEquals(repository.analytics, settings.analytics)
@@ -1404,7 +1404,7 @@ class TodoViewModelTest {
         repository.gate!!.complete(Unit)
 
         assertEquals(
-            listOf("GET", "GET profile", "GET webhook", "GET analytics"),
+            listOf("GET", "GET webhook", "GET analytics", "GET profile"),
             repository.calls,
         )
         assertTrue(viewModel.state.value.settings is SettingsState.Loaded)
@@ -1496,7 +1496,7 @@ class TodoViewModelTest {
         viewModel.removeWebhook()
 
         assertEquals(
-            listOf("GET profile", "GET webhook", "GET analytics", "DELETE webhook"),
+            listOf("GET webhook", "GET analytics", "GET profile", "DELETE webhook"),
             repository.calls,
         )
         assertNull(viewModel.settings().webhooks.webhook)
@@ -1611,14 +1611,77 @@ class TodoViewModelTest {
     }
 
     @Test
-    fun `a picture already shown is not downloaded again when Settings opens, because its URL changes whenever it does`() {
+    fun `a picture already shown is not downloaded again while its URL stays the same, because the server gives a new picture a new URL`() {
         withPicture()
         val viewModel = viewModel()
 
         viewModel.openSettings()
 
-        assertEquals(listOf("GET profile", "GET webhook", "GET analytics"), repository.calls)
+        assertEquals(listOf("GET webhook", "GET analytics", "GET profile"), repository.calls)
         assertArrayEquals(picture, viewModel.state.value.avatar?.bytes)
+    }
+
+    @Test
+    fun `a picture changed on another device is downloaded when Settings opens, because its new URL means new bytes`() {
+        withPicture()
+        val viewModel = viewModel()
+        val changed = byteArrayOf(7, 7, 7)
+        repository.avatars["/api/v1/avatars/2"] = changed
+        repository.profile = repository.profile.copy(avatarUrl = "/api/v1/avatars/2")
+
+        viewModel.openSettings()
+
+        assertTrue(repository.calls.contains("GET /api/v1/avatars/2"))
+        assertArrayEquals(changed, viewModel.state.value.avatar?.bytes)
+    }
+
+    @Test
+    fun `an expired sign-in found while loading the profile returns to the login screen, so the app does not act signed in on a session that is gone`() {
+        repository.profileFailure = ApiException.NotSignedIn()
+
+        val state = viewModel().state.value
+
+        assertEquals(AuthState.SignedOut, state.auth)
+        assertNotNull(state.loginError)
+    }
+
+    @Test
+    fun `an expired sign-in found while downloading the picture returns to the login screen instead of only hiding the picture`() {
+        withPicture()
+        repository.avatarFailure = ApiException.NotSignedIn()
+
+        val state = viewModel().state.value
+
+        assertEquals(AuthState.SignedOut, state.auth)
+        assertNotNull(state.loginError)
+    }
+
+    @Test
+    fun `a profile that fails to load in Settings still shows the webhook and usage data, and the Profile card says why`() {
+        repository.webhooks = repository.webhooks.copy(webhook = savedWebhook)
+        val viewModel = viewModel()
+        repository.profileFailure = IOException("offline")
+
+        viewModel.openSettings()
+
+        val settings = viewModel.settings()
+        assertEquals(savedWebhook, settings.webhooks.webhook)
+        assertEquals(repository.analytics, settings.analytics)
+        assertEquals("Can't connect. Check your connection.", settings.profileProblem)
+        assertEquals("", settings.name)
+        assertNull(viewModel.state.value.notice)
+    }
+
+    @Test
+    fun `an expired sign-in found by the Settings profile request returns to the login screen`() {
+        val viewModel = viewModel()
+        repository.profileFailure = ApiException.NotSignedIn()
+
+        viewModel.openSettings()
+
+        val state = viewModel.state.value
+        assertEquals(AuthState.SignedOut, state.auth)
+        assertNull(state.settings)
     }
 
     @Test
@@ -1690,7 +1753,7 @@ class TodoViewModelTest {
 
         val state = viewModel.state.value
         assertEquals(
-            listOf("GET profile", "GET webhook", "GET analytics", "PUT avatar"),
+            listOf("GET webhook", "GET analytics", "GET profile", "PUT avatar"),
             repository.calls,
         )
         assertEquals("/api/v1/avatars/1", state.avatar?.url)
@@ -1769,7 +1832,7 @@ class TodoViewModelTest {
         viewModel.avatarUnreadable()
 
         assertTrue(viewModel.settings().imageUnreadable)
-        assertEquals(listOf("GET profile", "GET webhook", "GET analytics"), repository.calls)
+        assertEquals(listOf("GET webhook", "GET analytics", "GET profile"), repository.calls)
 
         viewModel.uploadAvatar(picture)
 

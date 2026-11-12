@@ -106,6 +106,7 @@ sealed interface SettingsState {
         val analyticsSaving: Boolean = false,
         val analyticsFailed: Boolean = false,
         val name: String = "",
+        val profileProblem: String? = null,
         val profileErrors: Map<String, String> = emptyMap(),
         val profileSaving: Boolean = false,
         val imageUnreadable: Boolean = false,
@@ -901,15 +902,21 @@ class TodoViewModel(
     private suspend fun settle(repository: TodoRepository, task: Task.Settings) {
         when (val call = task.call) {
             SettingsCall.Load -> {
-                val profile = repository.profile()
+                val webhooks = repository.webhooks()
+                val analytics = repository.analytics()
+                usage?.consent(analytics)
                 val loaded =
-                    SettingsState.Loaded(
-                        repository.webhooks(),
-                        repository.analytics(),
-                        name = profile.name.orEmpty(),
-                    )
-                usage?.consent(loaded.analytics)
-                showProfile(repository, profile)
+                    try {
+                        val profile = repository.profile()
+                        showProfile(repository, profile)
+                        SettingsState.Loaded(webhooks, analytics, name = profile.name.orEmpty())
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: ApiException.NotSignedIn) {
+                        throw e
+                    } catch (e: Exception) {
+                        SettingsState.Loaded(webhooks, analytics, profileProblem = reason(e))
+                    }
                 showSettings(task.request) { loaded.showing(loaded.webhooks) }
             }
             is SettingsCall.SaveName -> {
@@ -983,6 +990,8 @@ class TodoViewModel(
         return try {
             Avatar(url, repository.avatar(url))
         } catch (e: CancellationException) {
+            throw e
+        } catch (e: ApiException.NotSignedIn) {
             throw e
         } catch (_: Exception) {
             null
@@ -1067,7 +1076,10 @@ class TodoViewModel(
             recoverSettings(error, task)
             return
         }
-        if (task is Task.LoadProfile) return
+        if (task is Task.LoadProfile) {
+            if (error is ApiException.NotSignedIn) fail(error, retry = null)
+            return
+        }
         discardPending()
         history.clear()
         _state.update { it.copy(canUndo = false) }

@@ -30,8 +30,7 @@ fun avatarImage(resolver: ContentResolver, uri: Uri): ByteArray? {
     val square = centerSquare(decoded.width, decoded.height)
     val cropped = Bitmap.createBitmap(decoded, square.left, square.top, square.size, square.size)
     val scaled = Bitmap.createScaledBitmap(cropped, AVATAR_SIZE, AVATAR_SIZE, true)
-    return ByteArrayOutputStream().use { out ->
-        scaled.compress(Bitmap.CompressFormat.WEBP_LOSSY, AVATAR_QUALITY, out)
-        out.toByteArray()
-    }
+    val out = ByteArrayOutputStream()
+    if (!scaled.compress(Bitmap.CompressFormat.WEBP_LOSSY, AVATAR_QUALITY, out)) return null
+    return out.toByteArray()
 }

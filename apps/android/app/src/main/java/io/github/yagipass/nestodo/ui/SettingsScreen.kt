@@ -198,6 +198,10 @@ private fun ProfileCard(
             }
         }
     SettingsCard(title = "Profile") {
+        settings.profileProblem?.let {
+            Problem("Couldn't load your profile: $it")
+            return@SettingsCard
+        }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp),

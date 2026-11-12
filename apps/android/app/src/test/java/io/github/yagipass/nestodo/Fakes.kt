@@ -35,6 +35,7 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
     val savedWebhooks = mutableListOf<WebhookEdit>()
     var profile = Profile("family@example.com")
     var profileFailure: Exception? = null
+    var avatarFailure: Exception? = null
     val avatars = mutableMapOf<String, ByteArray>()
     private var nextAvatar = 1
     var failure: Exception? = null
@@ -163,6 +164,7 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
 
     override suspend fun avatar(url: String): ByteArray {
         answer("GET $url")
+        avatarFailure?.let { throw it }
         return avatars[url] ?: throw ApiException.Server(404)
     }
 }

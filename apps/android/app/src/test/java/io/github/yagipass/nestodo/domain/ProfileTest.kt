@@ -1,6 +1,7 @@
 package io.github.yagipass.nestodo.domain
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProfileTest {
@@ -17,6 +18,19 @@ class ProfileTest {
         assertEquals(2, sampleSize(512, 900))
         assertEquals(1, sampleSize(511, 900))
         assertEquals(1, sampleSize(100, 100))
+    }
+
+    @Test
+    fun `an extreme panorama is decoded at most 2048 pixels long, so picking it cannot run the phone out of memory`() {
+        val sample = sampleSize(100_000, 300)
+        assertEquals(64, sample)
+        assertTrue(100_000 / sample <= MAX_DECODED_SIDE)
+    }
+
+    @Test
+    fun `a picture is decoded only as large as the size it is shown at, so a huge upload does not fill memory`() {
+        assertEquals(16, sampleSize(4096, 4096, target = 192))
+        assertEquals(1, sampleSize(256, 256, target = 192))
     }
 
     @Test
