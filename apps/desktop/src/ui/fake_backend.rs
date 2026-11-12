@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 use nestodo_desktop::api::StatsResponse;
 use nestodo_desktop::error::Error;
+use nestodo_desktop::profile::Profile;
 use nestodo_desktop::webhook::{Analytics, WebhookEdit, Webhooks};
 use nestodo_desktop::wire::{Reply, Request, Todo};
 
@@ -357,5 +358,29 @@ impl Backend for FakeServer {
 
     fn set_analytics(&self, enabled: bool) -> Result<bool, Error> {
         Ok(enabled)
+    }
+
+    fn profile(&self) -> Result<Profile, Error> {
+        Ok(Profile {
+            email: "kim@example.com".into(),
+            name: None,
+            avatar_url: None,
+        })
+    }
+
+    fn save_name(&self, _: &str) -> Result<Profile, Error> {
+        Err(Error::Invalid("this server cannot store a profile".into()))
+    }
+
+    fn save_avatar(&self, _: &[u8]) -> Result<Profile, Error> {
+        Err(Error::Invalid("this server cannot store a profile".into()))
+    }
+
+    fn remove_avatar(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn avatar(&self, _: &str) -> Result<Vec<u8>, Error> {
+        Err(Error::Invalid("this server has no avatars".into()))
     }
 }

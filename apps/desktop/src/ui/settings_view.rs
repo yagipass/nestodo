@@ -1,40 +1,92 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, Context, Div, ElementId, Entity, EventEmitter, FontWeight, KeyBinding, PromptLevel,
-    Stateful, Subscription, Window, actions, div, prelude::*, px,
+    AnyElement, Context, Div, ElementId, Entity, EventEmitter, FontWeight, KeyBinding,
+    PathPromptOptions, PromptLevel, Stateful, Subscription, Window, actions, div, prelude::*, px,
 };
 
 use nestodo_desktop::error::Error;
+use nestodo_desktop::profile::{Profile, avatar_png};
 use nestodo_desktop::webhook::{Analytics, Webhook, WebhookForm, WebhookHeader, Webhooks};
 
+use crate::ui::avatar::{Avatar, avatar_circle, fetch_avatar};
 use crate::ui::backend::Backend;
 use crate::ui::icons::Icon;
 use crate::ui::text_field::{FieldEvent, TextField};
 use crate::ui::theme::{Theme, theme};
 use crate::ui::widgets::{PAGE_WIDTH, icon, icon_button, sheet_shadow};
 
-actions!(settings, [SaveWebhook, CancelWebhook]);
+actions!(settings, [SaveWebhook, CancelWebhook, SaveProfile]);
 
 pub fn bindings() -> Vec<KeyBinding> {
     vec![
         KeyBinding::new("enter", SaveWebhook, Some("WebhookForm")),
         KeyBinding::new("escape", CancelWebhook, Some("WebhookForm")),
+        KeyBinding::new("enter", SaveProfile, Some("ProfileForm")),
     ]
 }
 
 const HIDDEN: &str = "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}";
 const NEW_URL: &str = "https://example.com/hook";
 const KEEP_URL: &str = "Leave blank to keep the saved URL";
+const UNREADABLE_IMAGE: &str = "The image could not be read.";
 
 pub enum SettingsEvent {
     SignedOut,
     UsageData(Analytics),
+    Profile(Profile, Option<Avatar>),
 }
 
 struct Loaded {
     webhooks: Webhooks,
     analytics: Analytics,
+}
+
+struct LoadedProfile {
+    profile: Result<Profile, String>,
+    avatar: Option<Avatar>,
+}
+
+enum Upload {
+    Unreadable,
+    Failed(Error),
+}
+
+struct ProfileForm {
+    profile: Option<Profile>,
+    problem: Option<String>,
+    avatar: Option<Avatar>,
+    name: Entity<TextField>,
+    errors: Vec<(String, String)>,
+    failure: Option<String>,
+    busy: bool,
+}
+
+impl ProfileForm {
+    fn error(&self, field: &str) -> Option<String> {
+        self.errors
+            .iter()
+            .find(|(name, _)| name == field)
+            .map(|(_, message)| message.clone())
+    }
+
+    fn saved_name(&self) -> &str {
+        self.profile
+            .as_ref()
+            .and_then(|profile| profile.name.as_deref())
+            .unwrap_or_default()
+    }
+
+    fn set_busy(&mut self, busy: bool, cx: &mut Context<SettingsView>) {
+        self.busy = busy;
+        self.name
+            .update(cx, |field, cx| field.set_read_only(busy, cx));
+        if busy {
+            self.errors.clear();
+            self.failure = None;
+        }
+    }
 }
 
 enum Load {
@@ -92,6 +144,7 @@ pub struct SettingsView {
     backend: Arc<dyn Backend>,
     load: Load,
     editor: Option<Editor>,
+    profile: ProfileForm,
     analytics_saving: bool,
     analytics_failed: bool,
     generation: u64,
@@ -122,6 +175,15 @@ impl SettingsView {
             backend,
             load: Load::Loading,
             editor: None,
+            profile: ProfileForm {
+                profile: None,
+                problem: None,
+                avatar: None,
+                name: field("", false, cx),
+                errors: Vec::new(),
+                failure: None,
+                busy: false,
+            },
             analytics_saving: false,
             analytics_failed: false,
             generation: 0,
@@ -140,14 +202,29 @@ impl SettingsView {
         }
         self.analytics_saving = false;
         self.analytics_failed = false;
+        self.profile.set_busy(false, cx);
         let backend = self.backend.clone();
+        let shown = self.profile.avatar.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    Ok::<_, Error>(Loaded {
-                        webhooks: backend.webhooks()?,
-                        analytics: backend.analytics()?,
-                    })
+                    let webhooks = backend.webhooks()?;
+                    let analytics = backend.analytics()?;
+                    let profile = match backend.profile() {
+                        Ok(profile) => Ok(profile),
+                        Err(Error::NotSignedIn) => return Err(Error::NotSignedIn),
+                        Err(error) => Err(error.to_string()),
+                    };
+                    let avatar = profile.as_ref().ok().and_then(|profile| {
+                        fetch_avatar(backend.as_ref(), profile, shown.as_ref())
+                    });
+                    Ok::<_, Error>((
+                        Loaded {
+                            webhooks,
+                            analytics,
+                        },
+                        LoadedProfile { profile, avatar },
+                    ))
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -155,7 +232,10 @@ impl SettingsView {
                     return;
                 }
                 match result {
-                    Ok(loaded) => this.show(loaded, cx),
+                    Ok((loaded, profile)) => {
+                        this.show_profile(profile, cx);
+                        this.show(loaded, cx);
+                    }
                     Err(Error::NotSignedIn) => cx.emit(SettingsEvent::SignedOut),
                     Err(error) => this.load = Load::Failed(error.to_string()),
                 }
@@ -165,6 +245,16 @@ impl SettingsView {
         })
         .detach();
         cx.notify();
+    }
+
+    fn show_profile(&mut self, loaded: LoadedProfile, cx: &mut Context<Self>) {
+        match loaded.profile {
+            Ok(profile) => {
+                self.profile.problem = None;
+                self.set_profile(profile, loaded.avatar, false, cx);
+            }
+            Err(problem) => self.profile.problem = Some(problem),
+        }
     }
 
     fn show(&mut self, loaded: Loaded, cx: &mut Context<Self>) {
@@ -532,6 +622,180 @@ impl SettingsView {
         })
         .detach();
         cx.notify();
+    }
+
+    fn set_profile(
+        &mut self,
+        profile: Profile,
+        avatar: Option<Avatar>,
+        reset_name: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let form = &mut self.profile;
+        let untouched = form.name.read(cx).text() == form.saved_name();
+        if reset_name || untouched {
+            let name = profile.name.clone().unwrap_or_default();
+            form.name
+                .update(cx, |field, cx| field.set_text(&name, name.len(), cx));
+        }
+        let email = profile.email.clone();
+        form.name
+            .update(cx, |field, cx| field.set_placeholder(&email, cx));
+        form.profile = Some(profile.clone());
+        form.avatar.clone_from(&avatar);
+        cx.emit(SettingsEvent::Profile(profile, avatar));
+    }
+
+    fn start_profile_change(&mut self, cx: &mut Context<Self>) -> bool {
+        let form = &mut self.profile;
+        if form.busy || form.profile.is_none() || form.name.read(cx).is_composing() {
+            return false;
+        }
+        form.set_busy(true, cx);
+        cx.notify();
+        true
+    }
+
+    fn profile_failed(&mut self, error: Error, action: &str, cx: &mut Context<Self>) {
+        match error {
+            Error::NotSignedIn => cx.emit(SettingsEvent::SignedOut),
+            Error::Refused(fields) => self.profile.errors = fields,
+            error => {
+                self.profile.failure = Some(format!("Couldn\u{2019}t {action}: {error}"));
+            }
+        }
+    }
+
+    fn save_name(&mut self, cx: &mut Context<Self>) {
+        if !self.start_profile_change(cx) {
+            return;
+        }
+        let name = self.profile.name.read(cx).text().to_string();
+        let backend = self.backend.clone();
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { backend.save_name(&name) })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                this.profile.set_busy(false, cx);
+                match result {
+                    Ok(profile) => {
+                        let avatar = this.profile.avatar.clone();
+                        this.set_profile(profile, avatar, true, cx);
+                    }
+                    Err(error) => this.profile_failed(error, "save the name", cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn choose_image(&mut self, cx: &mut Context<Self>) {
+        if self.profile.busy || self.profile.profile.is_none() {
+            return;
+        }
+        let chosen = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = chosen.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            this.update(cx, |this, cx| this.upload_image(path, cx)).ok();
+        })
+        .detach();
+    }
+
+    fn upload_image(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if !self.start_profile_change(cx) {
+            return;
+        }
+        let backend = self.backend.clone();
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let png = std::fs::read(&path)
+                        .ok()
+                        .and_then(|bytes| avatar_png(&bytes).ok())
+                        .ok_or(Upload::Unreadable)?;
+                    let profile = backend.save_avatar(&png).map_err(Upload::Failed)?;
+                    let avatar = profile
+                        .avatar_url
+                        .clone()
+                        .and_then(|url| Avatar::of(url, png));
+                    Ok((profile, avatar))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                this.profile.set_busy(false, cx);
+                match result {
+                    Ok((profile, avatar)) => this.set_profile(profile, avatar, false, cx),
+                    Err(Upload::Unreadable) => {
+                        this.profile.failure = Some(UNREADABLE_IMAGE.into());
+                    }
+                    Err(Upload::Failed(error)) => this.profile_failed(error, "save the image", cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn remove_avatar(&mut self, cx: &mut Context<Self>) {
+        let has_avatar = self
+            .profile
+            .profile
+            .as_ref()
+            .is_some_and(|profile| profile.avatar_url.is_some());
+        if !has_avatar || !self.start_profile_change(cx) {
+            return;
+        }
+        let backend = self.backend.clone();
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { backend.remove_avatar() })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                this.profile.set_busy(false, cx);
+                match result {
+                    Ok(()) => {
+                        if let Some(mut profile) = this.profile.profile.clone() {
+                            profile.avatar_url = None;
+                            this.set_profile(profile, None, false, cx);
+                        }
+                    }
+                    Err(error) => this.profile_failed(error, "remove the image", cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn on_save_profile(&mut self, _: &SaveProfile, _: &mut Window, cx: &mut Context<Self>) {
+        self.save_name(cx);
     }
 
     fn on_save(&mut self, _: &SaveWebhook, _: &mut Window, cx: &mut Context<Self>) {
@@ -981,6 +1245,85 @@ impl SettingsView {
             .into_any_element()
     }
 
+    fn render_profile(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = theme(cx);
+        let card = card(&colors)
+            .debug_selector(|| "profile".into())
+            .child(div().flex().child(heading("Profile")));
+        let Some(message) = &self.profile.problem else {
+            return self.render_profile_form(card, cx);
+        };
+        card.child(problem(
+            format!("Couldn\u{2019}t load your profile: {message}"),
+            &colors,
+        ))
+        .into_any_element()
+    }
+
+    fn render_profile_form(&self, card: Div, cx: &mut Context<Self>) -> AnyElement {
+        let colors = theme(cx);
+        let form = &self.profile;
+        let busy = form.busy;
+        let has_avatar = form
+            .profile
+            .as_ref()
+            .is_some_and(|profile| profile.avatar_url.is_some());
+        let name_error = form.error("name");
+        card.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .child(avatar_circle(form.avatar.as_ref(), 64., &colors))
+                .child(
+                    text_button("choose-avatar", "Choose image", false, !busy, &colors).when(
+                        !busy,
+                        |button| button.on_click(cx.listener(|this, _, _, cx| this.choose_image(cx))),
+                    ),
+                )
+                .when(has_avatar, |row| {
+                    row.child(
+                        text_button("remove-avatar", "Remove", true, !busy, &colors).when(
+                            !busy,
+                            |button| {
+                                button.on_click(
+                                    cx.listener(|this, _, _, cx| this.remove_avatar(cx)),
+                                )
+                            },
+                        ),
+                    )
+                }),
+        )
+        .children(form.error("image").map(|error| problem(error, &colors)))
+        .child(
+            div()
+                .key_context("ProfileForm")
+                .on_action(cx.listener(Self::on_save_profile))
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(label("Name"))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(field_box(&form.name, name_error.is_some(), &colors))
+                        .child(pill("save-profile", "Save", !busy, &colors).when(
+                            !busy,
+                            |button| button.on_click(cx.listener(|this, _, _, cx| this.save_name(cx))),
+                        )),
+                )
+                .children(name_error.map(|error| problem(error, &colors)))
+                .child(note(
+                    "Shown instead of your email address. Leave it blank to show the email address.",
+                    &colors,
+                )),
+        )
+        .children(form.failure.clone().map(|failure| problem(failure, &colors)))
+        .into_any_element()
+    }
+
     fn render_analytics(&self, analytics: &Analytics, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme(cx);
         let saving = self.analytics_saving;
@@ -1047,6 +1390,7 @@ impl Render for SettingsView {
                 .flex()
                 .flex_col()
                 .gap(px(16.))
+                .child(self.render_profile(cx))
                 .child(self.render_webhook(loaded, cx))
                 .when(loaded.analytics.available, |page| {
                     page.child(self.render_analytics(&loaded.analytics, cx))
@@ -1104,6 +1448,14 @@ mod tests {
         refuse: Option<Vec<(String, String)>>,
         busy: bool,
         signed_out: bool,
+        profile: Profile,
+        profile_missing: bool,
+        avatar: Vec<u8>,
+        avatar_downloads: usize,
+        names: Vec<String>,
+        refuse_name: Option<Vec<(String, String)>>,
+        uploads: Vec<Vec<u8>>,
+        avatars_removed: usize,
     }
 
     struct Server(Mutex<State>);
@@ -1125,6 +1477,18 @@ mod tests {
                 refuse: None,
                 busy: false,
                 signed_out: false,
+                profile: Profile {
+                    email: "kim@example.com".into(),
+                    name: None,
+                    avatar_url: None,
+                },
+                profile_missing: false,
+                avatar: Vec::new(),
+                avatar_downloads: 0,
+                names: Vec::new(),
+                refuse_name: None,
+                uploads: Vec::new(),
+                avatars_removed: 0,
             })))
         }
 
@@ -1212,6 +1576,61 @@ mod tests {
             self.answer()?;
             self.state().analytics.enabled = enabled;
             Ok(enabled)
+        }
+
+        fn profile(&self) -> Result<Profile, Error> {
+            self.answer()?;
+            let state = self.state();
+            if state.profile_missing {
+                return Err(Error::Server {
+                    status: 404,
+                    message: "Not Found".into(),
+                });
+            }
+            Ok(state.profile.clone())
+        }
+
+        fn save_name(&self, name: &str) -> Result<Profile, Error> {
+            self.state().names.push(name.to_string());
+            self.answer()?;
+            let mut state = self.state();
+            if let Some(fields) = state.refuse_name.take() {
+                return Err(Error::Refused(fields));
+            }
+            let trimmed = name.trim();
+            state.profile.name = (!trimmed.is_empty()).then(|| trimmed.to_string());
+            Ok(state.profile.clone())
+        }
+
+        fn save_avatar(&self, image: &[u8]) -> Result<Profile, Error> {
+            self.answer()?;
+            let mut state = self.state();
+            state.uploads.push(image.to_vec());
+            state.avatar = image.to_vec();
+            state.profile.avatar_url = Some(format!("/api/v1/avatars/{}", state.uploads.len()));
+            Ok(state.profile.clone())
+        }
+
+        fn remove_avatar(&self) -> Result<(), Error> {
+            self.answer()?;
+            let mut state = self.state();
+            state.avatars_removed += 1;
+            state.profile.avatar_url = None;
+            Ok(())
+        }
+
+        fn avatar(&self, url: &str) -> Result<Vec<u8>, Error> {
+            self.answer()?;
+            let mut state = self.state();
+            state.avatar_downloads += 1;
+            if state.profile.avatar_url.as_deref() == Some(url) {
+                Ok(state.avatar.clone())
+            } else {
+                Err(Error::Server {
+                    status: 404,
+                    message: "Avatar not found".into(),
+                })
+            }
         }
     }
 
@@ -1636,5 +2055,254 @@ mod tests {
             editor.fields().all(|field| !field.read(cx).is_read_only())
         });
         assert!(unlocked);
+    }
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            width,
+            height,
+            image::Rgb([90, 60, 200]),
+        ))
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+        bytes.into_inner()
+    }
+
+    struct TempFile(PathBuf);
+
+    impl TempFile {
+        fn with(name: &str, bytes: &[u8]) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "nestodo-desktop-settings-{}-{name}",
+                std::process::id()
+            ));
+            std::fs::write(&path, bytes).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn type_name(view: &Entity<SettingsView>, cx: &mut VisualTestContext, text: &str) {
+        let field = view.read_with(cx, |view, _| view.profile.name.clone());
+        cx.update(|window, cx| window.focus(&field.focus_handle(cx), cx));
+        cx.simulate_input(text);
+        cx.run_until_parked();
+    }
+
+    type Handed = Rc<RefCell<Vec<(Profile, Option<String>)>>>;
+
+    fn handed_to_window(view: &Entity<SettingsView>, cx: &mut VisualTestContext) -> Handed {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(view, move |_, event: &SettingsEvent, _| {
+                if let SettingsEvent::Profile(profile, avatar) = event {
+                    log.borrow_mut().push((
+                        profile.clone(),
+                        avatar.as_ref().map(|avatar| avatar.url.clone()),
+                    ));
+                }
+            })
+            .detach();
+        });
+        seen
+    }
+
+    fn choose(view: &Entity<SettingsView>, cx: &mut VisualTestContext, file: &TempFile) {
+        view.update(cx, SettingsView::choose_image);
+        let path = file.0.clone();
+        cx.simulate_path_prompt_response(move |_| Some(vec![path]));
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn a_name_typed_in_settings_is_saved_and_handed_to_the_window_so_the_account_menu_shows_it(
+        cx: &mut TestAppContext,
+    ) {
+        let server = Server::with(None);
+        let (view, cx) = open(cx, server.clone());
+        let seen = handed_to_window(&view, cx);
+
+        type_name(&view, cx, "  Kim ");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+
+        assert_eq!(server.state().names, ["  Kim "]);
+        let shown = view.read_with(cx, |view, cx| view.profile.name.read(cx).text().to_string());
+        assert_eq!(shown, "Kim");
+        assert_eq!(
+            seen.borrow()
+                .last()
+                .map(|(profile, _)| profile.name.clone()),
+            Some(Some("Kim".to_string()))
+        );
+    }
+
+    #[gpui::test]
+    fn a_name_the_server_refuses_stays_typed_with_the_message_under_the_field(
+        cx: &mut TestAppContext,
+    ) {
+        let server = Server::with(None);
+        server.state().refuse_name = Some(vec![(
+            "name".into(),
+            "The name cannot contain control characters".into(),
+        )]);
+        let (view, cx) = open(cx, server.clone());
+
+        type_name(&view, cx, "Kim\u{202e}");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+
+        let (error, typed, busy) = view.read_with(cx, |view, cx| {
+            (
+                view.profile.error("name"),
+                view.profile.name.read(cx).text().to_string(),
+                view.profile.busy,
+            )
+        });
+        assert_eq!(
+            error.as_deref(),
+            Some("The name cannot contain control characters")
+        );
+        assert_eq!(typed, "Kim\u{202e}");
+        assert!(!busy);
+    }
+
+    #[gpui::test]
+    fn a_chosen_photo_is_sent_as_a_small_square_and_shown_at_once_without_downloading_it_again(
+        cx: &mut TestAppContext,
+    ) {
+        let server = Server::with(None);
+        let (view, cx) = open(cx, server.clone());
+        let seen = handed_to_window(&view, cx);
+        let photo = TempFile::with("wide.png", &png(1200, 600));
+
+        choose(&view, cx, &photo);
+
+        let uploads = server.state().uploads.clone();
+        assert_eq!(uploads.len(), 1);
+        let sent = image::load_from_memory(&uploads[0]).unwrap();
+        assert_eq!((sent.width(), sent.height()), (256, 256));
+        let shown = view.read_with(cx, |view, _| {
+            view.profile
+                .avatar
+                .as_ref()
+                .map(|avatar| avatar.url.clone())
+        });
+        assert_eq!(shown.as_deref(), Some("/api/v1/avatars/1"));
+        assert_eq!(server.state().avatar_downloads, 0);
+        assert_eq!(
+            seen.borrow()
+                .last()
+                .and_then(|(_, avatar)| avatar.clone())
+                .as_deref(),
+            Some("/api/v1/avatars/1")
+        );
+    }
+
+    #[gpui::test]
+    fn a_file_that_is_not_an_image_is_not_sent_and_says_it_could_not_be_read(
+        cx: &mut TestAppContext,
+    ) {
+        let server = Server::with(None);
+        let (view, cx) = open(cx, server.clone());
+        let notes = TempFile::with("notes.txt", b"not a picture");
+
+        choose(&view, cx, &notes);
+
+        assert_eq!(server.state().uploads.len(), 0);
+        let (failure, busy) = view.read_with(cx, |view, _| {
+            (view.profile.failure.clone(), view.profile.busy)
+        });
+        assert_eq!(failure.as_deref(), Some(UNREADABLE_IMAGE));
+        assert!(!busy);
+    }
+
+    #[gpui::test]
+    fn removing_the_avatar_brings_back_the_generic_icon_here_and_in_the_window(
+        cx: &mut TestAppContext,
+    ) {
+        let server = Server::with(None);
+        {
+            let mut state = server.state();
+            state.profile.avatar_url = Some("/api/v1/avatars/9".into());
+            state.avatar = png(10, 10);
+        }
+        let (view, cx) = open(cx, server.clone());
+        assert!(view.read_with(cx, |view, _| view.profile.avatar.is_some()));
+        let seen = handed_to_window(&view, cx);
+
+        view.update(cx, SettingsView::remove_avatar);
+        cx.run_until_parked();
+
+        assert_eq!(server.state().avatars_removed, 1);
+        assert!(view.read_with(cx, |view, _| view.profile.avatar.is_none()));
+        assert_eq!(
+            seen.borrow()
+                .last()
+                .map(|(profile, avatar)| (profile.avatar_url.clone(), avatar.clone())),
+            Some((None, None))
+        );
+    }
+
+    #[gpui::test]
+    fn a_profile_that_cannot_be_loaded_still_leaves_the_webhook_and_usage_data_settings_usable(
+        cx: &mut TestAppContext,
+    ) {
+        let server = Server::with(Some(saved_webhook()));
+        server.state().profile_missing = true;
+
+        let (view, cx) = open(cx, server);
+
+        let (loaded, problem) = view.read_with(cx, |view, _| {
+            (
+                matches!(view.load, Load::Ready(_)),
+                view.profile.problem.clone(),
+            )
+        });
+        assert!(loaded);
+        assert!(problem.is_some_and(|problem| problem.contains("Not Found")));
+        assert!(cx.debug_bounds("webhook-view").is_some());
+        assert!(cx.debug_bounds("usage-analytics").is_some());
+    }
+
+    #[gpui::test]
+    fn the_profile_is_locked_while_a_change_is_on_its_way_so_a_second_one_is_not_sent_meanwhile(
+        cx: &mut TestAppContext,
+    ) {
+        let server = Server::with(None);
+        let (view, cx) = open(cx, server.clone());
+        type_name(&view, cx, "Kim");
+
+        let locked = view.update(cx, |view, cx| {
+            view.save_name(cx);
+            view.save_name(cx);
+            view.choose_image(cx);
+            view.profile.name.read(cx).is_read_only()
+        });
+        assert!(locked);
+        assert!(!cx.did_prompt_for_paths());
+
+        cx.run_until_parked();
+        assert_eq!(server.state().names, ["Kim"]);
+        assert!(view.read_with(cx, |view, cx| !view.profile.name.read(cx).is_read_only()));
+    }
+
+    #[gpui::test]
+    fn leaving_settings_and_coming_back_keeps_a_half_typed_name(cx: &mut TestAppContext) {
+        let (view, cx) = open(cx, Server::with(None));
+        type_name(&view, cx, "Ki");
+
+        view.update(cx, SettingsView::reload);
+        cx.run_until_parked();
+
+        let typed = view.read_with(cx, |view, cx| view.profile.name.read(cx).text().to_string());
+        assert_eq!(typed, "Ki");
     }
 }

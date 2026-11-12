@@ -1,3 +1,4 @@
+pub mod avatar;
 pub mod backend;
 pub mod clamped_text;
 #[cfg(test)]

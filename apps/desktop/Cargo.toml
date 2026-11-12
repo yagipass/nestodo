@@ -22,6 +22,7 @@ dirs = "7.0.0"
 gpui = { package = "gpui-pre", version = "=0.3.12", default-features = false }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", default-features = false, features = ["font-kit", "runtime_shaders"] }
 iana-time-zone = "0.1"
+image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
 keyring = "4.2.0"
 ring = "0.17.14"
 serde = { version = "1.0.229", features = ["derive"] }
