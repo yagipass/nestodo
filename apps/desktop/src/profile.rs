@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use image::imageops::FilterType;
+use image::imageops::{self, FilterType};
 use image::{DynamicImage, ImageDecoder, ImageError, ImageFormat, ImageReader, Limits};
 use serde::Deserialize;
 
@@ -54,14 +54,19 @@ fn upright_square(bytes: &[u8]) -> Result<DynamicImage, Error> {
     if side == 0 {
         return Err(unreadable("the image is empty"));
     }
-    let mut square = image
-        .crop_imm(
-            (image.width() - side) / 2,
-            (image.height() - side) / 2,
-            side,
-            side,
-        )
-        .resize_exact(AVATAR_SIZE, AVATAR_SIZE, FilterType::Lanczos3);
+    let middle = imageops::crop_imm(
+        &image,
+        (image.width() - side) / 2,
+        (image.height() - side) / 2,
+        side,
+        side,
+    );
+    let square = imageops::resize(&*middle, AVATAR_SIZE, AVATAR_SIZE, FilterType::Lanczos3);
+    let mut square = if image.color().has_alpha() {
+        DynamicImage::ImageRgba8(square)
+    } else {
+        DynamicImage::ImageRgb8(DynamicImage::ImageRgba8(square).to_rgb8())
+    };
     square.apply_orientation(orientation);
     Ok(square)
 }
@@ -145,6 +150,18 @@ mod tests {
         assert!(png.len() <= MAX_AVATAR_BYTES);
         assert!(is_red(&square, 10, 128));
         assert!(is_blue(&square, 245, 128));
+    }
+
+    #[test]
+    fn an_opaque_photo_is_sent_without_an_alpha_channel_so_it_stays_small() {
+        let photo = encoded(
+            &DynamicImage::ImageRgb8(left_red_right_blue(600, 400)),
+            ImageFormat::Jpeg,
+        );
+
+        let square = decoded(&avatar_png(&photo).unwrap());
+
+        assert_eq!(square.color(), image::ColorType::Rgb8);
     }
 
     #[test]
