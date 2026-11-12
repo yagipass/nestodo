@@ -5,6 +5,7 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputConnectionWrapper
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ScrollState
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,9 +33,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -88,6 +92,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -96,6 +101,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
@@ -148,8 +154,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.offset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -173,6 +181,7 @@ import io.github.yagipass.nestodo.domain.guides
 import io.github.yagipass.nestodo.domain.singleLine
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.filterNotNull
 
 private val RowHeight = 48.dp
@@ -191,11 +200,23 @@ fun OutlineScreen(
     val editing = rows.find { it.key == state.editing }
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val navigationBars = WindowInsets.navigationBars
+    val statusBars = WindowInsets.statusBars
+    val browsing = animateFloatAsState(if (editing == null) 1f else 0f)
+    val underStatus =
+        remember(scrollBehavior, browsing) {
+            { scrollBehavior.state.collapsedFraction * browsing.value }
+        }
 
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             TopAppBar(
+                modifier =
+                    Modifier.layout { measurable, constraints ->
+                        val inset = (statusBars.getTop(this) * (1f - underStatus())).roundToInt()
+                        val bar = measurable.measure(constraints.offset(vertical = -inset))
+                        layout(bar.width, bar.height + inset) { bar.place(0, inset) }
+                    },
                 title = {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -244,6 +265,7 @@ fun OutlineScreen(
                         containerColor = MaterialTheme.colorScheme.background,
                         scrolledContainerColor = MaterialTheme.colorScheme.background,
                     ),
+                windowInsets = TopAppBarDefaults.windowInsets.only(WindowInsetsSides.Horizontal),
                 scrollBehavior = scrollBehavior,
             )
         },
@@ -283,6 +305,7 @@ fun OutlineScreen(
         val direction = LocalLayoutDirection.current
         val bottom = padding.calculateBottomPadding()
         val underNavigation = if (editing == null) bottom else 0.dp
+        val sheet = MaterialTheme.colorScheme.surfaceContainerLowest
         Box(
             Modifier.padding(
                     start = padding.calculateStartPadding(direction) + 8.dp,
@@ -290,12 +313,31 @@ fun OutlineScreen(
                     end = padding.calculateEndPadding(direction) + 8.dp,
                 )
                 .fillMaxSize()
-                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                .graphicsLayer {
+                    val radius = 24.dp * (1f - underStatus())
+                    shape = RoundedCornerShape(topStart = radius, topEnd = radius)
+                    clip = true
+                }
+                .background(sheet)
+                .drawWithContent {
+                    drawContent()
+                    val under = underStatus()
+                    val fade = statusBars.getTop(this) * 1.5f * under
+                    if (fade > 0f) {
+                        drawRect(
+                            Brush.verticalGradient(
+                                0f to sheet.copy(alpha = 0.7f * under),
+                                1f to sheet.copy(alpha = 0f),
+                                endY = fade,
+                            ),
+                            size = Size(size.width, fade),
+                        )
+                    }
+                }
                 .padding(bottom = bottom - underNavigation)
         ) {
             if (state.loaded) {
-                OutlineList(rows, state, viewModel, onOpenLink, underNavigation)
+                OutlineList(rows, state, viewModel, onOpenLink, underNavigation, underStatus)
             } else {
                 CircularProgressIndicator(Modifier.align(Alignment.Center))
             }
@@ -553,9 +595,18 @@ private fun OutlineList(
     viewModel: TodoViewModel,
     onOpenLink: (String) -> Unit,
     underNavigation: Dp,
+    underStatus: () -> Float,
 ) {
     val listState = rememberLazyListState()
     val focusManager = LocalFocusManager.current
+    val density = LocalDensity.current
+    val statusBars = WindowInsets.statusBars
+    val padding =
+        remember(density, statusBars, underNavigation, underStatus) {
+            ListPadding(bottom = 120.dp + underNavigation) {
+                10.dp + with(density) { statusBars.getTop(this).toDp() } * underStatus()
+            }
+        }
     val entrance = remember { Animatable(0f) }
     val rowHeight = with(LocalDensity.current) { RowHeight.toPx() }
     val lines = remember(rows) { guides(rows) }
@@ -583,13 +634,7 @@ private fun OutlineList(
 
     LazyColumn(
         state = listState,
-        contentPadding =
-            PaddingValues(
-                start = 2.dp,
-                end = 12.dp,
-                top = 10.dp,
-                bottom = 120.dp + underNavigation,
-            ),
+        contentPadding = padding,
         modifier =
             Modifier.fillMaxSize().graphicsLayer {
                 translationX = (1f - entrance.value) * 24.dp.toPx()
@@ -619,6 +664,18 @@ private fun OutlineList(
             )
         }
     }
+}
+
+private class ListPadding(private val bottom: Dp, private val top: () -> Dp) : PaddingValues {
+    override fun calculateLeftPadding(layoutDirection: LayoutDirection) =
+        if (layoutDirection == LayoutDirection.Ltr) 2.dp else 12.dp
+
+    override fun calculateTopPadding() = top()
+
+    override fun calculateRightPadding(layoutDirection: LayoutDirection) =
+        if (layoutDirection == LayoutDirection.Ltr) 12.dp else 2.dp
+
+    override fun calculateBottomPadding() = bottom
 }
 
 internal data class Typed(val text: String, val selection: TextRange, val composition: TextRange?)
