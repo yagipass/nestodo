@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use chrono::{Datelike, NaiveDate};
 use gpui::{
-    AnyElement, Context, FontWeight, Hsla, PathBuilder, Pixels, SharedString, Window, canvas, div,
-    point, prelude::*, px,
+    AnyElement, Context, FontWeight, Hsla, PathBuilder, Pixels, ScrollEvent, ScrollHandle,
+    SharedString, Window, canvas, div, point, prelude::*, px,
 };
 
 use nestodo_desktop::stats::{
@@ -31,6 +31,7 @@ pub struct StatsView {
     calendar_hover: Option<usize>,
     chart_hover: Option<usize>,
     show_table: bool,
+    table_scroll: ScrollHandle,
 }
 
 fn date(value: &str) -> Option<NaiveDate> {
@@ -73,6 +74,7 @@ impl StatsView {
             calendar_hover: None,
             chart_hover: None,
             show_table: false,
+            table_scroll: ScrollHandle::new(),
         };
         view.reload(cx);
         view
@@ -95,6 +97,19 @@ impl StatsView {
             .ok();
         })
         .detach();
+    }
+
+    fn scroll_table(&self, event: &ScrollEvent, window: &Window) -> bool {
+        let lowest = -self.table_scroll.max_offset().y;
+        let offset = self.table_scroll.offset();
+        let current = offset.y.clamp(lowest, px(0.));
+        let next =
+            (current + event.delta.pixel_delta(window.line_height()).y).clamp(lowest, px(0.));
+        if next == current {
+            return false;
+        }
+        self.table_scroll.set_offset(point(offset.x, next));
+        true
     }
 
     fn card(colors: &Theme) -> gpui::Div {
@@ -518,6 +533,7 @@ impl StatsView {
             };
             div()
                 .id("table")
+                .track_scroll(&self.table_scroll)
                 .mt(px(8.))
                 .max_h(px(240.))
                 .overflow_y_scroll()
@@ -527,28 +543,38 @@ impl StatsView {
                 .text_size(px(13.))
                 .child(
                     div()
-                        .flex()
-                        .px(px(10.))
-                        .py(px(6.))
-                        .child(header("Day", true))
-                        .child(header("Added", false))
-                        .child(header("Completed", false))
-                        .child(header("Open", false)),
+                        .on_scroll(cx.listener(|this, event: &ScrollEvent, window, cx| {
+                            if this.scroll_table(event, window) {
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .px(px(10.))
+                                .py(px(6.))
+                                .child(header("Day", true))
+                                .child(header("Added", false))
+                                .child(header("Completed", false))
+                                .child(header("Open", false)),
+                        )
+                        .children(days.iter().rev().map(|day| {
+                            let cell = |value: u32| {
+                                div().flex_1().flex().justify_end().child(value.to_string())
+                            };
+                            div()
+                                .flex()
+                                .px(px(10.))
+                                .py(px(6.))
+                                .border_t_1()
+                                .border_color(colors.border)
+                                .child(div().flex_1().child(long_date(&day.date)))
+                                .child(cell(day.added))
+                                .child(cell(day.completed))
+                                .child(cell(day.open))
+                        })),
                 )
-                .children(days.iter().rev().map(|day| {
-                    let cell =
-                        |value: u32| div().flex_1().flex().justify_end().child(value.to_string());
-                    div()
-                        .flex()
-                        .px(px(10.))
-                        .py(px(6.))
-                        .border_t_1()
-                        .border_color(colors.border)
-                        .child(div().flex_1().child(long_date(&day.date)))
-                        .child(cell(day.added))
-                        .child(cell(day.completed))
-                        .child(cell(day.open))
-                }))
         });
 
         let legend_item = |color: Hsla, label: &'static str| {
@@ -901,5 +927,106 @@ impl Render for StatsView {
                     )
                     .child(body),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{Bounds, Entity, Point, ScrollDelta, TestAppContext, VisualTestContext, size};
+
+    use super::*;
+    use crate::ui::fake_backend::FakeServer;
+
+    const PAGE_GUTTER: Point<Pixels> = point(px(4.), px(4.));
+
+    fn open(cx: &mut TestAppContext) -> (Entity<StatsView>, &mut VisualTestContext) {
+        cx.update(|cx| cx.set_global(Theme::light()));
+        let backend: Arc<dyn Backend> = Arc::new(FakeServer::default());
+        let (view, cx) = cx.add_window_view(|_, cx| StatsView::new(backend, cx));
+        cx.run_until_parked();
+        let days = (1..=30)
+            .map(|day| Day {
+                date: format!("2026-10-{day:02}"),
+                added: 1,
+                completed: 1,
+                open: 1,
+            })
+            .collect();
+        view.update(cx, |view, cx| {
+            view.load = Load::Ready(days);
+            view.show_table = true;
+            cx.notify();
+        });
+        cx.simulate_resize(size(px(900.), px(560.)));
+        cx.run_until_parked();
+        scroll(cx, PAGE_GUTTER, -10_000.);
+        scroll(cx, PAGE_GUTTER, 100.);
+        (view, cx)
+    }
+
+    fn scroll(cx: &mut VisualTestContext, position: Point<Pixels>, dy: f32) {
+        cx.simulate_event(ScrollEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(0.), px(dy))),
+            ..Default::default()
+        });
+    }
+
+    fn table(view: &Entity<StatsView>, cx: &mut VisualTestContext) -> (Bounds<Pixels>, Pixels) {
+        view.read_with(cx, |view, _| {
+            (view.table_scroll.bounds(), view.table_scroll.offset().y)
+        })
+    }
+
+    fn inside_table(bounds: Bounds<Pixels>) -> Point<Pixels> {
+        point(bounds.center().x, bounds.top() + px(20.))
+    }
+
+    #[gpui::test]
+    fn scrolling_over_the_table_scrolls_only_the_table_while_it_has_rows_left(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, cx) = open(cx);
+        let (before, _) = table(&view, cx);
+
+        scroll(cx, inside_table(before), -50.);
+
+        let (after, offset) = table(&view, cx);
+        assert_eq!(offset, px(-50.));
+        assert_eq!(after, before, "the page must stay put");
+    }
+
+    #[gpui::test]
+    fn the_page_takes_over_once_the_table_shows_its_last_row(cx: &mut TestAppContext) {
+        let (view, cx) = open(cx);
+        let (before, _) = table(&view, cx);
+        scroll(cx, inside_table(before), -10_000.);
+        let (at_end, offset) = table(&view, cx);
+        assert_eq!(
+            at_end, before,
+            "reaching the last row must not move the page"
+        );
+        let lowest = view.read_with(cx, |view, _| -view.table_scroll.max_offset().y);
+        assert!(lowest < px(0.));
+        assert_eq!(offset, lowest);
+
+        scroll(cx, inside_table(at_end), -50.);
+
+        let (after, offset) = table(&view, cx);
+        assert_eq!(offset, lowest);
+        assert_eq!(after.top(), at_end.top() - px(50.));
+    }
+
+    #[gpui::test]
+    fn the_page_takes_over_when_scrolling_up_past_the_tables_first_row(cx: &mut TestAppContext) {
+        let (view, cx) = open(cx);
+        let (before, offset) = table(&view, cx);
+        assert_eq!(offset, px(0.));
+
+        scroll(cx, inside_table(before), 50.);
+
+        let (after, offset) = table(&view, cx);
+        assert_eq!(offset, px(0.));
+        assert_eq!(after.top(), before.top() + px(50.));
     }
 }
