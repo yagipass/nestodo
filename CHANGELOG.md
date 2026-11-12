@@ -1,5 +1,29 @@
 # Changelog
 
+## [v0.11.0](https://github.com/yagipass/nestodo/compare/v0.10.0...v0.11.0) - 2026-11-12
+
+### Web
+- feat(web): read, save and remove the webhook through the API by @yagipass in https://github.com/yagipass/nestodo/pull/61
+- feat(web): restyle the web app in the app icon's purple look by @yagipass in https://github.com/yagipass/nestodo/pull/65
+- feat(web): let the desktop and Android apps send usage data by @yagipass in https://github.com/yagipass/nestodo/pull/71
+- feat(web): set a name and a picture for your account in Settings by @yagipass in https://github.com/yagipass/nestodo/pull/75
+### Android
+- feat(android): change the webhook and usage analytics in Settings by @yagipass in https://github.com/yagipass/nestodo/pull/63
+- feat(android): restyle the Android app in the app icon's purple look by @yagipass in https://github.com/yagipass/nestodo/pull/66
+- feat(android): send the screens you open as usage data when it is on by @yagipass in https://github.com/yagipass/nestodo/pull/72
+- feat(android): set a name and a picture for your account in Settings by @yagipass in https://github.com/yagipass/nestodo/pull/77
+### Desktop
+- feat(desktop): change the webhook and usage analytics in Settings by @yagipass in https://github.com/yagipass/nestodo/pull/62
+- feat(desktop): restyle the desktop app in the app icon's purple look by @yagipass in https://github.com/yagipass/nestodo/pull/67
+- feat(desktop): send the screens you open as usage data when it is on by @yagipass in https://github.com/yagipass/nestodo/pull/73
+- fix(desktop): scroll the stats table without moving the whole page by @yagipass in https://github.com/yagipass/nestodo/pull/80
+- feat(desktop): set a name and a picture for your account in Settings by @yagipass in https://github.com/yagipass/nestodo/pull/76
+### Documentation
+- docs: say to create the profile picture bucket once before deploying by @yagipass in https://github.com/yagipass/nestodo/pull/84
+### Maintenance
+- build: keep the build output and Claude Code worktrees out of git by @yagipass in https://github.com/yagipass/nestodo/pull/81
+- build(android): drop the unused Compose preview tooling libraries by @yagipass in https://github.com/yagipass/nestodo/pull/83
+
 ## [v0.10.0](https://github.com/yagipass/nestodo/compare/v0.9.3...v0.10.0) - 2026-11-11
 
 ### Web
