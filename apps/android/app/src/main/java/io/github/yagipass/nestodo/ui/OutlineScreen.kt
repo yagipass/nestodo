@@ -62,6 +62,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -155,6 +156,7 @@ import androidx.core.view.WindowCompat
 import io.github.yagipass.nestodo.R
 import io.github.yagipass.nestodo.TodoUiState
 import io.github.yagipass.nestodo.TodoViewModel
+import io.github.yagipass.nestodo.domain.Avatar
 import io.github.yagipass.nestodo.domain.Caret
 import io.github.yagipass.nestodo.domain.Guide
 import io.github.yagipass.nestodo.domain.Link
@@ -221,7 +223,9 @@ fun OutlineScreen(
                         Icon(NestodoIcons.Completed, contentDescription = "Show completed")
                     }
                     AccountMenu(
-                        email = state.email,
+                        name = state.profile?.name,
+                        email = state.email ?: state.profile?.email,
+                        avatar = state.avatar,
                         server = state.server,
                         onStats = viewModel::openStats,
                         onSettings = viewModel::openSettings,
@@ -457,7 +461,9 @@ internal fun NoMatches() {
 
 @Composable
 private fun AccountMenu(
+    name: String?,
     email: String?,
+    avatar: Avatar?,
     server: String?,
     onStats: () -> Unit,
     onSettings: () -> Unit,
@@ -467,7 +473,7 @@ private fun AccountMenu(
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
-            Icon(NestodoIcons.Account, contentDescription = "Account")
+            AccountPicture(avatar, size = 28.dp, iconSize = 24.dp, contentDescription = "Account")
         }
         DropdownMenu(
             expanded = expanded,
@@ -475,6 +481,17 @@ private fun AccountMenu(
             shape = RoundedCornerShape(14.dp),
             containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
         ) {
+            if (name != null) {
+                DropdownMenuItem(
+                    text = { Text(name, fontWeight = FontWeight.Medium) },
+                    onClick = {},
+                    enabled = false,
+                    colors =
+                        MenuDefaults.itemColors(
+                            disabledTextColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                )
+            }
             listOfNotNull(email, server).forEach {
                 DropdownMenuItem(text = { Text(it) }, onClick = {}, enabled = false)
             }

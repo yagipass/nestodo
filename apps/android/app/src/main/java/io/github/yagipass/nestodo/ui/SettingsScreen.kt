@@ -1,6 +1,10 @@
 package io.github.yagipass.nestodo.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,8 +13,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -36,9 +42,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -50,9 +59,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.github.yagipass.nestodo.SettingsState
 import io.github.yagipass.nestodo.TodoViewModel
+import io.github.yagipass.nestodo.data.avatarImage
+import io.github.yagipass.nestodo.domain.Avatar
+import io.github.yagipass.nestodo.domain.Profile
 import io.github.yagipass.nestodo.domain.Webhook
 import io.github.yagipass.nestodo.domain.WebhookForm
 import io.github.yagipass.nestodo.domain.WebhookHeader
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val HIDDEN = "••••••••"
 
@@ -64,6 +79,8 @@ private val FieldShape = RoundedCornerShape(12.dp)
 @Composable
 fun SettingsScreen(
     settings: SettingsState,
+    profile: Profile?,
+    avatar: Avatar?,
     snackbar: SnackbarHostState,
     viewModel: TodoViewModel,
 ) {
@@ -105,6 +122,7 @@ fun SettingsScreen(
                             .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
+                        ProfileCard(profile, avatar, settings, viewModel)
                         WebhookCard(settings, viewModel)
                         if (settings.analytics.available) AnalyticsCard(settings, viewModel)
                     }
@@ -154,6 +172,94 @@ private fun Problem(text: String) {
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.error,
     )
+}
+
+@Composable
+private fun ProfileCard(
+    profile: Profile?,
+    avatar: Avatar?,
+    settings: SettingsState.Loaded,
+    viewModel: TodoViewModel,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var reading by remember { mutableStateOf(false) }
+    val busy = settings.profileSaving || reading
+    val errors = settings.profileErrors
+    val pick =
+        rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            if (uri == null) return@rememberLauncherForActivityResult
+            reading = true
+            scope.launch {
+                val image =
+                    withContext(Dispatchers.IO) { avatarImage(context.contentResolver, uri) }
+                reading = false
+                if (image == null) viewModel.avatarUnreadable() else viewModel.uploadAvatar(image)
+            }
+        }
+    SettingsCard(title = "Profile") {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Box(
+                Modifier.size(64.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                contentAlignment = Alignment.Center,
+            ) {
+                AccountPicture(
+                    avatar,
+                    size = 64.dp,
+                    iconSize = 32.dp,
+                    contentDescription = "Profile picture",
+                )
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Button(
+                    onClick = {
+                        pick.launch(
+                            PickVisualMediaRequest(
+                                ActivityResultContracts.PickVisualMedia.ImageOnly
+                            )
+                        )
+                    },
+                    enabled = !busy,
+                    shape = ButtonShape,
+                ) {
+                    Text("Choose image")
+                }
+                if (profile?.avatarUrl != null) {
+                    TextButton(
+                        shape = ButtonShape,
+                        onClick = viewModel::removeAvatar,
+                        enabled = !busy,
+                    ) {
+                        Text("Remove", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        }
+        if (settings.imageUnreadable) Problem("The image could not be read.")
+        errors["image"]?.let { Problem(it) }
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            OutlinedTextField(
+                value = settings.name,
+                onValueChange = viewModel::changeName,
+                modifier = Modifier.fillMaxWidth(),
+                shape = FieldShape,
+                label = { Text("Name") },
+                placeholder = profile?.email?.let { email -> { Text(email) } },
+                singleLine = true,
+                isError = errors["name"] != null,
+                supportingText = errors["name"]?.let { { Text(it) } },
+            )
+            Hint("Shown instead of your email address. Leave it blank to show the email address.")
+        }
+        Button(onClick = viewModel::saveName, enabled = !busy, shape = ButtonShape) {
+            Text("Save")
+        }
+    }
 }
 
 @Composable

@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.SharedPreferencesMigration
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
+import io.github.yagipass.nestodo.data.ApiException
 import io.github.yagipass.nestodo.data.Backend
 import io.github.yagipass.nestodo.data.Capture
 import io.github.yagipass.nestodo.data.Connection
@@ -14,6 +15,7 @@ import io.github.yagipass.nestodo.data.Settings
 import io.github.yagipass.nestodo.data.TodoRepository
 import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Day
+import io.github.yagipass.nestodo.domain.Profile
 import io.github.yagipass.nestodo.domain.Todo
 import io.github.yagipass.nestodo.domain.Webhook
 import io.github.yagipass.nestodo.domain.WebhookEdit
@@ -31,6 +33,10 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
     var webhooks = Webhooks(available = true)
     var analytics = Analytics(available = true, enabled = false)
     val savedWebhooks = mutableListOf<WebhookEdit>()
+    var profile = Profile("family@example.com")
+    var profileFailure: Exception? = null
+    val avatars = mutableMapOf<String, ByteArray>()
+    private var nextAvatar = 1
     var failure: Exception? = null
     var analyticsFailure: Exception? = null
     var analyticsGate: CompletableDeferred<Unit>? = null
@@ -128,6 +134,36 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
         answer("PUT analytics $enabled")
         analytics = analytics.copy(enabled = enabled)
         return enabled
+    }
+
+    override suspend fun profile(): Profile {
+        answer("GET profile")
+        profileFailure?.let { throw it }
+        return profile
+    }
+
+    override suspend fun saveName(name: String): Profile {
+        answer("PUT name \"$name\"")
+        profile = profile.copy(name = name.trim().ifEmpty { null })
+        return profile
+    }
+
+    override suspend fun saveAvatar(image: ByteArray): Profile {
+        answer("PUT avatar")
+        val url = "/api/v1/avatars/${nextAvatar++}"
+        avatars[url] = image
+        profile = profile.copy(avatarUrl = url)
+        return profile
+    }
+
+    override suspend fun removeAvatar() {
+        answer("DELETE avatar")
+        profile = profile.copy(avatarUrl = null)
+    }
+
+    override suspend fun avatar(url: String): ByteArray {
+        answer("GET $url")
+        return avatars[url] ?: throw ApiException.Server(404)
     }
 }
 

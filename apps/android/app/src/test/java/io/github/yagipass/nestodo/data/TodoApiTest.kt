@@ -2,11 +2,13 @@ package io.github.yagipass.nestodo.data
 
 import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Day
+import io.github.yagipass.nestodo.domain.Profile
 import io.github.yagipass.nestodo.domain.Todo
 import io.github.yagipass.nestodo.domain.Webhook
 import io.github.yagipass.nestodo.domain.WebhookEdit
 import io.github.yagipass.nestodo.domain.WebhookHeader
 import io.github.yagipass.nestodo.domain.Webhooks
+import java.util.Base64
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
@@ -17,7 +19,9 @@ import mockwebserver3.MockWebServer
 import mockwebserver3.RecordedRequest
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
+import okio.Buffer
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Before
@@ -389,4 +393,89 @@ class TodoApiTest {
         assertEquals("/api/v1/analytics", request.url.encodedPath)
         assertEquals(JsonPrimitive(true), request.json()["enabled"])
     }
+
+    @Test
+    fun `a profile with no name or picture reads them as null, so the app falls back to the email and the generic icon`() =
+        runTest {
+            respond(200, """{"email":"kim@example.com","name":null,"avatarUrl":null}""")
+            assertEquals(Profile("kim@example.com"), api().profile())
+            assertEquals("/api/v1/profile", server.takeRequest().url.encodedPath)
+        }
+
+    @Test
+    fun `a name is sent as typed and the saved one is read back, because the server trims it and keeps a blank one as no name`() =
+        runTest {
+            respond(200, """{"email":"kim@example.com","name":"Kim","avatarUrl":null}""")
+            assertEquals("Kim", api().saveName("  Kim  ").name)
+            val request = server.takeRequest()
+            assertEquals("PUT", request.method)
+            assertEquals("/api/v1/profile", request.url.encodedPath)
+            assertEquals(JsonPrimitive("  Kim  "), request.json()["name"])
+        }
+
+    @Test
+    fun `a refused name names its field, so the form can show the message under it`() = runTest {
+        respond(
+            400,
+            """{"error":"Validation failed","issues":[{"slot":"body","issues":[
+                {"message":"The name must be 50 characters or fewer","path":"name"}
+            ]}]}""",
+        )
+        val refused = failsWith<ApiException.Invalid> { api().saveName("x".repeat(51)) }
+        assertEquals(mapOf("name" to "The name must be 50 characters or fewer"), refused.fields)
+    }
+
+    @Test
+    fun `a picture is sent as standard base64 inside JSON, because the server accepts only JSON bodies`() =
+        runTest {
+            val image = byteArrayOf(0x52, 0x49, 0x46, 0x46, -5, -1, 0x00, 0x3e)
+            respond(
+                200,
+                """{"email":"kim@example.com","name":null,"avatarUrl":"/api/v1/avatars/abc"}""",
+            )
+            assertEquals("/api/v1/avatars/abc", api().saveAvatar(image).avatarUrl)
+            val request = server.takeRequest()
+            assertEquals("PUT", request.method)
+            assertEquals("/api/v1/profile/avatar", request.url.encodedPath)
+            val sent = (request.json()["image"] as JsonPrimitive).content
+            assertEquals(Base64.getEncoder().encodeToString(image), sent)
+            assertArrayEquals(image, Base64.getDecoder().decode(sent))
+        }
+
+    @Test
+    fun `a picture the server refuses names the image field, so the message shows next to the picture`() =
+        runTest {
+            respond(
+                400,
+                """{"error":"Validation failed","issues":[{"slot":"body","issues":[
+                    {"message":"The image must be a PNG, JPEG or WebP file","path":"image"}
+                ]}]}""",
+            )
+            val refused = failsWith<ApiException.Invalid> { api().saveAvatar(byteArrayOf(1)) }
+            assertEquals(
+                mapOf("image" to "The image must be a PNG, JPEG or WebP file"),
+                refused.fields,
+            )
+        }
+
+    @Test
+    fun `removing the picture asks the server to delete it`() = runTest {
+        respond(204)
+        api().removeAvatar()
+        val request = server.takeRequest()
+        assertEquals("DELETE", request.method)
+        assertEquals("/api/v1/profile/avatar", request.url.encodedPath)
+    }
+
+    @Test
+    fun `the picture is downloaded byte for byte with the Access token, because the server shows it only to its owner`() =
+        runTest {
+            val image = byteArrayOf(-119, 0x50, 0x4e, 0x47, 0x00, -1, 0x0a)
+            server.enqueue(MockResponse.Builder().code(200).body(Buffer().write(image)).build())
+            val credentials = FakeCredentials(server.hostName, "app-token", null)
+            assertArrayEquals(image, api(credentials).avatar("/api/v1/avatars/abc"))
+            val request = server.takeRequest()
+            assertEquals("/api/v1/avatars/abc", request.url.encodedPath)
+            assertEquals("app-token", request.headers["cf-access-token"])
+        }
 }
