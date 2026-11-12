@@ -546,15 +546,25 @@ impl Root {
                 return;
             };
             this.update(cx, |this, cx| {
-                let current = matches!(&this.screen, Screen::Ready(workspace)
-                    if Arc::ptr_eq(&workspace.client, &client));
-                if current {
-                    this.follow_profile(profile, avatar, cx);
-                }
+                this.follow_first_profile(&client, profile, avatar, cx);
             })
             .ok();
         })
         .detach();
+    }
+
+    fn follow_first_profile(
+        &mut self,
+        client: &Arc<Client>,
+        profile: Profile,
+        avatar: Option<Avatar>,
+        cx: &mut Context<Self>,
+    ) {
+        let first = matches!(&self.screen, Screen::Ready(workspace)
+            if Arc::ptr_eq(&workspace.client, client) && workspace.profile.is_none());
+        if first {
+            self.follow_profile(profile, avatar, cx);
+        }
     }
 
     fn follow_profile(&mut self, profile: Profile, avatar: Option<Avatar>, cx: &mut Context<Self>) {
@@ -1863,6 +1873,43 @@ mod tests {
         assert!(cx.debug_bounds("usage-analytics").is_some());
         webhook.assert();
         analytics.assert();
+    }
+
+    #[gpui::test]
+    fn a_slow_first_profile_answer_does_not_undo_a_name_just_saved_in_settings(
+        cx: &mut TestAppContext,
+    ) {
+        let server = refusing_saves();
+        let prefs = TempDir::new();
+        let (root, _, cx) = open(cx, &server, &prefs);
+        cx.run_until_parked();
+        let saved = Profile {
+            email: "kim@example.com".into(),
+            name: Some("Kim".into()),
+            avatar_url: None,
+        };
+        let stale = Profile {
+            name: None,
+            ..saved.clone()
+        };
+
+        root.update(cx, |root, cx| {
+            root.follow_profile(saved, None, cx);
+            let Screen::Ready(workspace) = &root.screen else {
+                panic!("the workspace did not open");
+            };
+            let client = workspace.client.clone();
+            root.follow_first_profile(&client, stale, None, cx);
+        });
+
+        let shown = root.read_with(cx, |root, _| match &root.screen {
+            Screen::Ready(workspace) => workspace
+                .profile
+                .as_ref()
+                .and_then(|profile| profile.name.clone()),
+            _ => None,
+        });
+        assert_eq!(shown.as_deref(), Some("Kim"));
     }
 
     #[gpui::test]

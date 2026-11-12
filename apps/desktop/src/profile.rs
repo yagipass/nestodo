@@ -1,13 +1,16 @@
 use std::io::Cursor;
 
 use image::imageops::FilterType;
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
+use image::{DynamicImage, ImageDecoder, ImageError, ImageFormat, ImageReader, Limits};
 use serde::Deserialize;
 
 use crate::error::Error;
 
 pub const AVATAR_SIZE: u32 = 256;
 pub const MAX_AVATAR_BYTES: usize = 512 * 1024;
+pub const MAX_SOURCE_SIDE: u32 = 16_384;
+pub const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
+pub const TOO_LARGE: &str = "the image is too large to read";
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,20 +24,40 @@ fn unreadable(error: impl std::fmt::Display) -> Error {
     Error::Invalid(format!("the image could not be read: {error}"))
 }
 
-fn upright(bytes: &[u8]) -> Result<DynamicImage, Error> {
-    let mut decoder = ImageReader::new(Cursor::new(bytes))
+fn not_decoded(error: ImageError) -> Error {
+    match error {
+        ImageError::Limits(_) => Error::Invalid(TOO_LARGE.into()),
+        error => unreadable(error),
+    }
+}
+
+fn decode_limits() -> Limits {
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_SOURCE_SIDE);
+    limits.max_image_height = Some(MAX_SOURCE_SIDE);
+    limits.max_alloc = Some(MAX_SOURCE_BYTES);
+    limits
+}
+
+fn upright_square(bytes: &[u8]) -> Result<DynamicImage, Error> {
+    let mut reader = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
-        .map_err(unreadable)?
-        .into_decoder()
         .map_err(unreadable)?;
-    let orientation = decoder.orientation().map_err(unreadable)?;
-    let mut image = DynamicImage::from_decoder(decoder).map_err(unreadable)?;
-    image.apply_orientation(orientation);
-    Ok(image)
+    reader.limits(decode_limits());
+    let mut decoder = reader.into_decoder().map_err(not_decoded)?;
+    if decoder.total_bytes() > MAX_SOURCE_BYTES {
+        return Err(Error::Invalid(TOO_LARGE.into()));
+    }
+    let orientation = decoder.orientation().map_err(not_decoded)?;
+    let mut square = DynamicImage::from_decoder(decoder)
+        .map_err(not_decoded)?
+        .resize_to_fill(AVATAR_SIZE, AVATAR_SIZE, FilterType::Lanczos3);
+    square.apply_orientation(orientation);
+    Ok(square)
 }
 
 pub fn avatar_png(bytes: &[u8]) -> Result<Vec<u8>, Error> {
-    let square = upright(bytes)?.resize_to_fill(AVATAR_SIZE, AVATAR_SIZE, FilterType::Lanczos3);
+    let square = upright_square(bytes)?;
     let square = if square.color().has_alpha() {
         DynamicImage::ImageRgba8(square.to_rgba8())
     } else {
@@ -147,5 +170,61 @@ mod tests {
             avatar_png(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"),
             Err(Error::Invalid(_))
         ));
+    }
+
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xffff_ffff_u32;
+        for &byte in bytes {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
+    fn chunk(kind: &[u8], data: &[u8]) -> Vec<u8> {
+        let mut chunk = u32::try_from(data.len()).unwrap().to_be_bytes().to_vec();
+        chunk.extend(kind);
+        chunk.extend(data);
+        chunk.extend(crc32(&[kind, data].concat()).to_be_bytes());
+        chunk
+    }
+
+    fn png_claiming(width: u32, height: u32) -> Vec<u8> {
+        let mut header = width.to_be_bytes().to_vec();
+        header.extend(height.to_be_bytes());
+        header.extend([8, 2, 0, 0, 0]);
+        let empty_zlib = [
+            0x78, 0x01, 0x01, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01,
+        ];
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend(chunk(b"IHDR", &header));
+        png.extend(chunk(b"IDAT", &empty_zlib));
+        png.extend(chunk(b"IEND", &[]));
+        png
+    }
+
+    fn refused_as_too_large(bytes: &[u8]) -> bool {
+        matches!(avatar_png(bytes), Err(Error::Invalid(message)) if message == TOO_LARGE)
+    }
+
+    #[test]
+    fn a_tiny_file_claiming_a_gigantic_picture_is_refused_before_decoding_so_the_app_cannot_run_out_of_memory()
+     {
+        assert!(refused_as_too_large(&png_claiming(11_000, 11_000)));
+        assert!(refused_as_too_large(&png_claiming(20_000, 10)));
+        assert!(refused_as_too_large(&png_claiming(10, 20_000)));
+    }
+
+    #[test]
+    fn a_48_megapixel_phone_photo_is_not_refused_for_its_size() {
+        let photo = png_claiming(8064, 6048);
+
+        assert!(!refused_as_too_large(&photo));
     }
 }

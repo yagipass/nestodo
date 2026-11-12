@@ -203,6 +203,8 @@ impl SettingsView {
         self.analytics_saving = false;
         self.analytics_failed = false;
         self.profile.set_busy(false, cx);
+        self.profile.errors.clear();
+        self.profile.failure = None;
         let backend = self.backend.clone();
         let shown = self.profile.avatar.clone();
         cx.spawn(async move |this, cx| {
@@ -2292,6 +2294,34 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(server.state().names, ["Kim"]);
         assert!(view.read_with(cx, |view, cx| !view.profile.name.read(cx).is_read_only()));
+    }
+
+    #[gpui::test]
+    fn a_profile_problem_from_before_is_gone_once_settings_load_again_so_it_is_not_mistaken_for_a_new_one(
+        cx: &mut TestAppContext,
+    ) {
+        let server = Server::with(None);
+        server.state().refuse_name = Some(vec![(
+            "name".into(),
+            "The name cannot contain control characters".into(),
+        )]);
+        let (view, cx) = open(cx, server);
+        type_name(&view, cx, "Kim\u{202e}");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.profile.error("name").is_some()));
+
+        view.update(cx, SettingsView::reload);
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.profile.errors.is_empty()));
+
+        let notes = TempFile::with("stale-notes.txt", b"not a picture");
+        choose(&view, cx, &notes);
+        assert!(view.read_with(cx, |view, _| view.profile.failure.is_some()));
+
+        view.update(cx, SettingsView::reload);
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.profile.failure.is_none()));
     }
 
     #[gpui::test]
