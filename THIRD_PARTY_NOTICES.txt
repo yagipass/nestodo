@@ -29,9 +29,7 @@ the Apache License, Version 2.0.
 
 Material Icons by Google
 https://github.com/google/material-design-icons
-The add and person icons in
-apps/android/app/src/main/java/io/github/yagipass/nestodo/ui/Icons.kt and the
-person icon in apps/desktop/src/ui/icons.rs come from Material Icons and are
+The person icon in apps/desktop/src/ui/icons.rs comes from Material Icons and is
 under the Apache License, Version 2.0.
 
 GPUI by Zed Industries
@@ -46,6 +44,8 @@ SIL Open Font License, Version 1.1.
 
   apps/web/src/fonts/Figtree-Bold.woff2
   apps/web/src/fonts/Figtree-ExtraBold.woff2
+  apps/android/app/src/main/res/font/figtree_bold.ttf
+  apps/android/app/src/main/res/font/figtree_extrabold.ttf
 
 --------------------------------------------------------------------------------
 

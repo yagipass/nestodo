@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.rememberTextFieldState
@@ -29,6 +30,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
 import io.github.yagipass.nestodo.AuthState
 import io.github.yagipass.nestodo.R
 
@@ -55,14 +58,16 @@ fun LoginScreen(
         ) {
             Column(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+                verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                AppIcon(80.dp)
+                AppIcon(88.dp)
                 Text(
                     stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.headlineLarge,
-                    fontWeight = FontWeight.Bold,
+                    fontFamily = Figtree,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 38.sp,
+                    letterSpacing = (-0.01).em,
                 )
                 Text(
                     "A todo list for everyone in the family",
@@ -174,14 +179,21 @@ private fun ServerLine(server: String?, onChange: () -> Unit) {
                 modifier = Modifier.weight(1f, fill = false),
             )
         }
-        TextButton(onClick = onChange) { Text("Change server") }
+        TextButton(onClick = onChange, shape = RoundedCornerShape(10.dp)) {
+            Text("Change server", fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 
 @Composable
 private fun WideButton(label: String, onClick: () -> Unit, enabled: Boolean = true) {
-    Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-        Text(label, style = MaterialTheme.typography.titleMedium)
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth().height(52.dp),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Text(label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
     }
 }
 

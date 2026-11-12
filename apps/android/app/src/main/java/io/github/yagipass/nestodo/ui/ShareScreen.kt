@@ -41,18 +41,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.yagipass.nestodo.R
 import io.github.yagipass.nestodo.ShareState
@@ -94,7 +101,17 @@ fun ShareScreen(
                 IconButton(onClick = onBack) {
                     Icon(NestodoIcons.Back, contentDescription = "Back")
                 }
-                Text("Add to $appName", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    buildAnnotatedString {
+                        append("Add to ")
+                        withStyle(
+                            SpanStyle(fontFamily = Figtree, fontWeight = FontWeight.ExtraBold)
+                        ) {
+                            append(appName)
+                        }
+                    },
+                    style = MaterialTheme.typography.titleLarge,
+                )
             }
             Preview(viewModel, title, titleRequester)
             HorizontalDivider(color = colors.outlineVariant)
@@ -126,6 +143,7 @@ private fun Preview(
     val colors = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     val note = viewModel.shared.note
+    val titleStyle = typography.bodyLarge.copy(fontSize = 18.sp, fontWeight = FontWeight.Medium)
     val input = remember(title) { title.typing(singleLine = true, maxLength = MAX_TITLE_LENGTH) }
     var expanded by rememberSaveable { mutableStateOf(false) }
     var clipped by remember { mutableStateOf(false) }
@@ -138,17 +156,24 @@ private fun Preview(
                         contentDescription = "Title"
                     },
                 inputTransformation = input,
-                textStyle = typography.bodyLarge.copy(color = colors.onSurface),
+                textStyle = titleStyle.copy(color = colors.onSurface),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 cursorBrush = SolidColor(colors.primary),
                 decorator = { inner ->
-                    Box {
+                    Box(
+                        Modifier.drawBehind {
+                                val line = 2.dp.toPx()
+                                drawLine(
+                                    colors.primary,
+                                    Offset(0f, size.height - line / 2),
+                                    Offset(size.width, size.height - line / 2),
+                                    line,
+                                )
+                            }
+                            .padding(vertical = 6.dp)
+                    ) {
                         if (title.text.isEmpty()) {
-                            Text(
-                                "Title",
-                                style = typography.bodyLarge,
-                                color = colors.onSurfaceVariant,
-                            )
+                            Text("Title", style = titleStyle, color = colors.onSurfaceVariant)
                         }
                         inner()
                     }
@@ -161,6 +186,7 @@ private fun Preview(
                     color = colors.onSurfaceVariant,
                     maxLines = if (expanded) Int.MAX_VALUE else PREVIEW_LINES,
                     overflow = TextOverflow.Ellipsis,
+                    inlineContent = LinkIcon,
                     onTextLayout = { if (it.hasVisualOverflow) clipped = true },
                     modifier = Modifier.padding(top = 2.dp),
                 )
@@ -218,6 +244,7 @@ private fun Picker(state: ShareState.Ready, onPick: (Long?) -> Unit) {
                         Text(
                             "Last used",
                             style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
                             color = colors.primary,
                             modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp),
                         )

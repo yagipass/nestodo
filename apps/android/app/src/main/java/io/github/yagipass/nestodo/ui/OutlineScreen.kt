@@ -9,6 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
@@ -21,6 +22,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -38,7 +41,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.foundation.text.input.TextFieldLineLimits
@@ -88,10 +93,17 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -108,6 +120,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.InterceptPlatformTextInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.PlatformTextInputInterceptor
 import androidx.compose.ui.platform.PlatformTextInputMethodRequest
@@ -118,10 +131,13 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -130,6 +146,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
@@ -138,6 +156,7 @@ import io.github.yagipass.nestodo.R
 import io.github.yagipass.nestodo.TodoUiState
 import io.github.yagipass.nestodo.TodoViewModel
 import io.github.yagipass.nestodo.domain.Caret
+import io.github.yagipass.nestodo.domain.Guide
 import io.github.yagipass.nestodo.domain.Link
 import io.github.yagipass.nestodo.domain.MAX_NOTE_LENGTH
 import io.github.yagipass.nestodo.domain.MAX_TITLE_LENGTH
@@ -146,6 +165,7 @@ import io.github.yagipass.nestodo.domain.caretIn
 import io.github.yagipass.nestodo.domain.destinations
 import io.github.yagipass.nestodo.domain.encodePaste
 import io.github.yagipass.nestodo.domain.findLinks
+import io.github.yagipass.nestodo.domain.guides
 import io.github.yagipass.nestodo.domain.singleLine
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -171,10 +191,16 @@ fun OutlineScreen(
                 title = {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        AppIcon(28.dp)
-                        Text(stringResource(R.string.app_name))
+                        AppIcon(30.dp)
+                        Text(
+                            stringResource(R.string.app_name),
+                            fontFamily = Figtree,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 23.sp,
+                            letterSpacing = (-0.01).em,
+                        )
                     }
                 },
                 actions = {
@@ -220,22 +246,37 @@ fun OutlineScreen(
             if (editing == null && state.loaded) {
                 FloatingActionButton(
                     onClick = viewModel::add,
+                    modifier = Modifier.size(60.dp),
+                    shape = RoundedCornerShape(15.dp),
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
                 ) {
-                    Icon(NestodoIcons.Add, contentDescription = "Add todo")
+                    Icon(
+                        NestodoIcons.Add,
+                        contentDescription = "Add todo",
+                        modifier = Modifier.size(26.dp),
+                    )
                 }
             }
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
+        val direction = LocalLayoutDirection.current
+        Box(
+            Modifier.padding(
+                    start = padding.calculateStartPadding(direction) + 8.dp,
+                    top = padding.calculateTopPadding(),
+                    end = padding.calculateEndPadding(direction) + 8.dp,
+                )
+                .fillMaxSize()
+                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                .padding(bottom = padding.calculateBottomPadding())
+        ) {
             if (state.loaded) {
                 OutlineList(rows, state, viewModel, onOpenLink)
             } else {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
+                CircularProgressIndicator(Modifier.align(Alignment.Center))
             }
         }
     }
@@ -264,6 +305,7 @@ private fun DeleteDialog(state: TodoUiState, deleting: Long, viewModel: TodoView
                 remember(name, colors.primary) { shownText(name, colors.primary) },
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
+                inlineContent = LinkIcon,
             )
         },
         confirmButton = {
@@ -343,17 +385,32 @@ internal fun SearchField(query: TextFieldState, label: String, modifier: Modifie
         lineLimits = TextFieldLineLimits.SingleLine,
         cursorBrush = SolidColor(colors.primary),
         decorator = { inner ->
-            Box(contentAlignment = Alignment.CenterStart) {
-                if (query.text.isEmpty()) {
-                    Text(
-                        "$label…",
-                        style = typography.bodyLarge,
-                        color = colors.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+            Row(
+                Modifier.heightIn(min = 48.dp)
+                    .border(1.dp, colors.outlineVariant, RoundedCornerShape(12.dp))
+                    .background(colors.surfaceContainerLowest, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(
+                    NestodoIcons.Filter,
+                    contentDescription = null,
+                    tint = colors.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (query.text.isEmpty()) {
+                        Text(
+                            "$label…",
+                            style = typography.bodyLarge,
+                            color = colors.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    inner()
                 }
-                inner()
             }
         },
     )
@@ -374,11 +431,12 @@ internal fun DestinationRow(title: String, path: List<String>, onClick: () -> Un
             color = colors.onSurface,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
+            inlineContent = LinkIcon,
         )
         if (path.isNotEmpty()) {
             Text(
                 path.joinToString(" › "),
-                style = typography.bodySmall,
+                style = typography.bodySmall.copy(fontSize = 13.sp),
                 color = colors.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -411,7 +469,12 @@ private fun AccountMenu(
         IconButton(onClick = { expanded = true }) {
             Icon(NestodoIcons.Account, contentDescription = "Account")
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            shape = RoundedCornerShape(14.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        ) {
             listOfNotNull(email, server).forEach {
                 DropdownMenuItem(text = { Text(it) }, onClick = {}, enabled = false)
             }
@@ -459,6 +522,8 @@ private fun OutlineList(
     val listState = rememberLazyListState()
     val entrance = remember { Animatable(0f) }
     val rowHeight = with(LocalDensity.current) { RowHeight.toPx() }
+    val lines = remember(rows) { guides(rows) }
+    val guideOf = remember(rows) { rows.indices.associate { rows[it].key to lines[it] } }
 
     LaunchedEffect(Unit) { entrance.animateTo(1f, tween(180, easing = LinearOutSlowInEasing)) }
     LaunchedEffect(state.caret) {
@@ -477,7 +542,7 @@ private fun OutlineList(
 
     LazyColumn(
         state = listState,
-        contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 120.dp),
+        contentPadding = PaddingValues(start = 2.dp, end = 12.dp, top = 10.dp, bottom = 120.dp),
         modifier =
             Modifier.fillMaxSize().graphicsLayer {
                 translationX = (1f - entrance.value) * 24.dp.toPx()
@@ -498,6 +563,7 @@ private fun OutlineList(
         items(rows, key = { it.key }, contentType = { "row" }) { row ->
             OutlineItem(
                 row = row,
+                guide = guideOf.getValue(row.key),
                 revision = state.revision,
                 caret = state.caret?.takeIf { it.key == row.key },
                 noteOpen = state.noteOpen == row.key,
@@ -608,6 +674,7 @@ private class EdgeScroll {
 @Composable
 private fun OutlineItem(
     row: OutlineRow,
+    guide: Guide,
     revision: Long,
     caret: Caret?,
     noteOpen: Boolean,
@@ -692,29 +759,19 @@ private fun OutlineItem(
     val textColor = if (row.completed || row.dimmed) colors.onSurfaceVariant else colors.onSurface
     val style =
         MaterialTheme.typography.bodyLarge.copy(
-            textDecoration = if (row.completed) TextDecoration.LineThrough else null
+            fontWeight = if (row.hasChildren) FontWeight.SemiBold else null,
+            textDecoration = if (row.completed) TextDecoration.LineThrough else null,
         )
 
-    val guide = colors.outlineVariant
+    val guideColor = LocalGuideColor.current
     Row(
         Modifier.fillMaxWidth()
             .heightIn(min = RowHeight)
             .background(
-                if (focused || noteFocused) colors.secondaryContainer.copy(alpha = 0.6f)
-                else Color.Transparent,
-                RoundedCornerShape(8.dp),
+                if (focused || noteFocused) colors.secondaryContainer else Color.Transparent,
+                RoundedCornerShape(12.dp),
             )
-            .drawBehind {
-                repeat(row.depth) { level ->
-                    val x = (level * 24 + 21).dp.toPx()
-                    drawLine(
-                        guide,
-                        Offset(x, 0f),
-                        Offset(x, size.height),
-                        strokeWidth = 1.dp.toPx(),
-                    )
-                }
-            }
+            .drawBehind { drawGuide(guide, row.depth, guideColor) }
     ) {
         Spacer(Modifier.width(24.dp * row.depth))
         Bullet(row) { viewModel.toggleCollapsed(key) }
@@ -761,13 +818,14 @@ private fun OutlineItem(
                             ) {
                                 inner()
                                 if (!focused) {
-                                    val chipColor = colors.surfaceContainerHighest
+                                    val chipColor = colors.secondaryContainer
                                     Text(
                                         shown.text,
                                         style = style,
                                         color = textColor,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
+                                        inlineContent = LinkIcon,
                                         onTextLayout = { chips.layout = it },
                                         modifier =
                                             Modifier.clearAndSetSemantics {}
@@ -778,7 +836,7 @@ private fun OutlineItem(
                                                             chipColor,
                                                             box.topLeft,
                                                             box.size,
-                                                            CornerRadius(6.dp.toPx()),
+                                                            CornerRadius(8.dp.toPx()),
                                                         )
                                                     }
                                                 },
@@ -808,7 +866,7 @@ private fun OutlineItem(
             if (row.note.isNotEmpty() || noteOpen) {
                 val noteStyle = MaterialTheme.typography.bodyMedium
                 val noteColor = if (noteFocused) colors.onSurface else colors.onSurfaceVariant
-                val chipColor = colors.surfaceContainerHighest
+                val chipColor = colors.secondaryContainer
                 Box(
                     Modifier.fillMaxWidth()
                         .pullUp(8.dp)
@@ -855,6 +913,7 @@ private fun OutlineItem(
                                         color = noteColor,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
+                                        inlineContent = LinkIcon,
                                         onTextLayout = { noteLayout = it },
                                         modifier =
                                             Modifier.clearAndSetSemantics {}
@@ -917,11 +976,37 @@ private fun Modifier.pullUp(by: Dp): Modifier = layout { measurable, constraints
     }
 }
 
+private fun DrawScope.drawGuide(guide: Guide, depth: Int, color: Color) {
+    val stroke = 2.dp.toPx()
+    val middle = RowHeight.toPx() / 2
+    guide.through.forEachIndexed { level, through ->
+        val x = (level * 24 + 22).dp.toPx()
+        if (through) drawLine(color, Offset(x, 0f), Offset(x, size.height), stroke)
+        if (level == depth - 1) {
+            val radius = 9.dp.toPx()
+            val branch =
+                Path().apply {
+                    moveTo(x, 0f)
+                    lineTo(x, middle - radius)
+                    arcTo(Rect(x, middle - 2 * radius, x + 2 * radius, middle), 180f, -90f, false)
+                    lineTo((level * 24 + 38).dp.toPx(), middle)
+                }
+            drawPath(branch, color, style = Stroke(stroke))
+        }
+    }
+    if (guide.stem) {
+        val x = (depth * 24 + 22).dp.toPx()
+        drawLine(color, Offset(x, middle + 4.dp.toPx()), Offset(x, size.height), stroke)
+    }
+}
+
 @Composable
 private fun Bullet(row: OutlineRow, onToggle: () -> Unit) {
     val colors = MaterialTheme.colorScheme
-    val dot = if (row.completed) colors.outline else colors.onSurface.copy(alpha = 0.85f)
-    val halo = colors.outlineVariant
+    val accent = colors.primary
+    val onAccent = colors.onPrimary
+    val frame = colors.secondaryContainer
+    val tick = rememberVectorPainter(NestodoIcons.Tick)
     val name = row.title.ifEmpty { "empty item" }
     val toggle =
         if (row.hasChildren) {
@@ -942,11 +1027,25 @@ private fun Bullet(row: OutlineRow, onToggle: () -> Unit) {
         Modifier.width(44.dp).height(RowHeight).then(toggle),
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.size(7.dp)) {
+        Canvas(Modifier.size(26.dp)) {
             if (row.collapsed && row.hasChildren) {
-                drawCircle(halo, radius = size.minDimension / 2 + 6.dp.toPx())
+                drawRoundRect(frame, cornerRadius = CornerRadius(8.dp.toPx()))
             }
-            drawCircle(dot)
+            if (row.completed) {
+                val box = 18.dp.toPx()
+                val mark = 12.dp.toPx()
+                drawRoundRect(
+                    accent,
+                    topLeft = Offset((size.width - box) / 2, (size.height - box) / 2),
+                    size = Size(box, box),
+                    cornerRadius = CornerRadius(6.dp.toPx()),
+                )
+                translate((size.width - mark) / 2, (size.height - mark) / 2) {
+                    with(tick) { draw(Size(mark, mark), colorFilter = ColorFilter.tint(onAccent)) }
+                }
+            } else {
+                drawCircle(accent, radius = 4.dp.toPx())
+            }
         }
     }
 }
@@ -960,7 +1059,7 @@ private fun EditToolbar(
     onHideKeyboard: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    Surface(color = colors.surfaceContainerLowest, shadowElevation = 3.dp) {
+    Surface(color = colors.surfaceContainerLowest) {
         Column(Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
             HorizontalDivider(color = colors.outlineVariant)
             Row(
@@ -1135,7 +1234,11 @@ private fun shownTitle(title: String, accent: Color): ShownTitle {
         for (link in findLinks(title)) {
             append(title.substring(at, link.start))
             val from = length
-            withStyle(SpanStyle(color = accent)) { append("\u2009${link.label} ↗\u2009") }
+            withStyle(SpanStyle(color = accent)) {
+                append("\u2009${link.label}\u200A")
+                appendInlineContent(LINK_ICON, "↗")
+                append("\u2009")
+            }
             links += Link(from, length, link.url)
             at = link.end
         }
@@ -1143,6 +1246,21 @@ private fun shownTitle(title: String, accent: Color): ShownTitle {
     }
     return ShownTitle(text, links)
 }
+
+private const val LINK_ICON = "link"
+
+internal val LinkIcon =
+    mapOf(
+        LINK_ICON to
+            InlineTextContent(Placeholder(0.8.em, 0.8.em, PlaceholderVerticalAlign.TextCenter)) {
+                Icon(
+                    NestodoIcons.Link,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+    )
 
 private class Chips {
     var layout by mutableStateOf<TextLayoutResult?>(null)
