@@ -3,7 +3,7 @@ export const MAX_AVATAR_BYTES = 512 * 1024;
 export const AVATAR_SIZE = 256;
 
 const AVATAR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const UNSAFE_NAME_CHARACTERS = /[\p{Cc}؜‎‏‪-‮⁦-⁩]/u;
+const UNSAFE_NAME_CHARACTERS = /[\p{Cc}\p{Zl}\p{Zp}\u061C\u200B\u200E\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/u;
 
 export type AvatarType = "image/png" | "image/jpeg" | "image/webp";
 
@@ -17,7 +17,7 @@ export function normalizeName(name: string) {
 export function nameProblem(name: string | null) {
   if (name === null) return null;
   if (name.length > MAX_NAME_LENGTH) return `The name must be ${MAX_NAME_LENGTH} characters or fewer`;
-  if (UNSAFE_NAME_CHARACTERS.test(name)) return "The name cannot contain control characters";
+  if (UNSAFE_NAME_CHARACTERS.test(name)) return "The name cannot contain control or invisible characters";
   return null;
 }
 

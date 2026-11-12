@@ -89,7 +89,7 @@ describe("the profile", () => {
     const member = await signedInUser();
     await member.saveName("Kim");
 
-    const res = await member.saveName("Kim‮miK");
+    const res = await member.saveName("Kim\u202EmiK");
 
     expect(res.status).toBe(400);
     expect((await issuesOf(res)).map(({ path }) => path)).toEqual(["name"]);

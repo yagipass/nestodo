@@ -19,24 +19,37 @@ describe("normalizeName", () => {
   });
 
   it("stores the composed form, so a name typed on a Mac and on Android is the same text", () => {
-    expect(normalizeName("ガ")).toBe("ガ");
+    expect(normalizeName("\u30AB\u3099")).toBe("\u30AC");
   });
 });
 
 describe("nameProblem", () => {
   it("accepts a name in any script", () => {
-    expect(nameProblem("宮城 太郎")).toBeNull();
+    expect(nameProblem("山田 太郎")).toBeNull();
     expect(nameProblem("Zoë")).toBeNull();
   });
 
   it("refuses characters that reverse or hide text, so a name cannot pose as another member's once names are shown to others", () => {
-    expect(nameProblem("Kim‮evil")).not.toBeNull();
-    expect(nameProblem("Kim⁦")).not.toBeNull();
-    expect(nameProblem("Kim‏")).not.toBeNull();
+    expect(nameProblem("Kim\u202Eevil")).not.toBeNull();
+    expect(nameProblem("Kim\u2066")).not.toBeNull();
+    expect(nameProblem("Kim\u200F")).not.toBeNull();
   });
 
   it("refuses control characters such as a line break, which would break the one-line menu", () => {
     expect(nameProblem("Kim\nLee")).not.toBeNull();
+    expect(nameProblem("Kim\u2028Lee")).not.toBeNull();
+  });
+
+  it("refuses invisible characters, so a name cannot look blank or pass for another that reads the same", () => {
+    expect(nameProblem("\u200B")).not.toBeNull();
+    expect(nameProblem("K\u200Bim")).not.toBeNull();
+    expect(nameProblem("Kim\uFEFF")).not.toBeNull();
+    expect(nameProblem("K\u2060im")).not.toBeNull();
+  });
+
+  it("keeps the joiners that emoji and some scripts need", () => {
+    expect(nameProblem("Kim \u{1F468}\u200D\u{1F469}\u200D\u{1F467}")).toBeNull();
+    expect(nameProblem("\u0915\u094D\u200C\u0937")).toBeNull();
   });
 
   it("refuses a name too long to fit the menu", () => {

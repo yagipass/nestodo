@@ -1,15 +1,12 @@
 import { defineMiddleware } from "void";
 import { resolveAccessUser } from "../src/access";
+import { isPagePath } from "../src/page-path";
 import { profileOf } from "../src/profile-service";
 
 const SAFE_METHODS = ["GET", "HEAD", "OPTIONS"];
 const SAME_ORIGIN_FETCH_SITES = ["same-origin", "none"];
 const BODY_METHODS = ["POST", "PUT", "PATCH"];
 const AVATAR_PATH = "/api/v1/avatars/";
-
-function isPage(path: string) {
-  return !path.startsWith("/api/") && !path.startsWith("/__void/") && path !== "/mcp";
-}
 
 function isJson(contentType: string | undefined) {
   return contentType?.split(";", 1)[0].trim().toLowerCase() === "application/json";
@@ -31,7 +28,7 @@ export default defineMiddleware(async (c, next) => {
   }
 
   const user = await resolveAccessUser(c.req.header("cf-access-jwt-assertion"), { mcp: c.req.path === "/mcp" });
-  const profile = user && isPage(c.req.path) ? await profileOf(user.email) : null;
+  const profile = user && isPagePath(c.req.path) ? await profileOf(user.email) : null;
   c.set("accessUser", user);
   c.set("shared", { auth: { user, profile } });
   await next();

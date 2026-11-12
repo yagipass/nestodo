@@ -263,8 +263,13 @@ function ProfileCard({ profile }: { profile: Profile }) {
   const chooseImage = async (file: File | undefined) => {
     if (picker.current) picker.current.value = "";
     if (!file) return;
-    const image = await avatarImageFrom(file).then(base64Of, () => null);
+    setBusy(true);
+    setErrors({});
+    const image = await avatarImageFrom(file)
+      .then(base64Of)
+      .catch(() => null);
     if (image === null) {
+      setBusy(false);
       setErrors({ image: "The image could not be read." });
       return;
     }
@@ -287,7 +292,13 @@ function ProfileCard({ profile }: { profile: Profile }) {
             Choose image
           </button>
           {profile.avatarUrl && (
-            <button type="button" className="text-button" disabled={busy} onClick={() => send("/api/v1/profile/avatar", "DELETE")}>
+            <button
+              type="button"
+              className="text-button"
+              aria-label="Remove picture"
+              disabled={busy}
+              onClick={() => send("/api/v1/profile/avatar", "DELETE")}
+            >
               Remove
             </button>
           )}
