@@ -2,6 +2,7 @@ node_modules
 dist
 .void
 .wrangler
+.cloudflare
 .void-wrangler.jsonc
 void.lock.json
 .env
@@ -18,6 +19,7 @@ void.lock.json
 .direnv/
 .pre-commit-config.yaml
 .work/
+.claude/worktrees/
 local.properties
 .gradle/
 .kotlin/
