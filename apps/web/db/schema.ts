@@ -57,3 +57,9 @@ export const archivedTodos = sqliteTable(
 export const analyticsConsents = sqliteTable("analytics_consents", {
   userId: text("user_id").primaryKey(),
 });
+
+export const profiles = sqliteTable("profiles", {
+  userId: text("user_id").primaryKey(),
+  name: text("name"),
+  avatarId: text("avatar_id"),
+});

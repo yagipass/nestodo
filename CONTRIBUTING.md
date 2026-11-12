@@ -103,7 +103,7 @@ The deploy runs in the `Cloudflare` environment, which only `main` can deploy fr
 
 The environment's secret `POSTHOG_PROJECT_TOKEN` is optional. Leave it empty to send nothing to PostHog and hide the usage analytics setting. When it is set, the server hands the token to the desktop and Android apps, and the web app sends page views and the apps send the screens they show, only for users who turned on **Send usage data** in **Settings**. The dev server and debug builds of the apps never send.
 
-`void.lock.json` is not committed. Each deploy finds the D1 database `nestodo-db` by name in `CLOUDFLARE_ACCOUNT_ID` and creates it only when it does not exist, so renaming the database in Cloudflare or in `void.config.ts` starts from an empty one. Void keeps Durable Object migration history in the lock, so commit it again before adding a Durable Object.
+`void.lock.json` is not committed. Each deploy finds the D1 database `nestodo-db` by name in `CLOUDFLARE_ACCOUNT_ID` and creates it only when it does not exist, so renaming the database in Cloudflare or in `void.config.ts` starts from an empty one. Profile pictures are kept in the R2 bucket `nestodo-avatars`, also named in `void.config.ts`. Void keeps Durable Object migration history in the lock, so commit it again before adding a Durable Object.
 
 ## Repository settings
 

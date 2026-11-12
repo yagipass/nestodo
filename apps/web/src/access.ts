@@ -2,13 +2,14 @@ import { HTTPException } from "hono/http-exception";
 import { createRemoteJWKSet, errors, jwtVerify } from "jose";
 import type { CloudContext } from "void";
 import { env } from "void/env";
+import type { Profile } from "./profiles";
 
 export type AccessUser = { email: string };
 
 declare module "void" {
   interface CloudContextVariables {
     accessUser: AccessUser | null;
-    shared: { auth: { user: AccessUser | null } };
+    shared: { auth: { user: AccessUser | null; profile: Profile | null } };
   }
 }
 
