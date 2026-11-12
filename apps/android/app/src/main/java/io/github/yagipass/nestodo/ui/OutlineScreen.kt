@@ -281,6 +281,8 @@ fun OutlineScreen(
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         val direction = LocalLayoutDirection.current
+        val bottom = padding.calculateBottomPadding()
+        val underNavigation = if (editing == null) bottom else 0.dp
         Box(
             Modifier.padding(
                     start = padding.calculateStartPadding(direction) + 8.dp,
@@ -290,10 +292,10 @@ fun OutlineScreen(
                 .fillMaxSize()
                 .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-                .padding(bottom = padding.calculateBottomPadding())
+                .padding(bottom = bottom - underNavigation)
         ) {
             if (state.loaded) {
-                OutlineList(rows, state, viewModel, onOpenLink)
+                OutlineList(rows, state, viewModel, onOpenLink, underNavigation)
             } else {
                 CircularProgressIndicator(Modifier.align(Alignment.Center))
             }
@@ -550,6 +552,7 @@ private fun OutlineList(
     state: TodoUiState,
     viewModel: TodoViewModel,
     onOpenLink: (String) -> Unit,
+    underNavigation: Dp,
 ) {
     val listState = rememberLazyListState()
     val focusManager = LocalFocusManager.current
@@ -580,7 +583,13 @@ private fun OutlineList(
 
     LazyColumn(
         state = listState,
-        contentPadding = PaddingValues(start = 2.dp, end = 12.dp, top = 10.dp, bottom = 120.dp),
+        contentPadding =
+            PaddingValues(
+                start = 2.dp,
+                end = 12.dp,
+                top = 10.dp,
+                bottom = 120.dp + underNavigation,
+            ),
         modifier =
             Modifier.fillMaxSize().graphicsLayer {
                 translationX = (1f - entrance.value) * 24.dp.toPx()
