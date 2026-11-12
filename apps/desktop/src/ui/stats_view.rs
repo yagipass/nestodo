@@ -81,6 +81,7 @@ impl StatsView {
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.table_scroll.set_offset(point(px(0.), px(0.)));
         let backend = self.backend.clone();
         let zone = local_time_zone();
         cx.spawn(async move |this, cx| {
@@ -97,6 +98,12 @@ impl StatsView {
             .ok();
         })
         .detach();
+    }
+
+    fn toggle_table(&mut self, cx: &mut Context<Self>) {
+        self.show_table = !self.show_table;
+        self.table_scroll.set_offset(point(px(0.), px(0.)));
+        cx.notify();
     }
 
     fn scroll_table(&self, event: &ScrollEvent, window: &Window) -> bool {
@@ -707,10 +714,7 @@ impl StatsView {
                     .text_size(px(13.))
                     .text_color(colors.accent)
                     .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.show_table = !this.show_table;
-                        cx.notify();
-                    }))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_table(cx)))
                     .child(if self.show_table {
                         "\u{25be} Show as table"
                     } else {
@@ -1028,5 +1032,34 @@ mod tests {
         let (after, offset) = table(&view, cx);
         assert_eq!(offset, px(0.));
         assert_eq!(after.top(), before.top() + px(50.));
+    }
+
+    fn scroll_table_down(view: &Entity<StatsView>, cx: &mut VisualTestContext) {
+        let (bounds, _) = table(view, cx);
+        scroll(cx, inside_table(bounds), -50.);
+        assert_eq!(table(view, cx).1, px(-50.));
+    }
+
+    #[gpui::test]
+    fn reopening_the_table_shows_the_newest_day_first_again(cx: &mut TestAppContext) {
+        let (view, cx) = open(cx);
+        scroll_table_down(&view, cx);
+
+        view.update(cx, StatsView::toggle_table);
+        cx.run_until_parked();
+        view.update(cx, StatsView::toggle_table);
+        cx.run_until_parked();
+
+        assert_eq!(table(&view, cx).1, px(0.));
+    }
+
+    #[gpui::test]
+    fn coming_back_to_stats_shows_the_newest_day_first_again(cx: &mut TestAppContext) {
+        let (view, cx) = open(cx);
+        scroll_table_down(&view, cx);
+
+        view.update(cx, StatsView::reload);
+
+        assert_eq!(table(&view, cx).1, px(0.));
     }
 }
