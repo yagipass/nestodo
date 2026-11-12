@@ -351,6 +351,7 @@ impl Backend for FakeServer {
         Ok(Analytics {
             available: false,
             enabled: false,
+            token: None,
         })
     }
 

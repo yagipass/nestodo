@@ -10,6 +10,8 @@ pub struct Prefs {
     pub show_completed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_id: Option<String>,
 }
 
 impl Default for Prefs {
@@ -17,6 +19,7 @@ impl Default for Prefs {
         Self {
             show_completed: true,
             base_url: None,
+            usage_id: None,
         }
     }
 }
@@ -86,10 +89,23 @@ mod tests {
         Prefs {
             show_completed: false,
             base_url: None,
+            usage_id: None,
         }
         .save(Some(&path))
         .unwrap();
         assert!(!Prefs::load(Some(&path)).show_completed);
+    }
+
+    #[test]
+    fn keeps_the_usage_data_id_across_launches_so_this_mac_is_counted_once() {
+        let dir = TempDir::new("usage");
+        let path = dir.0.join("settings.json");
+        let prefs = Prefs {
+            usage_id: Some("0f8fad5b-d9cb-469f-a165-70867728950e".into()),
+            ..Prefs::default()
+        };
+        prefs.save(Some(&path)).unwrap();
+        assert_eq!(Prefs::load(Some(&path)), prefs);
     }
 
     #[test]
@@ -108,6 +124,7 @@ mod tests {
         let prefs = Prefs {
             show_completed: true,
             base_url: Some("https://nestodo.example.com/".into()),
+            usage_id: None,
         };
         prefs.save(Some(&path)).unwrap();
         assert_eq!(Prefs::load(Some(&path)), prefs);
@@ -124,6 +141,7 @@ mod tests {
             Prefs {
                 show_completed: false,
                 base_url: None,
+                usage_id: None,
             }
         );
     }
@@ -149,6 +167,7 @@ mod tests {
         let saved = Prefs {
             show_completed: true,
             base_url: Some("https://nestodo.example.com/".into()),
+            usage_id: None,
         };
         saved.save(Some(&path)).unwrap();
         fs::create_dir(path.with_extension("json.tmp")).unwrap();
@@ -156,6 +175,7 @@ mod tests {
         let failed = Prefs {
             show_completed: false,
             base_url: None,
+            usage_id: None,
         }
         .save(Some(&path));
 
