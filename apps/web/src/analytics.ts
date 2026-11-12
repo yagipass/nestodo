@@ -1,4 +1,7 @@
 import posthog, { type CaptureResult, type Properties } from "posthog-js";
+import { projectToken } from "./analytics-token";
+
+export { analyticsAvailable } from "./analytics-token";
 
 function withoutQuery(value: unknown) {
   if (typeof value !== "string" || !/^https?:\/\//i.test(value) || !URL.canParse(value)) return value;
@@ -23,16 +26,8 @@ function withoutQueriesOrReferrers(event: CaptureResult): CaptureResult {
   };
 }
 
-function projectToken() {
-  return import.meta.env.VITE_POSTHOG_PROJECT_TOKEN;
-}
-
 function sendingToken() {
   return import.meta.env.DEV ? undefined : projectToken();
-}
-
-export function analyticsAvailable() {
-  return Boolean(projectToken());
 }
 
 export function applyAnalyticsConsent(enabled: boolean) {

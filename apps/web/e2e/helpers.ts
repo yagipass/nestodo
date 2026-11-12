@@ -221,6 +221,18 @@ export class Session {
   removeWebhook() {
     return this.request("/settings?remove", { method: "DELETE", page: true });
   }
+
+  apiWebhook() {
+    return this.request("/api/v1/webhook", { origin: null });
+  }
+
+  apiSaveWebhook(body: { url: string; urlSecret?: boolean; token: string | null; headers?: WebhookHeader[]; project: string }) {
+    return this.request("/api/v1/webhook", { method: "PUT", origin: null, body: { urlSecret: true, headers: [], ...body } });
+  }
+
+  apiRemoveWebhook() {
+    return this.request("/api/v1/webhook", { method: "DELETE", origin: null });
+  }
 }
 
 export async function signedInUser(email = `${randomUUID()}@e2e.test`) {
