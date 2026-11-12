@@ -12,7 +12,7 @@ use crate::ui::backend::Backend;
 use crate::ui::icons::Icon;
 use crate::ui::text_field::{FieldEvent, TextField};
 use crate::ui::theme::{Theme, theme};
-use crate::ui::widgets::{PAGE_WIDTH, icon, icon_button};
+use crate::ui::widgets::{PAGE_WIDTH, icon, icon_button, sheet_shadow};
 
 actions!(settings, [SaveWebhook, CancelWebhook]);
 
@@ -542,14 +542,16 @@ impl SettingsView {
 
 fn card(colors: &Theme) -> Div {
     div()
-        .p(px(16.))
+        .px(px(20.))
+        .py(px(18.))
         .flex()
         .flex_col()
         .gap(px(12.))
         .border_1()
         .border_color(colors.border)
-        .rounded(px(8.))
+        .rounded(px(16.))
         .bg(colors.surface)
+        .shadow(sheet_shadow(colors))
 }
 
 fn heading(text: &'static str) -> Div {
@@ -595,7 +597,7 @@ fn field_box(field: &Entity<TextField>, invalid: bool, colors: &Theme) -> Div {
         } else {
             colors.border
         })
-        .rounded(px(6.))
+        .rounded(px(10.))
         .bg(colors.bg)
         .text_size(px(14.))
         .line_height(px(20.))
@@ -616,9 +618,9 @@ fn pill(
         .px(px(14.))
         .flex()
         .items_center()
-        .rounded(px(16.))
+        .rounded(px(10.))
         .bg(colors.accent)
-        .text_color(gpui::white())
+        .text_color(colors.on_accent)
         .text_size(px(14.))
         .font_weight(FontWeight::SEMIBOLD)
         .when(enabled, |pill| {
@@ -641,7 +643,7 @@ fn text_button(
         .flex_none()
         .px(px(10.))
         .py(px(6.))
-        .rounded(px(6.))
+        .rounded(px(10.))
         .text_size(px(14.))
         .text_color(if danger { colors.danger } else { colors.accent })
         .when(enabled, |button| {
@@ -670,7 +672,7 @@ fn checkbox(
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(4.))
+                .rounded(px(5.))
                 .border_1()
                 .border_color(if checked {
                     colors.accent
@@ -679,7 +681,7 @@ fn checkbox(
                 })
                 .bg(if checked { colors.accent } else { colors.bg })
                 .when(checked, |check| {
-                    check.child(icon(Icon::Check, 12., gpui::white()))
+                    check.child(icon(Icon::Tick, 11., colors.on_accent))
                 }),
         )
         .child(div().text_size(px(13.)).child(text))
@@ -786,7 +788,7 @@ impl SettingsView {
                             })),
                     )
                     .child(
-                        icon_button(("remove-header", index), Icon::Close, 14., cx).on_click(
+                        icon_button(("remove-header", index), Icon::Close, 16., cx).on_click(
                             cx.listener(move |this, _, _, cx| this.remove_header(index, cx)),
                         ),
                     )
@@ -841,7 +843,7 @@ impl SettingsView {
                             .child(field_box(&editor.token, token_error.is_some(), &colors))
                             .when(form.token_kept(), |row| {
                                 row.child(
-                                    icon_button("remove-token", Icon::Close, 14., cx).on_click(
+                                    icon_button("remove-token", Icon::Close, 16., cx).on_click(
                                         cx.listener(|this, _, _, cx| this.remove_token(cx)),
                                     ),
                                 )
