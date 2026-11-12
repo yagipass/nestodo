@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -21,11 +22,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -54,6 +55,10 @@ import io.github.yagipass.nestodo.domain.WebhookForm
 import io.github.yagipass.nestodo.domain.WebhookHeader
 
 private const val HIDDEN = "••••••••"
+
+private val ButtonShape = RoundedCornerShape(10.dp)
+
+private val FieldShape = RoundedCornerShape(12.dp)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -97,8 +102,8 @@ fun SettingsScreen(
                         Modifier.fillMaxSize()
                             .imePadding()
                             .verticalScroll(rememberScrollState())
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                            .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         WebhookCard(settings, viewModel)
                         if (settings.analytics.available) AnalyticsCard(settings, viewModel)
@@ -114,7 +119,11 @@ private fun SettingsCard(
     action: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
-    OutlinedCard(Modifier.fillMaxWidth()) {
+    Surface(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -155,7 +164,7 @@ private fun WebhookCard(settings: SettingsState.Loaded, viewModel: TodoViewModel
         title = "Webhook",
         action =
             if (settings.webhooks.available && webhook != null && form == null) {
-                { Button(onClick = viewModel::editWebhook) { Text("Edit") } }
+                { Button(onClick = viewModel::editWebhook, shape = ButtonShape) { Text("Edit") } }
             } else null,
     ) {
         Note(
@@ -270,6 +279,7 @@ private fun WebhookFormFields(
             value = form.url,
             onValueChange = { change(form.copy(url = it)) },
             modifier = Modifier.fillMaxWidth(),
+            shape = FieldShape,
             label = { Text("URL") },
             placeholder = {
                 Text(
@@ -299,6 +309,7 @@ private fun WebhookFormFields(
             value = form.token.orEmpty(),
             onValueChange = { change(form.copy(token = it)) },
             modifier = Modifier.fillMaxWidth(),
+            shape = FieldShape,
             label = { Text("Token") },
             placeholder = { Text(if (form.tokenKept) HIDDEN else "Optional") },
             singleLine = true,
@@ -323,7 +334,9 @@ private fun WebhookFormFields(
         form.headers.forEachIndexed { index, header ->
             HeaderFields(form, index, header, change)
         }
-        TextButton(onClick = { change(form.withNewHeader()) }) { Text("Add header") }
+        TextButton(shape = ButtonShape, onClick = { change(form.withNewHeader()) }) {
+            Text("Add header")
+        }
         errors["headers"]?.let { Problem(it) }
         Hint(
             "A secret value is never shown again." +
@@ -336,6 +349,7 @@ private fun WebhookFormFields(
             value = form.project,
             onValueChange = { change(form.copy(project = it)) },
             modifier = Modifier.fillMaxWidth(),
+            shape = FieldShape,
             label = { Text("Project") },
             singleLine = true,
             isError = errors["project"] != null,
@@ -348,12 +362,22 @@ private fun WebhookFormFields(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Button(onClick = viewModel::saveWebhook, enabled = !settings.saving) { Text("Save") }
+        Button(onClick = viewModel::saveWebhook, enabled = !settings.saving, shape = ButtonShape) {
+            Text("Save")
+        }
         if (form.existing != null) {
-            TextButton(onClick = viewModel::cancelWebhook, enabled = !settings.saving) {
+            TextButton(
+                shape = ButtonShape,
+                onClick = viewModel::cancelWebhook,
+                enabled = !settings.saving,
+            ) {
                 Text("Cancel")
             }
-            TextButton(onClick = { confirming = true }, enabled = !settings.saving) {
+            TextButton(
+                shape = ButtonShape,
+                onClick = { confirming = true },
+                enabled = !settings.saving,
+            ) {
                 Text("Remove", color = MaterialTheme.colorScheme.error)
             }
         }
@@ -392,6 +416,7 @@ private fun HeaderFields(
             value = header.name,
             onValueChange = { change(form.withHeader(index, header.copy(name = it))) },
             modifier = Modifier.fillMaxWidth(),
+            shape = FieldShape,
             label = { Text("Header $number name") },
             placeholder = { Text("Name") },
             singleLine = true,
@@ -401,6 +426,7 @@ private fun HeaderFields(
             value = header.value,
             onValueChange = { change(form.withHeader(index, header.copy(value = it))) },
             modifier = Modifier.fillMaxWidth(),
+            shape = FieldShape,
             label = { Text("Header $number value") },
             placeholder = { Text(if (form.valueKept(header)) HIDDEN else "Value") },
             singleLine = true,
@@ -411,7 +437,7 @@ private fun HeaderFields(
             SecretToggle("Keep header $number secret", header.secret) {
                 change(form.withHeader(index, header.copy(secret = it)))
             }
-            TextButton(onClick = { change(form.withoutHeader(index)) }) {
+            TextButton(shape = ButtonShape, onClick = { change(form.withoutHeader(index)) }) {
                 Text("Remove header $number")
             }
         }
