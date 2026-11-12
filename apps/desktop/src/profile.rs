@@ -49,9 +49,19 @@ fn upright_square(bytes: &[u8]) -> Result<DynamicImage, Error> {
         return Err(Error::Invalid(TOO_LARGE.into()));
     }
     let orientation = decoder.orientation().map_err(not_decoded)?;
-    let mut square = DynamicImage::from_decoder(decoder)
-        .map_err(not_decoded)?
-        .resize_to_fill(AVATAR_SIZE, AVATAR_SIZE, FilterType::Lanczos3);
+    let image = DynamicImage::from_decoder(decoder).map_err(not_decoded)?;
+    let side = image.width().min(image.height());
+    if side == 0 {
+        return Err(unreadable("the image is empty"));
+    }
+    let mut square = image
+        .crop_imm(
+            (image.width() - side) / 2,
+            (image.height() - side) / 2,
+            side,
+            side,
+        )
+        .resize_exact(AVATAR_SIZE, AVATAR_SIZE, FilterType::Lanczos3);
     square.apply_orientation(orientation);
     Ok(square)
 }
@@ -219,6 +229,23 @@ mod tests {
         assert!(refused_as_too_large(&png_claiming(11_000, 11_000)));
         assert!(refused_as_too_large(&png_claiming(20_000, 10)));
         assert!(refused_as_too_large(&png_claiming(10, 20_000)));
+    }
+
+    #[test]
+    fn a_long_thin_strip_is_cut_to_its_middle_before_scaling_so_a_tiny_file_cannot_need_gigabytes_while_resizing()
+     {
+        let strip = encoded(
+            &DynamicImage::ImageRgb8(RgbImage::from_pixel(MAX_SOURCE_SIDE, 1, RED)),
+            ImageFormat::Png,
+        );
+
+        let square = decoded(&avatar_png(&strip).unwrap());
+
+        assert_eq!(
+            (square.width(), square.height()),
+            (AVATAR_SIZE, AVATAR_SIZE)
+        );
+        assert!(is_red(&square, 128, 128));
     }
 
     #[test]
