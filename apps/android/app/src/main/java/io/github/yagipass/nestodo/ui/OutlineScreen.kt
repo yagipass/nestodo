@@ -114,6 +114,7 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.layout
@@ -174,6 +175,7 @@ import kotlin.math.floor
 import kotlinx.coroutines.flow.filterNotNull
 
 private val RowHeight = 48.dp
+private val FabMargin = 16.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -186,8 +188,11 @@ fun OutlineScreen(
     val focusManager = LocalFocusManager.current
     val rows = state.rows
     val editing = rows.find { it.key == state.editing }
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    val navigationBars = WindowInsets.navigationBars
 
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             TopAppBar(
                 title = {
@@ -235,8 +240,10 @@ fun OutlineScreen(
                 },
                 colors =
                     TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background
+                        containerColor = MaterialTheme.colorScheme.background,
+                        scrolledContainerColor = MaterialTheme.colorScheme.background,
                     ),
+                scrollBehavior = scrollBehavior,
             )
         },
         bottomBar = {
@@ -250,7 +257,14 @@ fun OutlineScreen(
             if (editing == null && state.loaded) {
                 FloatingActionButton(
                     onClick = viewModel::add,
-                    modifier = Modifier.size(60.dp),
+                    modifier =
+                        Modifier.size(60.dp).graphicsLayer {
+                            val below =
+                                size.height + FabMargin.toPx() + navigationBars.getBottom(this)
+                            val hidden = scrollBehavior.state.collapsedFraction
+                            translationY = hidden * below
+                            alpha = 1f - hidden
+                        },
                     shape = RoundedCornerShape(15.dp),
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
