@@ -1,4 +1,8 @@
+use std::borrow::Cow;
+
 use gpui::{App, Global, Hsla, Rgba, Window, WindowAppearance, rgb};
+
+pub const FIGTREE: &str = "Figtree";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
@@ -9,8 +13,9 @@ pub struct Theme {
     pub muted: Hsla,
     pub border: Hsla,
     pub hover: Hsla,
-    pub bullet: Hsla,
+    pub guide: Hsla,
     pub accent: Hsla,
+    pub on_accent: Hsla,
     pub danger: Hsla,
     pub matched: Hsla,
     pub grid: Hsla,
@@ -18,7 +23,7 @@ pub struct Theme {
     pub accent_soft: Hsla,
     pub added: Hsla,
     pub added_strong: Hsla,
-    pub heat: [Hsla; 4],
+    pub heat: [Hsla; 5],
     pub selection: Hsla,
     pub backdrop: Hsla,
     pub shadow: Hsla,
@@ -37,60 +42,64 @@ impl Theme {
     pub fn light() -> Self {
         Self {
             dark: false,
-            bg: hsla(0xf6f6f4),
+            bg: hsla(0xf1edfa),
             surface: hsla(0xffffff),
-            text: hsla(0x1c1c1a),
-            muted: hsla(0x6b6b66),
-            border: hsla(0xe2e2dd),
-            hover: hsla(0xebebe7),
-            bullet: hsla(0x3d3d39),
-            accent: hsla(0x2f6fdb),
+            text: hsla(0x1e1a2b),
+            muted: hsla(0x665f78),
+            border: hsla(0xe2dbf1),
+            hover: hsla(0xf4f0fc),
+            guide: hsla(0xcdbcfa),
+            accent: hsla(0x53419b),
+            on_accent: hsla(0xffffff),
             danger: hsla(0xc4372b),
             matched: hsla(0xfbe3a1),
-            grid: hsla(0xecece8),
-            accent_strong: hsla(0x1d4fa8),
-            accent_soft: hsla(0xeaf1fc),
-            added: hsla(0xeb6834),
-            added_strong: hsla(0xb8461a),
+            grid: hsla(0xefebf7),
+            accent_strong: hsla(0x3b2c7a),
+            accent_soft: hsla(0xece5fd),
+            added: hsla(0xe07a2e),
+            added_strong: hsla(0xb05a1c),
             heat: [
-                hsla(0xb7d3f6),
-                hsla(0x6da7ec),
-                hsla(0x2a78d6),
-                hsla(0x184f95),
+                hsla(0xeee9f8),
+                hsla(0xdcd2f8),
+                hsla(0xae99ee),
+                hsla(0x7c61d2),
+                hsla(0x4a3a8c),
             ],
-            selection: rgba(0x2f6fdb40),
-            backdrop: rgba(0x14141361),
-            shadow: rgba(0x0000002e),
+            selection: rgba(0x53419b40),
+            backdrop: rgba(0x1e1a2b57),
+            shadow: rgba(0x2a2150ff),
         }
     }
 
     pub fn dark() -> Self {
         Self {
             dark: true,
-            bg: hsla(0x141413),
-            surface: hsla(0x1e1e1c),
-            text: hsla(0xecece8),
-            muted: hsla(0x9a9a93),
-            border: hsla(0x33332f),
-            hover: hsla(0x2a2a27),
-            bullet: hsla(0xd6d6d0),
-            accent: hsla(0x6b9cf0),
+            bg: hsla(0x17122a),
+            surface: hsla(0x211a36),
+            text: hsla(0xf3eeff),
+            muted: hsla(0xa69ec0),
+            border: hsla(0x382f55),
+            hover: hsla(0x2b2345),
+            guide: hsla(0x54469a),
+            accent: hsla(0xcdbdff),
+            on_accent: hsla(0x2a2150),
             danger: hsla(0xf07468),
             matched: hsla(0x6b5310),
-            grid: hsla(0x2c2c29),
-            accent_strong: hsla(0xa3c2f7),
-            accent_soft: hsla(0x23304a),
-            added: hsla(0xd95926),
-            added_strong: hsla(0xfea382),
+            grid: hsla(0x2e2648),
+            accent_strong: hsla(0xece5ff),
+            accent_soft: hsla(0x33295a),
+            added: hsla(0xe8894a),
+            added_strong: hsla(0xf6b585),
             heat: [
-                hsla(0x184f95),
-                hsla(0x256abf),
-                hsla(0x3987e5),
-                hsla(0x86b6ef),
+                hsla(0x2b2345),
+                hsla(0x3f3470),
+                hsla(0x5e4da6),
+                hsla(0x8f79e0),
+                hsla(0xcdbdff),
             ],
-            selection: rgba(0x6b9cf055),
-            backdrop: rgba(0x14141361),
-            shadow: rgba(0x00000066),
+            selection: rgba(0xcdbdff55),
+            backdrop: rgba(0x0806108c),
+            shadow: rgba(0x000000ff),
         }
     }
 
@@ -102,14 +111,20 @@ impl Theme {
     }
 
     pub fn heat_color(&self, level: u8) -> Hsla {
-        match level {
-            0 => self.hover,
-            level => self.heat[(level.min(4) - 1) as usize],
-        }
+        self.heat[usize::from(level.min(4))]
     }
 }
 
 impl Global for Theme {}
+
+pub fn load_fonts(cx: &App) {
+    cx.text_system()
+        .add_fonts(vec![
+            Cow::Borrowed(include_bytes!("fonts/Figtree-Bold.ttf").as_slice()),
+            Cow::Borrowed(include_bytes!("fonts/Figtree-ExtraBold.ttf").as_slice()),
+        ])
+        .expect("the bundled fonts load");
+}
 
 pub fn theme(cx: &App) -> Theme {
     *cx.global::<Theme>()

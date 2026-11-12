@@ -322,6 +322,37 @@ pub fn visible_rows(
     walk.rows
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Guide {
+    pub through: Vec<bool>,
+    pub stem: bool,
+}
+
+#[must_use]
+pub fn guides(rows: &[Row]) -> Vec<Guide> {
+    let mut followed = vec![false; rows.len()];
+    let mut later: Vec<bool> = Vec::new();
+    for (index, row) in rows.iter().enumerate().rev() {
+        followed[index] = later.get(row.depth).copied().unwrap_or(false);
+        later.resize(row.depth, false);
+        later.push(true);
+    }
+    let mut open: Vec<bool> = Vec::new();
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| {
+            open.resize(row.depth, false);
+            open.push(followed[index]);
+            Guide {
+                through: open[1..].to_vec(),
+                stem: rows
+                    .get(index + 1)
+                    .is_some_and(|next| next.depth > row.depth),
+            }
+        })
+        .collect()
+}
+
 fn shown_sibling(
     siblings: &[Key],
     from: usize,
@@ -1686,6 +1717,67 @@ mod tests {
                 .map(|row| row.key)
                 .collect();
             assert_eq!(keys, ["t1", "t3", "t4"]);
+        }
+    }
+
+    mod guides {
+        use super::*;
+
+        fn outline() -> Outline {
+            outline_of(&[
+                todo(1, "moving", None),
+                todo(2, "boxes", Some(1)),
+                todo(3, "quotes", Some(2)),
+                todo(4, "address", Some(1)),
+                todo(5, "bank", Some(4)),
+                todo(6, "tax", None),
+                todo(7, "done step", Some(6)).done(),
+            ])
+        }
+
+        fn guide(through: &[bool], stem: bool) -> Guide {
+            Guide {
+                through: through.to_vec(),
+                stem,
+            }
+        }
+
+        #[test]
+        fn each_line_runs_from_a_parents_bullet_down_to_its_last_child_and_no_further() {
+            let rows = visible_rows(&outline(), true, "", &HashSet::new());
+            assert_eq!(
+                guides(&rows),
+                [
+                    guide(&[], true),
+                    guide(&[true], true),
+                    guide(&[true, false], false),
+                    guide(&[false], true),
+                    guide(&[false, false], false),
+                    guide(&[], true),
+                    guide(&[false], false),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_parent_whose_children_are_all_hidden_gets_no_stem_so_no_line_leads_to_nothing() {
+            let rows = visible_rows(&outline(), false, "", &HashSet::new());
+            let stems: Vec<(Key, bool)> = rows
+                .iter()
+                .zip(guides(&rows))
+                .map(|(row, guide)| (row.key.clone(), guide.stem))
+                .collect();
+            assert_eq!(
+                stems,
+                [
+                    ("t1".to_owned(), true),
+                    ("t2".to_owned(), true),
+                    ("t3".to_owned(), false),
+                    ("t4".to_owned(), true),
+                    ("t5".to_owned(), false),
+                    ("t6".to_owned(), false),
+                ]
+            );
         }
     }
 }

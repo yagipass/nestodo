@@ -27,11 +27,6 @@ the Apache License, Version 2.0.
   apps/android/app/src/main/java/io/github/yagipass/nestodo/access/Metadata.kt
   apps/android/app/src/main/java/io/github/yagipass/nestodo/access/Transfer.kt
 
-Material Icons by Google
-https://github.com/google/material-design-icons
-The person icon in apps/desktop/src/ui/icons.rs comes from Material Icons and is
-under the Apache License, Version 2.0.
-
 GPUI by Zed Industries
 https://github.com/zed-industries/zed
 The text input in apps/desktop/src/ui/text_field.rs started from the input
@@ -46,6 +41,8 @@ SIL Open Font License, Version 1.1.
   apps/web/src/fonts/Figtree-ExtraBold.woff2
   apps/android/app/src/main/res/font/figtree_bold.ttf
   apps/android/app/src/main/res/font/figtree_extrabold.ttf
+  apps/desktop/src/ui/fonts/Figtree-Bold.ttf
+  apps/desktop/src/ui/fonts/Figtree-ExtraBold.ttf
 
 --------------------------------------------------------------------------------
 

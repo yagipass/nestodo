@@ -6,9 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
-    KeyBinding, MouseButton, MouseDownEvent, Pixels, PromptLevel, SharedString, Subscription,
-    WeakEntity, Window, WindowHandle, actions, canvas, deferred, div, img, prelude::*, px,
+    AnyElement, AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle, Focusable, Font,
+    FontFallbacks, FontWeight, KeyBinding, MouseButton, MouseDownEvent, Pixels, PromptLevel,
+    SharedString, Subscription, WeakEntity, Window, WindowHandle, actions, canvas, deferred, div,
+    img, prelude::*, px,
 };
 use url::Url;
 
@@ -27,7 +28,7 @@ use crate::ui::settings_view::{SettingsEvent, SettingsView};
 use crate::ui::shortcuts::shortcuts_dialog;
 use crate::ui::stats_view::StatsView;
 use crate::ui::text_field::{FieldEvent, TextField};
-use crate::ui::theme::{sync_theme, theme};
+use crate::ui::theme::{FIGTREE, sync_theme, theme};
 use crate::ui::widgets::{
     NAMED_TITLE_BAR_WIDTH, TITLE_BAR_HEIGHT, TRAFFIC_LIGHTS_WIDTH, icon, icon_button, modal, shadow,
 };
@@ -810,16 +811,20 @@ impl Root {
                 .w_full()
                 .h(px(36.))
                 .px(px(10.))
-                .rounded(px(5.))
+                .rounded(px(9.))
                 .text_size(px(14.))
                 .text_color(colors.text)
                 .cursor_pointer()
                 .when(current, |item| item.font_weight(FontWeight::SEMIBOLD))
                 .hover(move |style| style.bg(colors.hover))
-                .child(icon(glyph, 16., colors.muted))
+                .child(icon(
+                    glyph,
+                    18.,
+                    if current { colors.accent } else { colors.muted },
+                ))
                 .child(label)
         };
-        let separator = || div().h(px(1.)).my(px(4.)).bg(colors.border);
+        let separator = || div().h(px(1.)).mx(px(6.)).my(px(4.)).bg(colors.border);
         let account_bounds = self.account_bounds.clone();
         deferred(
             div()
@@ -830,11 +835,11 @@ impl Root {
                 .absolute()
                 .top(px(38.))
                 .right_0()
-                .w(px(200.))
-                .p(px(4.))
+                .w(px(236.))
+                .p(px(6.))
                 .border_1()
                 .border_color(colors.border)
-                .rounded(px(8.))
+                .rounded(px(14.))
                 .bg(colors.surface)
                 .shadow(shadow(&colors, false))
                 .occlude()
@@ -857,13 +862,15 @@ impl Root {
                         .px(px(10.))
                         .py(px(8.))
                         .text_size(px(14.))
-                        .text_color(colors.muted)
+                        .text_color(colors.text)
                         .children(workspace_email.map(|email| div().truncate().child(email)))
-                        .children(
-                            self.base
-                                .as_ref()
-                                .map(|base| div().truncate().child(api::label(base))),
-                        ),
+                        .children(self.base.as_ref().map(|base| {
+                            div()
+                                .truncate()
+                                .text_size(px(12.))
+                                .text_color(colors.muted)
+                                .child(api::label(base))
+                        })),
                 )
                 .child(separator())
                 .child(
@@ -914,7 +921,7 @@ impl Root {
             .h(px(TITLE_BAR_HEIGHT))
             .flex()
             .items_center()
-            .gap(px(12.))
+            .gap(px(6.))
             .pl(px(if window.is_fullscreen() {
                 16.
             } else {
@@ -955,57 +962,56 @@ impl Root {
         let bounds = self.account_bounds.clone();
         let open = self.menu_open;
         let named = window.viewport_size().width >= px(NAMED_TITLE_BAR_WIDTH);
-        bar.border_b_1()
-            .border_color(colors.border)
-            .child(
-                div()
-                    .id("brand")
-                    .debug_selector(|| "brand".into())
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .cursor_pointer()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_page(Page::Todos, window, cx);
-                    }))
-                    .child(img(APP_ICON).size(px(24.)).flex_none())
-                    .when(named, |brand| {
-                        brand.child(
-                            div()
-                                .text_size(px(16.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(colors.text)
-                                .child("Nestodo"),
-                        )
-                    }),
-            )
-            .child(div().flex_1())
-            .children(tools)
-            .child(
-                div()
-                    .relative()
-                    .flex()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                        icon_button("account", Icon::Person, 20., cx)
-                            .debug_selector(|| "account".into())
-                            .when(open, |button| button.bg(colors.hover))
-                            .child(
-                                canvas(
-                                    move |bounds_now, _, _| bounds.set(bounds_now),
-                                    |_, (), _, _| {},
-                                )
-                                .absolute()
-                                .size_full(),
-                            )
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_menu(window, cx);
-                            })),
+        bar.child(
+            div()
+                .id("brand")
+                .debug_selector(|| "brand".into())
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.show_page(Page::Todos, window, cx);
+                }))
+                .child(img(APP_ICON).size(px(24.)).flex_none())
+                .when(named, |brand| {
+                    brand.child(
+                        div()
+                            .font_family(FIGTREE)
+                            .text_size(px(17.))
+                            .font_weight(FontWeight::EXTRA_BOLD)
+                            .text_color(colors.text)
+                            .child("Nestodo"),
                     )
-                    .children(menu),
-            )
-            .into_any_element()
+                }),
+        )
+        .child(div().flex_1())
+        .children(tools)
+        .child(
+            div()
+                .relative()
+                .flex()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    icon_button("account", Icon::Account, 19., cx)
+                        .debug_selector(|| "account".into())
+                        .when(open, |button| button.bg(colors.hover))
+                        .child(
+                            canvas(
+                                move |bounds_now, _, _| bounds.set(bounds_now),
+                                |_, (), _, _| {},
+                            )
+                            .absolute()
+                            .size_full(),
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_menu(window, cx);
+                        })),
+                )
+                .children(menu),
+        )
+        .into_any_element()
     }
 
     fn render_server_line(&self, cx: &Context<Self>) -> AnyElement {
@@ -1027,10 +1033,11 @@ impl Root {
                 div()
                     .id("change-server")
                     .flex_none()
-                    .px(px(12.))
+                    .px(px(10.))
                     .py(px(8.))
-                    .rounded(px(6.))
+                    .rounded(px(10.))
                     .text_size(px(14.))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(colors.accent)
                     .cursor_pointer()
                     .hover(move |style| style.bg(colors.hover))
@@ -1060,9 +1067,9 @@ impl Root {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(26.))
+                .rounded(px(16.))
                 .bg(colors.accent)
-                .text_color(gpui::white())
+                .text_color(colors.on_accent)
                 .text_size(px(16.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .when(enabled, |button| {
@@ -1078,8 +1085,9 @@ impl Root {
                 .id(id)
                 .px(px(12.))
                 .py(px(8.))
-                .rounded(px(6.))
+                .rounded(px(10.))
                 .text_size(px(14.))
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(colors.accent)
                 .when(enabled, |link| {
                     link.cursor_pointer()
@@ -1140,7 +1148,7 @@ impl Root {
                                         } else {
                                             colors.border
                                         })
-                                        .rounded(px(8.))
+                                        .rounded(px(10.))
                                         .bg(colors.surface)
                                         .text_size(px(16.))
                                         .line_height(px(22.))
@@ -1247,12 +1255,13 @@ impl Root {
                             .flex_col()
                             .items_center()
                             .justify_center()
-                            .gap(px(16.))
-                            .child(img(APP_ICON).size(px(80.)))
+                            .gap(px(14.))
+                            .child(img(APP_ICON).size(px(88.)))
                             .child(
                                 div()
-                                    .text_size(px(32.))
-                                    .font_weight(FontWeight::BOLD)
+                                    .font_family(FIGTREE)
+                                    .text_size(px(38.))
+                                    .font_weight(FontWeight::EXTRA_BOLD)
                                     .child("Nestodo"),
                             )
                             .child(
@@ -1282,6 +1291,12 @@ impl Root {
             )
             .into_any_element()
     }
+}
+
+fn body_font() -> Font {
+    let mut body = gpui::font(".SystemUIFont");
+    body.fallbacks = Some(FontFallbacks::from_fonts(vec!["Hiragino Sans".to_owned()]));
+    body
 }
 
 impl Focusable for Root {
@@ -1354,7 +1369,7 @@ impl Render for Root {
             .size_full()
             .bg(colors.bg)
             .text_color(colors.text)
-            .font_family(".SystemUIFont")
+            .font(body_font())
             .line_height(gpui::relative(1.25))
             .text_size(px(16.))
             .on_mouse_down(MouseButton::Left, |_, _, _| {})

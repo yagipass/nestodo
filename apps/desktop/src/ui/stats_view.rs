@@ -11,11 +11,12 @@ use nestodo_desktop::stats::{
 };
 
 use crate::ui::backend::Backend;
-use crate::ui::theme::{Theme, theme};
-use crate::ui::widgets::PAGE_WIDTH;
+use crate::ui::theme::{FIGTREE, Theme, theme};
+use crate::ui::widgets::{PAGE_WIDTH, sheet_shadow};
 
 const WEEKDAY_LABELS: [&str; 7] = ["", "Mon", "", "Wed", "", "Fri", ""];
 const TICK_GUTTER: f32 = 28.;
+const CARD_PADDING: f32 = 20.;
 
 enum Load {
     Loading,
@@ -98,11 +99,13 @@ impl StatsView {
 
     fn card(colors: &Theme) -> gpui::Div {
         div()
-            .p(px(16.))
+            .px(px(CARD_PADDING))
+            .py(px(18.))
             .border_1()
             .border_color(colors.border)
-            .rounded(px(8.))
+            .rounded(px(16.))
             .bg(colors.surface)
+            .shadow(sheet_shadow(colors))
     }
 
     fn render_calendar(&self, days: &[Day], width: Pixels, cx: &mut Context<Self>) -> AnyElement {
@@ -113,7 +116,7 @@ impl StatsView {
             .map_or(0, |first| first.weekday().num_days_from_sunday() as usize);
         let weeks = (blanks + days.len()).div_ceil(7);
         let gap = px(3.);
-        let inner = width - px(32.) - px(2.);
+        let inner = width - px(2. * CARD_PADDING) - px(2.);
         let cell = ((inner - px(TICK_GUTTER) - gap * weeks as f32) / weeks as f32).max(px(4.));
         let activity = |day: &Day| day.added + day.completed;
         let busiest = days.iter().map(activity).max().unwrap_or(0);
@@ -155,7 +158,7 @@ impl StatsView {
                 .left(column_x(slot / 7))
                 .top(px(18.) + (cell + gap) * (slot % 7) as f32)
                 .size(cell)
-                .rounded(px(3.))
+                .rounded(px(4.))
                 .bg(colors.heat_color(level))
                 .when(hovered == Some(index), |cell| {
                     cell.border_2().border_color(colors.text)
@@ -238,7 +241,7 @@ impl StatsView {
 
     fn render_chart(&self, days: &[Day], width: Pixels, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme(cx);
-        let plot_width = width - px(32.) - px(2.) - px(TICK_GUTTER);
+        let plot_width = width - px(2. * CARD_PADDING) - px(2.) - px(TICK_GUTTER);
         let count = days.len().max(1);
         let scale = ticks(
             days.iter()
@@ -366,7 +369,7 @@ impl StatsView {
                     .py(px(6.))
                     .border_1()
                     .border_color(colors.border)
-                    .rounded(px(6.))
+                    .rounded(px(10.))
                     .bg(colors.surface)
                     .text_size(px(12.))
                     .line_height(px(17.))
@@ -405,9 +408,9 @@ impl StatsView {
                 )
         });
         let levels: Vec<f32> = days.iter().map(|day| day.open as f32 / open_top).collect();
-        let line_color = colors.bullet;
-        let mut area_color = colors.bullet;
-        area_color.a = 0.08;
+        let line_color = colors.accent;
+        let mut area_color = colors.accent;
+        area_color.a = 0.12;
         let points = {
             let levels = levels.clone();
             move |bounds: gpui::Bounds<Pixels>| -> Vec<gpui::Point<Pixels>> {
@@ -520,7 +523,7 @@ impl StatsView {
                 .overflow_y_scroll()
                 .border_1()
                 .border_color(colors.border)
-                .rounded(px(6.))
+                .rounded(px(10.))
                 .text_size(px(13.))
                 .child(
                     div()
@@ -553,7 +556,7 @@ impl StatsView {
                 .flex()
                 .items_center()
                 .gap(px(6.))
-                .child(div().size(px(10.)).rounded(px(2.)).bg(color))
+                .child(div().size(px(10.)).rounded(px(3.)).bg(color))
                 .child(label)
         };
 
@@ -644,13 +647,13 @@ impl StatsView {
                     .child(
                         div()
                             .absolute()
-                            .left(focus_x - px(4.5))
-                            .top(dot_y - px(4.5))
-                            .size(px(9.))
+                            .left(focus_x - px(8.))
+                            .top(dot_y - px(8.))
+                            .size(px(16.))
                             .rounded_full()
-                            .border_2()
+                            .border(px(3.))
                             .border_color(colors.surface)
-                            .bg(colors.bullet),
+                            .bg(colors.accent),
                     )
                     .child(
                         edge_aligned(
@@ -806,7 +809,7 @@ impl Render for StatsView {
                                 div()
                                     .id(("range", value))
                                     .h(px(34.))
-                                    .px(px(12.))
+                                    .px(px(14.))
                                     .flex()
                                     .items_center()
                                     .border_1()
@@ -815,8 +818,13 @@ impl Render for StatsView {
                                     } else {
                                         colors.border
                                     })
-                                    .rounded(px(6.))
-                                    .bg(colors.surface)
+                                    .rounded(px(10.))
+                                    .bg(if pressed {
+                                        colors.accent_soft
+                                    } else {
+                                        colors.surface
+                                    })
+                                    .when(pressed, |pill| pill.font_weight(FontWeight::SEMIBOLD))
                                     .text_size(px(14.))
                                     .text_color(if pressed { colors.accent } else { colors.muted })
                                     .cursor_pointer()
@@ -837,7 +845,7 @@ impl Render for StatsView {
                                     .py(px(12.))
                                     .border_1()
                                     .border_color(colors.border)
-                                    .rounded(px(8.))
+                                    .rounded(px(12.))
                                     .bg(colors.surface)
                                     .child(
                                         div()
@@ -848,9 +856,10 @@ impl Render for StatsView {
                                     .child(
                                         div()
                                             .mt(px(2.))
-                                            .text_size(px(24.))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .line_height(px(31.))
+                                            .font_family(FIGTREE)
+                                            .text_size(px(26.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .line_height(px(32.))
                                             .child(value),
                                     )
                                     .child(

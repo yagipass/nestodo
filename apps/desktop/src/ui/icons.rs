@@ -4,92 +4,92 @@ use gpui::{AssetSource, Result, SharedString};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
-    Search,
+    Filter,
     Close,
-    ShowCompleted,
-    Person,
+    Completed,
+    Account,
     Stats,
     Settings,
     Help,
     SignOut,
     Server,
-    Chevron,
+    Expand,
     Note,
-    Check,
+    Done,
+    Link,
+    Add,
+    Tick,
 }
 
 impl Icon {
     pub fn path(self) -> SharedString {
         SharedString::new_static(match self {
-            Icon::Search => "icons/search.svg",
+            Icon::Filter => "icons/filter.svg",
             Icon::Close => "icons/close.svg",
-            Icon::ShowCompleted => "icons/show-completed.svg",
-            Icon::Person => "icons/person.svg",
+            Icon::Completed => "icons/completed.svg",
+            Icon::Account => "icons/account.svg",
             Icon::Stats => "icons/stats.svg",
             Icon::Settings => "icons/settings.svg",
             Icon::Help => "icons/help.svg",
             Icon::SignOut => "icons/sign-out.svg",
             Icon::Server => "icons/server.svg",
-            Icon::Chevron => "icons/chevron.svg",
+            Icon::Expand => "icons/expand.svg",
             Icon::Note => "icons/note.svg",
-            Icon::Check => "icons/check.svg",
+            Icon::Done => "icons/done.svg",
+            Icon::Link => "icons/link.svg",
+            Icon::Add => "icons/add.svg",
+            Icon::Tick => "icons/tick.svg",
         })
     }
 }
 
-fn stroked(width: &str, linejoin: bool, body: &str) -> String {
-    let join = if linejoin {
-        r#" stroke-linejoin="round""#
-    } else {
-        ""
-    };
+fn line(width: &str, body: &str) -> String {
     format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="{width}" stroke-linecap="round"{join}>{body}</svg>"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="{width}" stroke-linecap="round" stroke-linejoin="round">{body}</svg>"#
     )
 }
 
 fn svg_for(path: &str) -> Option<String> {
     Some(match path {
-        "icons/search.svg" => stroked(
+        "icons/filter.svg" => line(
             "2",
-            false,
-            r#"<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>"#,
+            r#"<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 20 20"/>"#,
         ),
-        "icons/close.svg" => stroked("2", false, r#"<path d="M6 6l12 12M18 6L6 18"/>"#),
-        "icons/show-completed.svg" => stroked(
+        "icons/close.svg" => line("2", r#"<path d="M7 7l10 10M17 7 7 17"/>"#),
+        "icons/completed.svg" => line(
             "2",
-            true,
-            r#"<circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>"#,
+            r#"<rect x="3.5" y="3.5" width="17" height="17" rx="5"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/>"#,
         ),
-        "icons/person.svg" => r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="black"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>"#.to_string(),
-        "icons/stats.svg" => stroked("2", false, r#"<path d="M5 20v-8M12 20V4M19 20V9"/>"#),
-        "icons/settings.svg" => stroked(
+        "icons/account.svg" => line(
             "2",
-            false,
-            r#"<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>"#,
+            r#"<circle cx="12" cy="8.5" r="3.5"/><path d="M5.5 19.5c1.2-3 3.7-4.5 6.5-4.5s5.3 1.5 6.5 4.5"/>"#,
         ),
-        "icons/help.svg" => stroked(
+        "icons/stats.svg" => line("2", r#"<path d="M5.5 19.5v-5M12 19.5v-9M18.5 19.5v-14"/>"#),
+        "icons/settings.svg" => line(
             "2",
-            true,
-            r#"<circle cx="12" cy="12" r="9"/><path d="M9.6 9.2a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .9-1 1.6v.4M12 17h.01"/>"#,
+            r#"<path d="M4 8h16M4 16h16"/><circle cx="15" cy="8" r="2" fill="black"/><circle cx="9" cy="16" r="2" fill="black"/>"#,
         ),
-        "icons/sign-out.svg" => stroked(
+        "icons/help.svg" => line(
             "2",
-            true,
-            r#"<path d="M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4M16 17l5-5-5-5M21 12H9"/>"#,
+            r#"<rect x="3.5" y="3.5" width="17" height="17" rx="5"/><path d="M9.8 9.6a2.3 2.3 0 1 1 3.1 2.1c-.6.3-.9.8-.9 1.4v.3"/><circle cx="12" cy="16.4" r=".6" fill="black"/>"#,
         ),
-        "icons/server.svg" => stroked(
+        "icons/sign-out.svg" => line(
             "2",
-            true,
-            r#"<rect x="4" y="4" width="16" height="6" rx="1.5"/><rect x="4" y="14" width="16" height="6" rx="1.5"/><path d="M8 7h.01M8 17h.01"/>"#,
+            r#"<path d="M10 4H7.5A3.5 3.5 0 0 0 4 7.5v9A3.5 3.5 0 0 0 7.5 20H10M15 8l4 4-4 4M19 12h-9"/>"#,
         ),
-        "icons/chevron.svg" => stroked("2.4", true, r#"<path d="M9 6l6 6-6 6"/>"#),
-        "icons/note.svg" => stroked(
+        "icons/server.svg" => line(
             "2",
-            true,
-            r#"<path d="M6 3h9l4 4v14H6zM15 3v4h4M9 12h7M9 16h5"/>"#,
+            r#"<rect x="3.5" y="4" width="17" height="6.5" rx="2.5"/><rect x="3.5" y="13.5" width="17" height="6.5" rx="2.5"/><circle cx="7.5" cy="7.25" r=".5" fill="black"/><circle cx="7.5" cy="16.75" r=".5" fill="black"/>"#,
         ),
-        "icons/check.svg" => stroked("2.4", true, r#"<path d="M5 12l5 5 9-10"/>"#),
+        "icons/expand.svg" => line("2.2", r#"<path d="M9.5 6.5 15 12l-5.5 5.5"/>"#),
+        "icons/note.svg" => line(
+            "2",
+            r#"<rect x="4.5" y="3.5" width="15" height="17" rx="4"/><circle cx="9" cy="9" r=".75" fill="black"/><path d="M12.5 9h3M9 13.5h6.5M9 17h3.5"/>"#,
+        ),
+        "icons/done.svg" => line("2", r#"<rect x="4" y="4" width="16" height="16" rx="5"/>"#),
+        "icons/link.svg" => line("2.6", r#"<path d="M8 16 16 8M10 8h6v6"/>"#),
+        "icons/add.svg" => line("2", r#"<path d="M12 5.5v13M5.5 12h13"/>"#),
+        "icons/tick.svg" => line("3.6", r#"<path d="M5 12l5 5 9-10"/>"#),
         APP_ICON => include_str!("../../../web/public/icon.svg").to_string(),
         _ => return None,
     })

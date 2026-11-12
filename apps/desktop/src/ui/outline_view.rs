@@ -4,18 +4,19 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, FocusHandle, Focusable, Hsla, KeyBinding,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, PromptLevel, Radians,
-    ScrollHandle, SharedString, StrikethroughStyle, StyledText, Subscription, Task, TextLayout,
-    TextRun, Transformation, Window, actions, canvas, div, fill, point, prelude::*, px, size,
+    AnyElement, App, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable, Font, FontWeight,
+    Hsla, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, PromptLevel,
+    Radians, ScrollHandle, SharedString, StrikethroughStyle, StyledText, Subscription, Task,
+    TextLayout, TextRun, Transformation, TransformationMatrix, Window, actions, canvas, div, fill,
+    point, prelude::*, px, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
 use nestodo_desktop::error::Error;
 use nestodo_desktop::outline::{
-    END, Focus, Key, Outline, ROOT, Row, append, caret_in, destinations, indent, key_for,
-    merge_into_previous, move_by, move_to, outdent, remove, rename, set_collapsed, set_note, split,
-    subtree, toggle_done, visible_rows,
+    END, Focus, Guide, Key, Outline, ROOT, Row, append, caret_in, destinations, guides, indent,
+    key_for, merge_into_previous, move_by, move_to, outdent, remove, rename, set_collapsed,
+    set_note, split, subtree, toggle_done, visible_rows,
 };
 use nestodo_desktop::sync::Sync;
 use nestodo_desktop::title::{link_label, link_target, tokens};
@@ -29,7 +30,7 @@ use crate::ui::icons::Icon;
 use crate::ui::move_picker::{MovePicker, PickerEvent};
 use crate::ui::text_field::{FieldEvent, TextField, offset_from_utf16, offset_to_utf16};
 use crate::ui::theme::{Theme, theme};
-use crate::ui::widgets::{PAGE_WIDTH, Tooltip, icon, icon_button, kbd, modal};
+use crate::ui::widgets::{PAGE_WIDTH, Tooltip, icon, icon_button, kbd, modal, sheet_shadow};
 
 actions!(
     outline,
@@ -171,6 +172,7 @@ struct Mirror {
     runs: Vec<TextRun>,
     segments: Vec<Segment>,
     backgrounds: Vec<(Range<usize>, Hsla, Pixels, Pixels)>,
+    icons: Vec<Range<usize>>,
 }
 
 struct Segment {
@@ -203,6 +205,7 @@ impl Mirror {
 }
 
 const THIN: &str = "\u{2009}";
+const ICON_SLOT: &str = "\u{2003}";
 
 fn mirror_for(
     text: &str,
@@ -211,9 +214,8 @@ fn mirror_for(
     base: Hsla,
     struck: bool,
     chips: bool,
-    window: &Window,
+    font: &Font,
 ) -> Mirror {
-    let font = window.text_style().font();
     let strikethrough = struck.then_some(StrikethroughStyle {
         thickness: px(1.),
         color: Some(base),
@@ -222,20 +224,27 @@ fn mirror_for(
     let mut runs = Vec::new();
     let mut segments = Vec::new();
     let mut backgrounds = Vec::new();
+    let mut icons = Vec::new();
     for part in tokens(text, query) {
         let start = display.len();
         if let Some(href) = &part.href {
             let label = link_label(href);
-            let shown = if chips {
-                format!("{THIN}{THIN}{label}{THIN}\u{2197}{THIN}{THIN}")
+            let (before, after) = if chips {
+                (
+                    format!("{THIN}{THIN}{label}{THIN}"),
+                    format!("{THIN}{THIN}"),
+                )
             } else {
-                format!("{label}\u{2197}")
+                (format!("{label}{THIN}"), String::new())
             };
+            let icon_at = start + before.len();
+            icons.push(icon_at..icon_at + ICON_SLOT.len());
+            let shown = format!("{before}{ICON_SLOT}{after}");
             display.push_str(&shown);
             let background = if part.matched {
                 colors.matched
             } else {
-                colors.hover
+                colors.accent_soft
             };
             runs.push(TextRun {
                 len: shown.len(),
@@ -246,7 +255,7 @@ fn mirror_for(
                 strikethrough,
             });
             if chips {
-                backgrounds.push((start..display.len(), background, px(22.), px(4.)));
+                backgrounds.push((start..display.len(), background, px(22.), px(7.)));
             }
             segments.push(Segment {
                 display: start..display.len(),
@@ -279,6 +288,7 @@ fn mirror_for(
         runs,
         segments,
         backgrounds,
+        icons,
     }
 }
 
@@ -1295,7 +1305,7 @@ impl OutlineView {
                 .flex()
                 .flex_1()
                 .items_center()
-                .gap(px(6.))
+                .gap(px(8.))
                 .w(px(280.))
                 .min_w(px(120.))
                 .h(px(32.))
@@ -1303,9 +1313,9 @@ impl OutlineView {
                 .pr(px(3.))
                 .border_1()
                 .border_color(colors.accent)
-                .rounded(px(6.))
+                .rounded(px(9.))
                 .bg(colors.surface)
-                .child(icon(Icon::Search, 16., colors.muted))
+                .child(icon(Icon::Filter, 17., colors.muted))
                 .child(
                     div()
                         .flex_1()
@@ -1322,15 +1332,15 @@ impl OutlineView {
                         .items_center()
                         .justify_center()
                         .size(px(24.))
-                        .rounded(px(4.))
+                        .rounded(px(7.))
                         .cursor_pointer()
                         .hover(move |style| style.bg(colors.hover))
                         .on_click(cx.listener(|this, _, window, cx| this.close_filter(window, cx)))
-                        .child(icon(Icon::Close, 14., colors.muted)),
+                        .child(icon(Icon::Close, 15., colors.muted)),
                 )
                 .into_any_element()
         } else {
-            icon_button("open-filter", Icon::Search, 18., cx)
+            icon_button("open-filter", Icon::Filter, 19., cx)
                 .tooltip(Tooltip::text("Filter (/)"))
                 .on_click(cx.listener(|this, _, window, cx| this.open_filter(window, cx)))
                 .into_any_element()
@@ -1344,7 +1354,7 @@ impl OutlineView {
             .items_center()
             .justify_center()
             .size(px(32.))
-            .rounded(px(6.))
+            .rounded(px(9.))
             .cursor_pointer()
             .when(pressed, |button| button.bg(colors.accent_soft))
             .when(!pressed, move |button| {
@@ -1353,14 +1363,14 @@ impl OutlineView {
             .tooltip(Tooltip::text("Show completed (Ctrl/\u{2318} O)"))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_show_done(window, cx)))
             .child(icon(
-                Icon::ShowCompleted,
-                18.,
+                Icon::Completed,
+                19.,
                 if pressed { colors.accent } else { colors.muted },
             ));
         div()
             .flex()
             .items_center()
-            .gap(px(4.))
+            .gap(px(6.))
             .min_w_0()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(filter)
@@ -1368,7 +1378,13 @@ impl OutlineView {
             .into_any_element()
     }
 
-    fn render_row(&mut self, row: &Row, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_row(
+        &mut self,
+        row: &Row,
+        guide: &Guide,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let colors = theme(cx);
         let item = self.outline.item(&row.key);
         let key = row.key.clone();
@@ -1389,17 +1405,34 @@ impl OutlineView {
             colors.text
         };
         let group: SharedString = format!("row-{key}").into();
+        let weight = if has_children {
+            FontWeight::SEMIBOLD
+        } else {
+            FontWeight::NORMAL
+        };
 
-        let guides = (0..row.depth).map(|level| {
-            div().id(level).relative().flex_none().w(px(26.)).child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px(12.))
-                    .w(px(1.))
-                    .bg(colors.border),
-            )
+        let rail = || div().absolute().left(px(12.)).w(px(2.)).bg(colors.guide);
+        let guides = guide.through.iter().enumerate().map(|(level, &through)| {
+            div()
+                .id(level)
+                .relative()
+                .flex_none()
+                .w(px(26.))
+                .when(through, |column| column.child(rail().top_0().bottom_0()))
+                .when(level + 1 == row.depth, |column| {
+                    column.child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left(px(12.))
+                            .w(px(18.))
+                            .h(px(18.))
+                            .border_l_2()
+                            .border_b_2()
+                            .border_color(colors.guide)
+                            .rounded_bl(px(9.)),
+                    )
+                })
         });
 
         let fold = has_children.then(|| {
@@ -1413,16 +1446,16 @@ impl OutlineView {
                 .items_center()
                 .justify_center()
                 .size(px(24.))
-                .rounded(px(4.))
+                .rounded(px(7.))
                 .cursor_pointer()
                 .when(!active, |fold| {
                     fold.opacity(0.)
                         .group_hover(group.clone(), |style| style.opacity(1.))
                 })
-                .hover(move |style| style.bg(colors.hover))
+                .hover(move |style| style.bg(colors.border))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| this.toggle_row(&key, window, cx)))
-                .child(icon(Icon::Chevron, 14., colors.muted).with_transformation(
+                .child(icon(Icon::Expand, 16., colors.muted).with_transformation(
                     Transformation::rotate(Radians(if item.collapsed {
                         0.
                     } else {
@@ -1436,17 +1469,18 @@ impl OutlineView {
             div()
                 .id("bullet")
                 .flex()
+                .flex_none()
                 .items_center()
                 .justify_center()
-                .size(px(24.))
-                .rounded_full()
+                .size(px(22.))
+                .rounded(px(7.))
                 .when(has_children && item.collapsed, |bullet| {
-                    bullet.bg(colors.border)
+                    bullet.bg(colors.accent_soft)
                 })
                 .when(has_children, move |bullet| {
                     bullet
                         .cursor_pointer()
-                        .hover(move |style| style.bg(colors.hover))
+                        .hover(move |style| style.bg(colors.accent_soft))
                 })
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .when(has_children, |bullet| {
@@ -1454,21 +1488,31 @@ impl OutlineView {
                         cx.listener(move |this, _, window, cx| this.toggle_row(&key, window, cx)),
                     )
                 })
-                .child(div().size(px(6.)).rounded_full().bg(if item.done {
-                    colors.muted
+                .child(if item.done {
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size(px(16.))
+                        .rounded(px(5.))
+                        .bg(colors.accent)
+                        .child(icon(Icon::Tick, 11., colors.on_accent))
                 } else {
-                    colors.bullet
-                }))
+                    div().size(px(8.)).rounded_full().bg(colors.accent)
+                })
         };
 
         let marker = div()
             .relative()
             .flex()
             .flex_none()
-            .items_center()
             .justify_center()
             .w(px(26.))
-            .h(px(34.))
+            .min_h(px(34.))
+            .pt(px(6.))
+            .when(guide.stem, |marker| {
+                marker.child(rail().top(px(21.)).bottom_0())
+            })
             .children(fold)
             .child(bullet);
 
@@ -1476,8 +1520,9 @@ impl OutlineView {
             div()
                 .relative()
                 .h(px(34.))
-                .text_size(px(16.))
+                .text_size(px(15.))
                 .line_height(px(34.))
+                .font_weight(weight)
                 .text_color(if item.done { colors.muted } else { colors.text })
                 .child(
                     div()
@@ -1489,6 +1534,8 @@ impl OutlineView {
                 )
                 .into_any_element()
         } else {
+            let mut font = window.text_style().font();
+            font.weight = weight;
             let mirror = Rc::new(mirror_for(
                 &item.title,
                 &self.query,
@@ -1496,11 +1543,12 @@ impl OutlineView {
                 base,
                 item.done,
                 true,
-                window,
+                &font,
             ));
             let text = StyledText::new(mirror.text.clone()).with_runs(mirror.runs.clone());
             let layout = text.layout().clone();
             let backgrounds = mirror.backgrounds.clone();
+            let icons = mirror.icons.clone();
             let paint_layout = layout.clone();
             let down_layout = layout.clone();
             let down_mirror = mirror.clone();
@@ -1514,15 +1562,17 @@ impl OutlineView {
                 .relative()
                 .h(px(34.))
                 .px(px(4.))
-                .text_size(px(16.))
+                .text_size(px(15.))
                 .line_height(px(34.))
+                .font_weight(weight)
                 .text_color(base)
                 .cursor_text()
                 .child(
                     canvas(
                         |_, _, _| (),
-                        move |_, (), window, _| {
+                        move |_, (), window, cx| {
                             paint_backgrounds(&paint_layout, &backgrounds, window);
+                            paint_icons(&paint_layout, &icons, colors.accent, window, cx);
                         },
                     )
                     .absolute()
@@ -1575,8 +1625,8 @@ impl OutlineView {
                             .mt(px(-4.))
                             .px(px(4.))
                             .pb(px(6.))
-                            .text_size(px(14.))
-                            .line_height(px(21.))
+                            .text_size(px(13.))
+                            .line_height(px(20.))
                             .text_color(colors.text)
                             .child(self.note_field.clone()),
                     )
@@ -1613,7 +1663,7 @@ impl OutlineView {
                 colors.muted,
                 false,
                 false,
-                window,
+                &window.text_style().font(),
             ));
             let hits = TextHits::default();
             let text = ClampedText::new(
@@ -1622,7 +1672,8 @@ impl OutlineView {
                 (!whole).then_some(2),
                 colors.muted,
                 hits.clone(),
-            );
+            )
+            .with_icons(mirror.icons.clone(), Icon::Link.path(), colors.accent);
             let note_key = key.clone();
             Some(
                 div()
@@ -1630,8 +1681,8 @@ impl OutlineView {
                     .mt(px(-4.))
                     .mb(px(6.))
                     .px(px(4.))
-                    .text_size(px(14.))
-                    .line_height(px(21.))
+                    .text_size(px(13.))
+                    .line_height(px(20.))
                     .text_color(colors.muted)
                     .cursor_text()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1681,14 +1732,14 @@ impl OutlineView {
                 .justify_center()
                 .size(px(28.))
                 .mt(px(3.))
-                .rounded(px(6.))
+                .rounded(px(8.))
                 .cursor_pointer()
                 .when(!active, |button| {
                     button
                         .opacity(0.)
                         .group_hover(group.clone(), |style| style.opacity(1.))
                 })
-                .hover(move |style| style.bg(colors.hover))
+                .hover(move |style| style.bg(colors.border))
                 .tooltip(Tooltip::text("Note (\u{21e7} Enter)"))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -1707,7 +1758,7 @@ impl OutlineView {
                         this.open_note(&key, window, cx);
                     }
                 }))
-                .child(icon(Icon::Note, 16., colors.muted))
+                .child(icon(Icon::Note, 17., colors.muted))
         };
 
         let check = {
@@ -1721,21 +1772,21 @@ impl OutlineView {
                 .justify_center()
                 .size(px(28.))
                 .mt(px(3.))
-                .rounded(px(6.))
+                .rounded(px(8.))
                 .cursor_pointer()
-                .when(!active && !done, |button| {
+                .when(!active, |button| {
                     button
                         .opacity(0.)
                         .group_hover(group.clone(), |style| style.opacity(1.))
                 })
-                .hover(move |style| style.bg(colors.hover))
+                .hover(move |style| style.bg(colors.border))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| this.check_row(&key, window, cx)))
-                .child(icon(
-                    Icon::Check,
-                    16.,
-                    if done { colors.accent } else { colors.muted },
-                ))
+                .child(if done {
+                    icon(Icon::Completed, 17., colors.accent)
+                } else {
+                    icon(Icon::Done, 17., colors.muted)
+                })
         };
 
         div()
@@ -1744,9 +1795,9 @@ impl OutlineView {
             .flex()
             .min_h(px(34.))
             .pl(px(28.))
-            .rounded(px(6.))
-            .when(active, |row| row.bg(colors.surface))
-            .hover(move |style| style.bg(colors.surface))
+            .rounded(px(9.))
+            .when(active, |row| row.bg(colors.hover))
+            .hover(move |style| style.bg(colors.hover))
             .children(guides)
             .child(marker)
             .child(title)
@@ -1777,6 +1828,46 @@ fn caret_index(layout: &TextLayout, position: gpui::Point<Pixels>) -> usize {
     ) {
         (Some(start), Some(end)) if position.x > start.x + (end.x - start.x) / 2. => next,
         _ => index,
+    }
+}
+
+fn paint_icons(
+    layout: &TextLayout,
+    icons: &[Range<usize>],
+    color: Hsla,
+    window: &mut Window,
+    cx: &App,
+) {
+    let len = layout.len();
+    let line_height = layout.line_height();
+    for range in icons {
+        if range.end > len {
+            continue;
+        }
+        let (Some(start), Some(end)) = (
+            layout.position_for_index(range.start),
+            layout.position_for_index(range.end),
+        ) else {
+            continue;
+        };
+        if (end.y - start.y).abs() > px(0.5) {
+            continue;
+        }
+        let side = px(11.);
+        let origin = point(
+            start.x + (end.x - start.x - side) / 2.,
+            start.y + (line_height - side) / 2.,
+        );
+        window
+            .paint_svg(
+                Bounds::new(origin, size(side, side)),
+                Icon::Link.path(),
+                None,
+                TransformationMatrix::unit(),
+                color,
+                cx,
+            )
+            .ok();
     }
 }
 
@@ -1826,118 +1917,126 @@ impl Render for OutlineView {
         }
         let colors = theme(cx);
         let rows = self.rows();
-        let column = |child: AnyElement| {
-            div()
-                .w_full()
-                .flex()
-                .justify_center()
-                .px(px(16.))
-                .child(div().w_full().max_w(px(PAGE_WIDTH)).child(child))
-        };
-        let mut children: Vec<AnyElement> = Vec::new();
+        let lines = guides(&rows);
+        let mut sheet: Vec<AnyElement> = Vec::new();
         if self.sync.failed {
-            children.push(
-                column(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .mb(px(16.))
-                        .text_size(px(14.))
-                        .text_color(colors.danger)
-                        .child("Couldn\u{2019}t save your last change, so editing is paused.")
-                        .child(
-                            div()
-                                .id("reload")
-                                .px(px(6.))
-                                .py(px(4.))
-                                .text_color(colors.accent)
-                                .cursor_pointer()
-                                .on_click(cx.listener(|_, _, _, cx| {
-                                    cx.emit(OutlineEvent::ReloadRequested);
-                                }))
-                                .child("Reload"),
-                        )
-                        .into_any_element(),
-                )
-                .into_any_element(),
+            sheet.push(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .ml(px(32.))
+                    .mb(px(12.))
+                    .text_size(px(14.))
+                    .text_color(colors.danger)
+                    .child("Couldn\u{2019}t save your last change, so editing is paused.")
+                    .child(
+                        div()
+                            .id("reload")
+                            .px(px(6.))
+                            .py(px(4.))
+                            .text_color(colors.accent)
+                            .cursor_pointer()
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.emit(OutlineEvent::ReloadRequested);
+                            }))
+                            .child("Reload"),
+                    )
+                    .into_any_element(),
             );
         }
         if !self.query.is_empty() {
-            children.push(
-                column(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .ml(px(32.))
-                        .mb(px(10.))
-                        .text_size(px(13.))
-                        .text_color(colors.muted)
-                        .child("Matches are shown with their parents.")
-                        .child(
-                            div()
-                                .id("clear-filter")
-                                .px(px(6.))
-                                .py(px(4.))
-                                .text_color(colors.accent)
-                                .cursor_pointer()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.close_filter(window, cx);
-                                }))
-                                .child("Clear filter"),
-                        )
-                        .into_any_element(),
-                )
-                .into_any_element(),
-            );
-        }
-        for row in &rows {
-            let element = self.render_row(row, window, cx);
-            children.push(column(element).into_any_element());
-        }
-        if !self.query.is_empty() && rows.is_empty() {
-            children.push(
-                column(
-                    div()
-                        .ml(px(32.))
-                        .mt(px(4.))
-                        .text_size(px(13.))
-                        .text_color(colors.muted)
-                        .child("No matches.")
-                        .into_any_element(),
-                )
-                .into_any_element(),
-            );
-        }
-        children.push(
-            column(
+            sheet.push(
                 div()
-                    .pb(px(24.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .ml(px(32.))
+                    .mb(px(10.))
+                    .text_size(px(13.))
+                    .text_color(colors.muted)
+                    .child("Matches are shown with their parents.")
                     .child(
                         div()
-                            .id("add-item")
-                            .mt(px(6.))
-                            .ml(px(24.))
-                            .px(px(8.))
-                            .py(px(6.))
-                            .rounded(px(6.))
-                            .text_size(px(14.))
-                            .text_color(colors.muted)
+                            .id("clear-filter")
+                            .px(px(6.))
+                            .py(px(4.))
+                            .text_color(colors.accent)
                             .cursor_pointer()
-                            .w_auto()
-                            .flex()
-                            .flex_none()
-                            .hover(move |style| style.bg(colors.hover).text_color(colors.text))
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .on_click(cx.listener(|this, _, window, cx| this.add_item(window, cx)))
-                            .child("+ Add item"),
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.close_filter(window, cx);
+                            }))
+                            .child("Clear filter"),
                     )
-                    .flex()
                     .into_any_element(),
-            )
-            .into_any_element(),
+            );
+        }
+        for (row, guide) in rows.iter().zip(&lines) {
+            sheet.push(self.render_row(row, guide, window, cx));
+        }
+        if !self.query.is_empty() && rows.is_empty() {
+            sheet.push(
+                div()
+                    .ml(px(32.))
+                    .mt(px(4.))
+                    .text_size(px(13.))
+                    .text_color(colors.muted)
+                    .child("No matches.")
+                    .into_any_element(),
+            );
+        }
+        sheet.push(
+            div()
+                .flex()
+                .child(
+                    div()
+                        .id("add-item")
+                        .mt(px(6.))
+                        .ml(px(28.))
+                        .pl(px(8.))
+                        .pr(px(10.))
+                        .py(px(6.))
+                        .rounded(px(8.))
+                        .text_size(px(13.))
+                        .text_color(colors.muted)
+                        .cursor_pointer()
+                        .w_auto()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(px(8.))
+                        .hover(move |style| style.bg(colors.hover).text_color(colors.text))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(|this, _, window, cx| this.add_item(window, cx)))
+                        .child(icon(Icon::Add, 17., colors.muted))
+                        .child("Add item"),
+                )
+                .into_any_element(),
         );
+        let page = div()
+            .w_full()
+            .flex()
+            .justify_center()
+            .px(px(16.))
+            .pt(px(4.))
+            .pb(px(16.))
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(PAGE_WIDTH))
+                    .pt(px(12.))
+                    .pr(px(10.))
+                    .pb(px(10.))
+                    .pl(px(6.))
+                    .border_1()
+                    .border_color(colors.border)
+                    .rounded(px(16.))
+                    .bg(colors.surface)
+                    .shadow(sheet_shadow(&colors))
+                    .flex()
+                    .flex_col()
+                    .children(sheet),
+            );
 
         let picker = self.picker.clone().map(|picker| {
             let backdrop = cx.entity().downgrade();
@@ -1996,7 +2095,7 @@ impl Render for OutlineView {
                     )
                     .flex()
                     .flex_col()
-                    .children(children),
+                    .child(page),
             )
             .children(picker)
     }
