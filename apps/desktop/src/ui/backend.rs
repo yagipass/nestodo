@@ -1,5 +1,6 @@
 use nestodo_desktop::api::{Client, StatsResponse};
 use nestodo_desktop::error::Error;
+use nestodo_desktop::profile::Profile;
 use nestodo_desktop::webhook::{Analytics, WebhookEdit, Webhooks};
 use nestodo_desktop::wire::{Reply, Request, Todo};
 
@@ -12,6 +13,11 @@ pub trait Backend: Send + Sync + 'static {
     fn remove_webhook(&self) -> Result<(), Error>;
     fn analytics(&self) -> Result<Analytics, Error>;
     fn set_analytics(&self, enabled: bool) -> Result<bool, Error>;
+    fn profile(&self) -> Result<Profile, Error>;
+    fn save_name(&self, name: &str) -> Result<Profile, Error>;
+    fn save_avatar(&self, image: &[u8]) -> Result<Profile, Error>;
+    fn remove_avatar(&self) -> Result<(), Error>;
+    fn avatar(&self, url: &str) -> Result<Vec<u8>, Error>;
 }
 
 impl Backend for Client {
@@ -45,5 +51,25 @@ impl Backend for Client {
 
     fn set_analytics(&self, enabled: bool) -> Result<bool, Error> {
         Client::set_analytics(self, enabled)
+    }
+
+    fn profile(&self) -> Result<Profile, Error> {
+        Client::profile(self)
+    }
+
+    fn save_name(&self, name: &str) -> Result<Profile, Error> {
+        Client::save_name(self, name)
+    }
+
+    fn save_avatar(&self, image: &[u8]) -> Result<Profile, Error> {
+        Client::save_avatar(self, image)
+    }
+
+    fn remove_avatar(&self) -> Result<(), Error> {
+        Client::remove_avatar(self)
+    }
+
+    fn avatar(&self, url: &str) -> Result<Vec<u8>, Error> {
+        Client::avatar(self, url)
     }
 }

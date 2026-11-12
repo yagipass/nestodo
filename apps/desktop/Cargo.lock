@@ -3502,6 +3502,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
  "iana-time-zone",
+ "image",
  "keyring",
  "mockito",
  "ring",

@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -10,6 +12,7 @@ use url::Url;
 use crate::access::{self, AccessApp, Session};
 use crate::error::Error;
 use crate::http::{Call, Http, Response, is_loopback};
+use crate::profile::Profile;
 use crate::stats::Day;
 use crate::store::{Kind, TokenStore};
 use crate::webhook::{Analytics, WebhookEdit, Webhooks};
@@ -18,6 +21,8 @@ use crate::wire::{Reply, Request, Todo};
 const LOGIN_PATH: &str = "/cdn-cgi/access/login";
 const WEBHOOK_PATH: &str = "/api/v1/webhook";
 const ANALYTICS_PATH: &str = "/api/v1/analytics";
+const PROFILE_PATH: &str = "/api/v1/profile";
+const AVATAR_PATH: &str = "/api/v1/profile/avatar";
 
 pub struct Client {
     http: Http,
@@ -110,6 +115,14 @@ impl Client {
     }
 
     pub fn request(&self, request: &Request) -> Result<Reply, Error> {
+        let response = self.respond(request)?;
+        Ok(Reply {
+            status: response.status.as_u16(),
+            body: serde_json::from_slice(&response.body).ok(),
+        })
+    }
+
+    fn respond(&self, request: &Request) -> Result<Response, Error> {
         let method = Method::from_bytes(request.method.as_bytes())
             .map_err(|_| Error::Invalid(format!("{:?} is not an HTTP method", request.method)))?;
         let url = self.base.join(&request.path).map_err(|_| {
@@ -130,10 +143,7 @@ impl Client {
                 return Err(Error::NotSignedIn);
             }
         }
-        Ok(Reply {
-            status: response.status.as_u16(),
-            body: serde_json::from_slice(&response.body).ok(),
-        })
+        Ok(response)
     }
 
     pub fn list(&self) -> Result<Vec<Todo>, Error> {
@@ -153,31 +163,45 @@ impl Client {
     pub fn save_webhook(&self, edit: &WebhookEdit) -> Result<Webhooks, Error> {
         let body = serde_json::to_value(edit)
             .map_err(|error| Error::Invalid(format!("the webhook could not be sent: {error}")))?;
-        let reply = self.request(&Request {
-            method: "PUT",
-            path: WEBHOOK_PATH.into(),
-            body: Some(body),
-        })?;
-        if reply.status == StatusCode::BAD_REQUEST.as_u16()
-            && let Some(fields) = reply.body.as_ref().map(refused_fields)
-            && !fields.is_empty()
-        {
-            return Err(Error::Refused(fields));
-        }
-        decoded(reply)
+        self.put(WEBHOOK_PATH, body)
     }
 
     pub fn remove_webhook(&self) -> Result<(), Error> {
-        let reply = self.request(&Request {
-            method: "DELETE",
-            path: WEBHOOK_PATH.into(),
+        self.delete(WEBHOOK_PATH)
+    }
+
+    pub fn profile(&self) -> Result<Profile, Error> {
+        self.get(PROFILE_PATH.into())
+    }
+
+    pub fn save_name(&self, name: &str) -> Result<Profile, Error> {
+        self.put(PROFILE_PATH, serde_json::json!({ "name": name }))
+    }
+
+    pub fn save_avatar(&self, image: &[u8]) -> Result<Profile, Error> {
+        self.put(
+            AVATAR_PATH,
+            serde_json::json!({ "image": STANDARD.encode(image) }),
+        )
+    }
+
+    pub fn remove_avatar(&self) -> Result<(), Error> {
+        self.delete(AVATAR_PATH)
+    }
+
+    pub fn avatar(&self, url: &str) -> Result<Vec<u8>, Error> {
+        let response = self.respond(&Request {
+            method: "GET",
+            path: url.into(),
             body: None,
         })?;
-        if reply.is_success() {
-            Ok(())
-        } else {
-            Err(failure(&reply))
+        if response.status.is_success() {
+            return Ok(response.body);
         }
+        Err(failure(&Reply {
+            status: response.status.as_u16(),
+            body: serde_json::from_slice(&response.body).ok(),
+        }))
     }
 
     pub fn analytics(&self) -> Result<Analytics, Error> {
@@ -199,6 +223,34 @@ impl Client {
             path,
             body: None,
         })?)
+    }
+
+    fn put<T: DeserializeOwned>(&self, path: &str, body: Value) -> Result<T, Error> {
+        let reply = self.request(&Request {
+            method: "PUT",
+            path: path.into(),
+            body: Some(body),
+        })?;
+        if reply.status == StatusCode::BAD_REQUEST.as_u16()
+            && let Some(fields) = reply.body.as_ref().map(refused_fields)
+            && !fields.is_empty()
+        {
+            return Err(Error::Refused(fields));
+        }
+        decoded(reply)
+    }
+
+    fn delete(&self, path: &str) -> Result<(), Error> {
+        let reply = self.request(&Request {
+            method: "DELETE",
+            path: path.into(),
+            body: None,
+        })?;
+        if reply.is_success() {
+            Ok(())
+        } else {
+            Err(failure(&reply))
+        }
     }
 
     fn token_for(&self, url: &Url) -> Option<String> {
@@ -1163,5 +1215,150 @@ mod tests {
                 .unwrap()
         );
         put.assert();
+    }
+
+    #[test]
+    fn a_member_who_never_set_a_profile_reads_as_no_name_and_no_avatar_so_the_app_falls_back_to_the_email()
+     {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        server
+            .mock("GET", "/api/v1/profile")
+            .with_body(r#"{"email":"kim@example.com","name":null,"avatarUrl":null}"#)
+            .create();
+
+        let profile = signed_in(&server, &store).unwrap().profile().unwrap();
+
+        assert_eq!(
+            profile,
+            Profile {
+                email: "kim@example.com".into(),
+                name: None,
+                avatar_url: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_refused_name_names_its_field_so_the_form_can_show_the_message_under_it() {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        let put = server
+            .mock("PUT", "/api/v1/profile")
+            .match_body(Matcher::Json(json!({"name": "Kim\u{202e}"})))
+            .with_status(400)
+            .with_body(
+                r#"{"error":"Validation failed","issues":[{"slot":"body","issues":[
+                    {"message":"The name cannot contain control characters","path":"name"}
+                ]}]}"#,
+            )
+            .create();
+
+        let refused = signed_in(&server, &store).unwrap().save_name("Kim\u{202e}");
+
+        put.assert();
+        let Err(Error::Refused(fields)) = refused else {
+            panic!("expected the name to be refused by field, got {refused:?}");
+        };
+        assert_eq!(
+            fields,
+            [(
+                "name".to_string(),
+                "The name cannot contain control characters".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_saved_name_comes_back_as_the_server_stored_it_so_the_menu_shows_the_trimmed_name() {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        server
+            .mock("PUT", "/api/v1/profile")
+            .match_body(Matcher::Json(json!({"name": "  Kim  "})))
+            .with_body(r#"{"email":"kim@example.com","name":"Kim","avatarUrl":null}"#)
+            .create();
+
+        let saved = signed_in(&server, &store)
+            .unwrap()
+            .save_name("  Kim  ")
+            .unwrap();
+
+        assert_eq!(saved.name.as_deref(), Some("Kim"));
+    }
+
+    #[test]
+    fn an_avatar_is_sent_as_base64_of_the_exact_bytes_so_the_server_can_check_what_it_stores() {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        let png = b"\x89PNG\r\n\x1a\nnot really pixels".to_vec();
+        let put = server
+            .mock("PUT", "/api/v1/profile/avatar")
+            .match_body(Matcher::Json(json!({"image": STANDARD.encode(&png)})))
+            .with_body(
+                r#"{"email":"kim@example.com","name":null,"avatarUrl":"/api/v1/avatars/7f1c"}"#,
+            )
+            .create();
+
+        let saved = signed_in(&server, &store)
+            .unwrap()
+            .save_avatar(&png)
+            .unwrap();
+
+        put.assert();
+        assert_eq!(saved.avatar_url.as_deref(), Some("/api/v1/avatars/7f1c"));
+    }
+
+    #[test]
+    fn an_avatar_downloads_as_raw_bytes_with_the_login_because_the_server_only_shows_it_to_its_owner()
+     {
+        let mut server = Server::new();
+        let saved = token("app", LATER);
+        let store = store_with(&[(Kind::App, &saved)]);
+        let image = vec![0x89, b'P', b'N', b'G', 0, 1, 2, 255];
+        let get = server
+            .mock("GET", "/api/v1/avatars/7f1c")
+            .match_header("cf-access-token", saved.as_str())
+            .with_header("content-type", "image/png")
+            .with_body(image.clone())
+            .create();
+        let client = signed_in(&server, &store).unwrap();
+
+        assert_eq!(client.avatar("/api/v1/avatars/7f1c").unwrap(), image);
+        get.assert();
+
+        server
+            .mock("GET", "/api/v1/avatars/gone")
+            .with_status(404)
+            .with_body(r#"{"error":"not_found","message":"Avatar not found"}"#)
+            .create();
+        assert!(matches!(
+            client.avatar("/api/v1/avatars/gone"),
+            Err(Error::Server { status: 404, .. })
+        ));
+    }
+
+    #[test]
+    fn removing_the_avatar_deletes_it_on_the_server_and_reports_a_failure_instead_of_pretending() {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        let delete = server
+            .mock("DELETE", "/api/v1/profile/avatar")
+            .with_status(204)
+            .create();
+        let client = signed_in(&server, &store).unwrap();
+
+        client.remove_avatar().unwrap();
+        delete.assert();
+
+        server
+            .mock("DELETE", "/api/v1/profile/avatar")
+            .with_status(503)
+            .with_body(r#"{"message":"The database is busy"}"#)
+            .create();
+        assert!(matches!(
+            client.remove_avatar(),
+            Err(Error::Server { status: 503, .. })
+        ));
     }
 }

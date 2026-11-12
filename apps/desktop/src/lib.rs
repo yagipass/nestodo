@@ -4,6 +4,7 @@ pub mod error;
 pub mod http;
 pub mod outline;
 pub mod prefs;
+pub mod profile;
 pub mod stats;
 pub mod store;
 pub mod sync;

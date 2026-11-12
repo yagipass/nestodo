@@ -18,11 +18,13 @@ use nestodo_desktop::api::{self, Client, Connection};
 use nestodo_desktop::error::Error;
 use nestodo_desktop::http::Http;
 use nestodo_desktop::prefs::Prefs;
+use nestodo_desktop::profile::Profile;
 use nestodo_desktop::store::TokenStore;
 use nestodo_desktop::usage;
 use nestodo_desktop::webhook::Analytics;
 use nestodo_desktop::wire::Todo;
 
+use crate::ui::avatar::{Avatar, avatar_button, fetch_avatar};
 use crate::ui::backend::Backend;
 use crate::ui::icons::{APP_ICON, Icon};
 use crate::ui::outline_view::{OutlineEvent, OutlineView, ToggleShowDone};
@@ -81,6 +83,8 @@ struct Workspace {
     client: Arc<Client>,
     page: Page,
     usage_token: Option<String>,
+    profile: Option<Profile>,
+    avatar: Option<Avatar>,
     outline: Entity<OutlineView>,
     stats: Option<Entity<StatsView>>,
     settings: Option<(Entity<SettingsView>, Subscription)>,
@@ -512,12 +516,63 @@ impl Root {
             client,
             page: Page::Todos,
             usage_token: None,
+            profile: None,
+            avatar: None,
             outline,
             stats: None,
             settings: None,
             _subscription: subscription,
         });
         self.check_usage(cx);
+        self.load_profile(cx);
+        cx.notify();
+    }
+
+    fn load_profile(&mut self, cx: &mut Context<Self>) {
+        let Screen::Ready(workspace) = &self.screen else {
+            return;
+        };
+        let client = workspace.client.clone();
+        cx.spawn(async move |this, cx| {
+            let asked = client.clone();
+            let loaded = cx
+                .background_spawn(async move {
+                    let profile = asked.profile().ok()?;
+                    let avatar = fetch_avatar(asked.as_ref(), &profile, None);
+                    Some((profile, avatar))
+                })
+                .await;
+            let Some((profile, avatar)) = loaded else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.follow_first_profile(&client, profile, avatar, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn follow_first_profile(
+        &mut self,
+        client: &Arc<Client>,
+        profile: Profile,
+        avatar: Option<Avatar>,
+        cx: &mut Context<Self>,
+    ) {
+        let first = matches!(&self.screen, Screen::Ready(workspace)
+            if Arc::ptr_eq(&workspace.client, client) && workspace.profile.is_none());
+        if first {
+            self.follow_profile(profile, avatar, cx);
+        }
+    }
+
+    fn follow_profile(&mut self, profile: Profile, avatar: Option<Avatar>, cx: &mut Context<Self>) {
+        let Screen::Ready(workspace) = &mut self.screen else {
+            return;
+        };
+        workspace.profile = Some(profile);
+        workspace.avatar = avatar;
         cx.notify();
     }
 
@@ -747,6 +802,9 @@ impl Root {
                         |this, _, event: &SettingsEvent, window, cx| match event {
                             SettingsEvent::SignedOut => this.connect(window, cx),
                             SettingsEvent::UsageData(analytics) => this.follow_usage(analytics),
+                            SettingsEvent::Profile(profile, avatar) => {
+                                this.follow_profile(profile.clone(), avatar.clone(), cx);
+                            }
                         },
                     );
                     workspace.settings = Some((settings, subscription));
@@ -883,7 +941,8 @@ impl Root {
 
     fn render_menu(
         &mut self,
-        workspace_email: Option<String>,
+        name: Option<String>,
+        email: Option<String>,
         page: Page,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -914,6 +973,7 @@ impl Root {
         };
         let separator = || div().h(px(1.)).mx(px(6.)).my(px(4.)).bg(colors.border);
         let account_bounds = self.account_bounds.clone();
+        let named = name.is_some();
         deferred(
             div()
                 .id("account-menu")
@@ -951,7 +1011,23 @@ impl Root {
                         .py(px(8.))
                         .text_size(px(14.))
                         .text_color(colors.text)
-                        .children(workspace_email.map(|email| div().truncate().child(email)))
+                        .when_some(name, |header, name| {
+                            header.child(
+                                div()
+                                    .debug_selector(|| "account-name".into())
+                                    .truncate()
+                                    .child(name),
+                            )
+                        })
+                        .children(email.map(|email| {
+                            div()
+                                .debug_selector(|| "account-email".into())
+                                .truncate()
+                                .when(named, |line| {
+                                    line.text_size(px(12.)).text_color(colors.muted)
+                                })
+                                .child(email)
+                        }))
                         .children(self.base.as_ref().map(|base| {
                             div()
                                 .truncate()
@@ -1042,11 +1118,19 @@ impl Root {
             return bar.into_any_element();
         };
         let page = workspace.page;
-        let email = workspace.client.email();
+        let profile = workspace.profile.clone();
+        let email = profile
+            .as_ref()
+            .map(|profile| profile.email.clone())
+            .or_else(|| workspace.client.email());
+        let name = profile.and_then(|profile| profile.name);
+        let avatar = workspace.avatar.clone();
         let outline = workspace.outline.clone();
         let tools = (page == Page::Todos)
             .then(|| outline.update(cx, |outline, cx| outline.render_tools(window, cx)));
-        let menu = self.menu_open.then(|| self.render_menu(email, page, cx));
+        let menu = self
+            .menu_open
+            .then(|| self.render_menu(name, email, page, cx));
         let bounds = self.account_bounds.clone();
         let open = self.menu_open;
         let named = window.viewport_size().width >= px(NAMED_TITLE_BAR_WIDTH);
@@ -1082,20 +1166,23 @@ impl Root {
                 .flex()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
-                    icon_button("account", Icon::Account, 19., cx)
-                        .debug_selector(|| "account".into())
-                        .when(open, |button| button.bg(colors.hover))
-                        .child(
-                            canvas(
-                                move |bounds_now, _, _| bounds.set(bounds_now),
-                                |_, (), _, _| {},
-                            )
-                            .absolute()
-                            .size_full(),
+                    match &avatar {
+                        Some(avatar) => avatar_button("account", avatar, cx),
+                        None => icon_button("account", Icon::Account, 19., cx),
+                    }
+                    .debug_selector(|| "account".into())
+                    .when(open, |button| button.bg(colors.hover))
+                    .child(
+                        canvas(
+                            move |bounds_now, _, _| bounds.set(bounds_now),
+                            |_, (), _, _| {},
                         )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_menu(window, cx);
-                        })),
+                        .absolute()
+                        .size_full(),
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_menu(window, cx);
+                    })),
                 )
                 .children(menu),
         )
@@ -1786,6 +1873,89 @@ mod tests {
         assert!(cx.debug_bounds("usage-analytics").is_some());
         webhook.assert();
         analytics.assert();
+    }
+
+    #[gpui::test]
+    fn a_slow_first_profile_answer_does_not_undo_a_name_just_saved_in_settings(
+        cx: &mut TestAppContext,
+    ) {
+        let server = refusing_saves();
+        let prefs = TempDir::new();
+        let (root, _, cx) = open(cx, &server, &prefs);
+        cx.run_until_parked();
+        let saved = Profile {
+            email: "kim@example.com".into(),
+            name: Some("Kim".into()),
+            avatar_url: None,
+        };
+        let stale = Profile {
+            name: None,
+            ..saved.clone()
+        };
+
+        root.update(cx, |root, cx| {
+            root.follow_profile(saved, None, cx);
+            let Screen::Ready(workspace) = &root.screen else {
+                panic!("the workspace did not open");
+            };
+            let client = workspace.client.clone();
+            root.follow_first_profile(&client, stale, None, cx);
+        });
+
+        let shown = root.read_with(cx, |root, _| match &root.screen {
+            Screen::Ready(workspace) => workspace
+                .profile
+                .as_ref()
+                .and_then(|profile| profile.name.clone()),
+            _ => None,
+        });
+        assert_eq!(shown.as_deref(), Some("Kim"));
+    }
+
+    #[gpui::test]
+    fn the_account_menu_shows_the_name_set_on_any_device_once_the_window_opens(
+        cx: &mut TestAppContext,
+    ) {
+        let mut server = refusing_saves();
+        let profile = server
+            .mock("GET", "/api/v1/profile")
+            .with_body(r#"{"email":"kim@example.com","name":"Kim","avatarUrl":null}"#)
+            .create();
+        let prefs = TempDir::new();
+        let (root, _, cx) = open(cx, &server, &prefs);
+        cx.run_until_parked();
+
+        root.update_in(cx, Root::toggle_menu);
+        cx.run_until_parked();
+
+        profile.assert();
+        assert!(cx.debug_bounds("account-name").is_some());
+    }
+
+    #[gpui::test]
+    fn a_profile_that_cannot_be_loaded_leaves_the_generic_account_menu_working_instead_of_blocking_the_window(
+        cx: &mut TestAppContext,
+    ) {
+        let mut server = refusing_saves();
+        server
+            .mock("GET", "/api/v1/profile")
+            .with_status(503)
+            .create();
+        let prefs = TempDir::new();
+        let (root, _, cx) = open(cx, &server, &prefs);
+        cx.run_until_parked();
+
+        root.update_in(cx, Root::toggle_menu);
+        cx.run_until_parked();
+
+        root.read_with(cx, |root, _| {
+            assert!(root.menu_open);
+            assert!(
+                matches!(&root.screen, Screen::Ready(workspace) if workspace.profile.is_none())
+            );
+        });
+        assert!(cx.debug_bounds("account").is_some());
+        assert!(cx.debug_bounds("account-name").is_none());
     }
 
     fn account_usage(server: &mut ServerGuard, analytics: &str) {
