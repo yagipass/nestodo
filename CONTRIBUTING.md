@@ -105,6 +105,8 @@ The environment's secret `POSTHOG_PROJECT_TOKEN` is optional. Leave it empty to 
 
 `void.lock.json` is not committed. Each deploy finds the D1 database `nestodo-db` by name in `CLOUDFLARE_ACCOUNT_ID` and creates it only when it does not exist, so renaming the database in Cloudflare or in `void.config.ts` starts from an empty one. Void keeps Durable Object migration history in the lock, so commit it again before adding a Durable Object.
 
+Profile pictures are kept in the R2 bucket `nestodo-avatars`, named in `void.config.ts`. Renaming the bucket in Cloudflare or in `void.config.ts` points the app at a different one, so every member's picture goes back to the generic icon until they choose it again.
+
 ## Repository settings
 
 The repository settings, labels, merge options, and Actions permissions are managed with [gh-infra](https://github.com/babarot/gh-infra) in `.github/infra.yml`. To change them, edit the file, review the difference with `gh infra plan .github/infra.yml`, and apply it with `gh infra apply .github/infra.yml`. Applying needs admin access to the repository.

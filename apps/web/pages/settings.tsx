@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
-import { action, Form, useForm } from "@void/react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { action, Form, useForm, useRouter, useShared } from "@void/react";
 import { analyticsAvailable, applyAnalyticsConsent } from "../src/analytics";
+import { avatarImageFrom, base64Of } from "../src/avatar-image";
 import { Icon } from "../src/icons";
-import { AppHeader } from "./layout";
+import { MAX_NAME_LENGTH, type Profile } from "../src/profiles";
+import { AppHeader, Avatar } from "./layout";
 import type { Props } from "./settings.server";
 
 type Webhook = NonNullable<Props["webhook"]>;
@@ -221,6 +223,124 @@ function WebhookStatus({ webhook }: { webhook: Webhook }) {
   );
 }
 
+type ProfileErrors = { name?: string; image?: string; form?: string };
+
+const JSON_HEADERS = { Accept: "application/json", "Content-Type": "application/json" };
+
+async function profileErrorsOf(res: Response | null): Promise<ProfileErrors> {
+  if (res?.status !== 400) return { form: "The profile could not be saved. Try again." };
+  const body = (await res.json().catch(() => null)) as { issues?: { issues: { path: string; message: string }[] }[] } | null;
+  const issues = body?.issues?.flatMap(({ issues }) => issues) ?? [];
+  return Object.fromEntries(issues.map(({ path, message }) => [path === "name" || path === "image" ? path : "form", message]));
+}
+
+function ProfileCard({ profile }: { profile: Profile }) {
+  const router = useRouter();
+  const picker = useRef<HTMLInputElement>(null);
+  const [name, setName] = useState(profile.name ?? "");
+  const [busy, setBusy] = useState(false);
+  const [errors, setErrors] = useState<ProfileErrors>({});
+
+  const send = async (path: string, method: string, body?: unknown) => {
+    setBusy(true);
+    setErrors({});
+    const res = await fetch(path, { method, headers: JSON_HEADERS, body: body === undefined ? undefined : JSON.stringify(body) }).catch(() => null);
+    setBusy(false);
+    if (!res?.ok) {
+      setErrors(await profileErrorsOf(res));
+      return null;
+    }
+    router.refresh();
+    return res;
+  };
+
+  const saveName = async (event: FormEvent) => {
+    event.preventDefault();
+    const res = await send("/api/v1/profile", "PUT", { name });
+    if (res) setName(((await res.json()) as Profile).name ?? "");
+  };
+
+  const chooseImage = async (file: File | undefined) => {
+    if (picker.current) picker.current.value = "";
+    if (!file) return;
+    setBusy(true);
+    setErrors({});
+    const image = await avatarImageFrom(file)
+      .then(base64Of)
+      .catch(() => null);
+    if (image === null) {
+      setBusy(false);
+      setErrors({ image: "The image could not be read." });
+      return;
+    }
+    await send("/api/v1/profile/avatar", "PUT", { image });
+  };
+
+  return (
+    <section className="card" aria-labelledby="profile-title">
+      <h2 id="profile-title">Profile</h2>
+      <p className="card-note">Shown in the account menu on every device.</p>
+      {errors.form && (
+        <p className="webhook-error" role="alert">
+          {errors.form}
+        </p>
+      )}
+      <div className="profile-picture">
+        <Avatar url={profile.avatarUrl} size={64} />
+        <div className="profile-picture-actions">
+          <button type="button" className="pill" disabled={busy} onClick={() => picker.current?.click()}>
+            Choose image
+          </button>
+          {profile.avatarUrl && (
+            <button
+              type="button"
+              className="text-button"
+              aria-label="Remove picture"
+              disabled={busy}
+              onClick={() => send("/api/v1/profile/avatar", "DELETE")}
+            >
+              Remove
+            </button>
+          )}
+        </div>
+        <input ref={picker} type="file" accept="image/*" hidden aria-label="Image" onChange={(event) => chooseImage(event.target.files?.[0])} />
+      </div>
+      {errors.image && (
+        <p className="webhook-error" role="alert">
+          {errors.image}
+        </p>
+      )}
+      <form className="field" onSubmit={saveName}>
+        <label htmlFor="profile-name">Name</label>
+        <div className="field-row">
+          <input
+            id="profile-name"
+            name="name"
+            autoComplete="name"
+            maxLength={MAX_NAME_LENGTH}
+            placeholder={profile.email}
+            aria-invalid={errors.name ? true : undefined}
+            aria-describedby="profile-name-hint"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+          <button type="submit" className="pill" disabled={busy}>
+            Save
+          </button>
+        </div>
+        {errors.name && (
+          <span className="webhook-error" role="alert">
+            {errors.name}
+          </span>
+        )}
+        <span id="profile-name-hint" className="field-hint">
+          Shown instead of your email address. Leave it blank to show the email address.
+        </span>
+      </form>
+    </section>
+  );
+}
+
 function AnalyticsCard({ consented }: { consented: boolean }) {
   const [enabled, setEnabled] = useState(consented);
   const [saving, setSaving] = useState(false);
@@ -264,6 +384,7 @@ function AnalyticsCard({ consented }: { consented: boolean }) {
 }
 
 export default function SettingsPage({ available, webhook, analytics }: Props) {
+  const profile = useShared()?.auth.profile ?? null;
   const [editing, setEditing] = useState(false);
   const stopEditing = () => setEditing(false);
   const viewing = available && webhook !== null && !editing;
@@ -273,6 +394,7 @@ export default function SettingsPage({ available, webhook, analytics }: Props) {
       <AppHeader />
       <main className="settings">
         <h1>Settings</h1>
+        {profile && <ProfileCard profile={profile} />}
         <section className="card" aria-labelledby="webhook-title">
           <div className="card-head">
             <h2 id="webhook-title">Webhook</h2>

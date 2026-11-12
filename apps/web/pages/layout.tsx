@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ComponentProps, type MouseEvent, type
 import { Link, useRouter, useShared } from "@void/react";
 import { startAnalytics } from "../src/analytics";
 import { Icon } from "../src/icons";
+import type { Profile } from "../src/profiles";
 import "../src/styles.css";
 
 type Shortcut = [action: string, keys: string, note?: string];
@@ -98,7 +99,13 @@ function ShortcutsDialog({ ref, onClose }: { ref: RefObject<HTMLDialogElement | 
   );
 }
 
-function AccountMenu({ email }: { email: string }) {
+export function Avatar({ url, size }: { url: string | null; size: number }) {
+  const [broken, setBroken] = useState<string | null>(null);
+  if (url === null || broken === url) return <Icon name="account" size={Math.round(size * 0.75)} />;
+  return <img className="avatar" src={url} alt="" width={size} height={size} onError={() => setBroken(url)} />;
+}
+
+function AccountMenu({ email, profile }: { email: string; profile: Profile | null }) {
   const { path } = useRouter();
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -134,10 +141,13 @@ function AccountMenu({ email }: { email: string }) {
         aria-controls="account-menu"
         onClick={() => setOpen(!open)}
       >
-        <Icon name="account" size={20} />
+        <Avatar url={profile?.avatarUrl ?? null} size={26} />
       </button>
       <div id="account-menu" className="account-menu" hidden={!open}>
-        <p className="account-email">{email}</p>
+        <div className="account-who">
+          {profile?.name && <p className="account-name">{profile.name}</p>}
+          <p className="account-email">{email}</p>
+        </div>
         <hr />
         <Link href="/stats" aria-current={path === "/stats" ? "page" : undefined} onClick={() => setOpen(false)}>
           <Icon name="stats" size={18} />
@@ -170,7 +180,8 @@ function AccountMenu({ email }: { email: string }) {
 }
 
 export function AppHeader({ children }: { children?: ReactNode }) {
-  const user = useShared()?.auth.user ?? null;
+  const auth = useShared()?.auth;
+  const user = auth?.user ?? null;
 
   return (
     <header className="app-header">
@@ -179,7 +190,7 @@ export function AppHeader({ children }: { children?: ReactNode }) {
         Nestodo
       </Link>
       {children}
-      {user && <AccountMenu email={user.email} />}
+      {user && <AccountMenu email={user.email} profile={auth?.profile ?? null} />}
     </header>
   );
 }

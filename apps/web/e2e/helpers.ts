@@ -22,6 +22,8 @@ export type ArchivedTodo = { path: string[]; title: string; note: string; create
 
 export type WebhookHeader = { name: string; value: string; secret: boolean };
 
+export type Profile = { email: string; name: string | null; avatarUrl: string | null };
+
 export type WebhookSettings = {
   url: string | null;
   hasToken: boolean;
@@ -232,6 +234,38 @@ export class Session {
 
   apiRemoveWebhook() {
     return this.request("/api/v1/webhook", { method: "DELETE", origin: null });
+  }
+
+  async profile() {
+    const res = await this.request("/api/v1/profile", { origin: null });
+    expect(res.status).toBe(200);
+    return json<Profile>(res);
+  }
+
+  async pageProfile() {
+    const res = await this.request("/settings", { page: true });
+    expect(res.status).toBe(200);
+    return (await json<{ shared: { auth: { profile: Profile | null } } }>(res)).shared.auth.profile;
+  }
+
+  saveName(name: unknown) {
+    return this.request("/api/v1/profile", { method: "PUT", origin: null, body: { name } });
+  }
+
+  uploadAvatar(image: Uint8Array | string) {
+    return this.request("/api/v1/profile/avatar", {
+      method: "PUT",
+      origin: null,
+      body: { image: typeof image === "string" ? image : Buffer.from(image).toString("base64") },
+    });
+  }
+
+  removeAvatar() {
+    return this.request("/api/v1/profile/avatar", { method: "DELETE", origin: null });
+  }
+
+  avatar(url: string) {
+    return this.request(url, { origin: null });
   }
 }
 

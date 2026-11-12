@@ -157,14 +157,36 @@ body {
   color: var(--accent);
 }
 
+.account-who {
+  padding: 8px 10px;
+}
+
+.account-name,
 .account-email {
   margin: 0;
-  padding: 8px 10px;
   overflow: hidden;
-  color: var(--muted);
   font-size: 0.875rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.account-name {
+  font-weight: 600;
+}
+
+.account-email {
+  color: var(--muted);
+}
+
+.account-name + .account-email {
+  font-size: 0.8125rem;
+}
+
+.avatar {
+  display: block;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 .account-menu svg {
@@ -965,6 +987,28 @@ kbd {
 
 .settings-remove {
   margin-left: auto;
+}
+
+.profile-picture {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.profile-picture > svg {
+  width: 64px;
+  height: 64px;
+  padding: 12px;
+  border-radius: 50%;
+  background: var(--hover);
+  color: var(--muted);
+}
+
+.profile-picture-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .webhook-status {
