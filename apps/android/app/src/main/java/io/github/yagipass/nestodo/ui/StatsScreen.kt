@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -159,7 +160,7 @@ private fun StatsContent(days: List<Day>) {
 private fun RangePicker(range: Int, onPick: (Int) -> Unit) {
     val colors = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(10.dp)
-    Row(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         RANGES.forEach { value ->
             val selected = value == range
             Row(
