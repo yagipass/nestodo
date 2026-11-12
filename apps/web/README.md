@@ -24,7 +24,7 @@ The URL and header values are marked **Secret** by default. A secret value canno
 
 ## Usage analytics
 
-If the server has PostHog set up, **Settings** has a **Send usage data** switch. It is off until you turn it on and applies to your account on every device. When it is on, the pages you open, your browser and device, and your approximate location from your IP address are sent to PostHog. Your todos and email address are never sent.
+If the server has PostHog set up, **Settings** has a **Send usage data** switch. It is off until you turn it on and applies to your account on every device. When it is on, the pages and screens you open in the web, desktop and Android apps, your browser or device, and your approximate location from your IP address are sent to PostHog. Your todos and email address are never sent.
 
 ## Development
 
