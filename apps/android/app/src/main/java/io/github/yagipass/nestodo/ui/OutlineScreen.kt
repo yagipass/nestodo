@@ -13,6 +13,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -551,12 +552,18 @@ private fun OutlineList(
     onOpenLink: (String) -> Unit,
 ) {
     val listState = rememberLazyListState()
+    val focusManager = LocalFocusManager.current
     val entrance = remember { Animatable(0f) }
     val rowHeight = with(LocalDensity.current) { RowHeight.toPx() }
     val lines = remember(rows) { guides(rows) }
     val guideOf = remember(rows) { rows.indices.associate { rows[it].key to lines[it] } }
 
     LaunchedEffect(Unit) { entrance.animateTo(1f, tween(180, easing = LinearOutSlowInEasing)) }
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect {
+            if (it is DragInteraction.Start) focusManager.clearFocus()
+        }
+    }
     LaunchedEffect(state.caret) {
         val caret = state.caret ?: return@LaunchedEffect
         val index = rows.indexOfFirst { it.key == caret.key }
