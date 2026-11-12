@@ -47,6 +47,30 @@ data class OutlineRow(
     val note: String = "",
 )
 
+data class Guide(val through: List<Boolean>, val stem: Boolean)
+
+fun guides(rows: List<OutlineRow>): List<Guide> {
+    val followed = BooleanArray(rows.size)
+    val later = mutableListOf<Boolean>()
+    for (i in rows.indices.reversed()) {
+        val depth = rows[i].depth
+        followed[i] = later.getOrElse(depth) { false }
+        later.resize(depth)
+        later += true
+    }
+    val open = mutableListOf<Boolean>()
+    return rows.mapIndexed { i, row ->
+        open.resize(row.depth)
+        open += followed[i]
+        Guide(through = open.drop(1), stem = (rows.getOrNull(i + 1)?.depth ?: 0) > row.depth)
+    }
+}
+
+private fun MutableList<Boolean>.resize(size: Int) {
+    while (this.size > size) removeAt(lastIndex)
+    while (this.size < size) add(false)
+}
+
 data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long> = emptyList()) {
     operator fun get(key: Long): Node? = nodes[key]
 

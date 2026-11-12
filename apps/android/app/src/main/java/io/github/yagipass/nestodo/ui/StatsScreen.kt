@@ -3,6 +3,7 @@ package io.github.yagipass.nestodo.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -20,6 +22,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
@@ -28,9 +32,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -38,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -59,6 +61,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -68,6 +71,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.github.yagipass.nestodo.StatsState
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.RANGES
@@ -143,26 +147,49 @@ private fun StatsContent(days: List<Day>) {
         Modifier.fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        Calendar(days, dates)
         RangePicker(range) { range = it }
         Tiles(summarize(days, range), range)
         AddedCompleted(days.takeLast(range), dates.takeLast(range))
-        Calendar(days, dates)
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RangePicker(range: Int, onPick: (Int) -> Unit) {
-    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-        RANGES.forEachIndexed { index, value ->
-            SegmentedButton(
-                selected = value == range,
-                onClick = { onPick(value) },
-                shape = SegmentedButtonDefaults.itemShape(index, RANGES.size),
+    val colors = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(10.dp)
+    FlowRow(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        RANGES.forEach { value ->
+            val selected = value == range
+            Row(
+                Modifier.minimumInteractiveComponentSize()
+                    .height(36.dp)
+                    .clip(shape)
+                    .border(1.dp, if (selected) colors.primary else colors.outlineVariant, shape)
+                    .background(
+                        if (selected) colors.secondaryContainer else colors.surfaceContainer
+                    )
+                    .selectable(selected, role = Role.RadioButton, onClick = { onPick(value) })
+                    .padding(start = if (selected) 10.dp else 14.dp, end = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text("$value days")
+                if (selected) {
+                    Icon(
+                        NestodoIcons.Selected,
+                        contentDescription = null,
+                        tint = colors.primary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+                Text(
+                    "$value days",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (selected) colors.primary else colors.onSurfaceVariant,
+                    fontWeight = if (selected) FontWeight.Medium else null,
+                )
             }
         }
     }
@@ -195,11 +222,11 @@ private fun Tiles(totals: Summary, range: Int) {
                 "completed on average",
             ),
         )
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         tiles.chunked(2).forEach { row ->
             Row(
                 Modifier.height(IntrinsicSize.Min),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 row.forEach { (label, value, note) ->
                     Tile(label, value, note, Modifier.weight(1f).fillMaxHeight())
@@ -218,15 +245,18 @@ private fun Tile(label: String, value: String, note: String, modifier: Modifier)
         color = MaterialTheme.colorScheme.surfaceContainer,
     ) {
         Column(
-            Modifier.padding(horizontal = 16.dp, vertical = 14.dp).semantics(
+            Modifier.padding(horizontal = 14.dp, vertical = 12.dp).semantics(
                 mergeDescendants = true
             ) {}
         ) {
             Text(label, style = MaterialTheme.typography.bodyMedium, color = muted)
             Text(
                 value,
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Medium,
+                fontFamily = Figtree,
+                fontWeight = FontWeight.Bold,
+                fontSize = 26.sp,
+                lineHeight = 32.sp,
+                style = MaterialTheme.typography.headlineMedium.copy(fontFeatureSettings = "tnum"),
             )
             Text(note, style = MaterialTheme.typography.bodySmall, color = muted)
         }
@@ -236,11 +266,12 @@ private fun Tile(label: String, value: String, note: String, modifier: Modifier)
 @Composable
 private fun Panel(content: @Composable ColumnScope.() -> Unit) {
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
     ) {
         Column(
-            Modifier.fillMaxWidth().padding(16.dp),
+            Modifier.fillMaxWidth()
+                .padding(start = 14.dp, top = 14.dp, end = 14.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             content = content,
         )
@@ -271,7 +302,7 @@ private fun Swatch(color: Color, label: String) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(color))
+        Box(Modifier.size(9.dp).clip(RoundedCornerShape(2.dp)).background(color))
         Text(
             label,
             style = MaterialTheme.typography.bodySmall,
@@ -371,7 +402,7 @@ private fun DrawScope.bar(
     roundTop: Boolean,
 ) {
     if (bottom <= top) return
-    val round = CornerRadius(minOf(2.dp.toPx(), (right - left) / 2))
+    val round = CornerRadius(minOf(3.dp.toPx(), (right - left) / 2))
     val square = CornerRadius.Zero
     val shape =
         RoundRect(
@@ -410,7 +441,7 @@ private fun MirroredBars(
         val gap =
             when {
                 days.size > 30 -> 0.5.dp.toPx()
-                days.size > 7 -> 1.5.dp.toPx()
+                days.size > 7 -> 1.dp.toPx()
                 else -> 0f
             }
         val width = minOf(column - 2 * gap, 24.dp.toPx())
@@ -597,7 +628,7 @@ private fun Calendar(days: List<Day>, dates: List<LocalDate>) {
                         chart.heat[heatLevel(day.added + day.completed, busiest)],
                         topLeft = cellAt(index),
                         size = Size(side, side),
-                        cornerRadius = CornerRadius(2.dp.toPx()),
+                        cornerRadius = CornerRadius(3.dp.toPx()),
                     )
                 }
                 selected?.let { index ->
@@ -606,7 +637,7 @@ private fun Calendar(days: List<Day>, dates: List<LocalDate>) {
                         colors.onSurface,
                         topLeft = cellAt(index) - Offset(ring, ring),
                         size = Size(side + 2 * ring, side + 2 * ring),
-                        cornerRadius = CornerRadius(3.dp.toPx()),
+                        cornerRadius = CornerRadius(4.dp.toPx()),
                         style = Stroke(2.dp.toPx()),
                     )
                 }
@@ -630,7 +661,7 @@ private fun Calendar(days: List<Day>, dates: List<LocalDate>) {
         ) {
             TickLabel("Less", Modifier)
             chart.heat.forEach {
-                Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(it))
+                Box(Modifier.size(9.dp).clip(RoundedCornerShape(2.dp)).background(it))
             }
             TickLabel("More", Modifier)
         }

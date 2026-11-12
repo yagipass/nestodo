@@ -151,4 +151,49 @@ class OutlineTest {
         assertTrue(outline.accepts(Change.Move(4, 2, 0)))
         assertFalse(outline.accepts(listOf(Change.Delete(2), Change.Rename(2, "gone"))))
     }
+
+    private val moving =
+        outlineOf(
+            listOf(
+                todo(1, "Moving"),
+                todo(2, "Boxes", parent = 1),
+                todo(3, "Quotes", parent = 2),
+                todo(4, "Address", parent = 1, position = 1),
+                todo(5, "Bank", parent = 4),
+                todo(6, "Tax", position = 1),
+                todo(7, "Done step", parent = 6, done = true),
+            )
+        )
+
+    @Test
+    fun `each guide line runs from a parent's bullet down to its last child and no further`() {
+        assertEquals(
+            listOf(
+                Guide(emptyList(), stem = true),
+                Guide(listOf(true), stem = true),
+                Guide(listOf(true, false), stem = false),
+                Guide(listOf(false), stem = true),
+                Guide(listOf(false, false), stem = false),
+                Guide(emptyList(), stem = true),
+                Guide(listOf(false), stem = false),
+            ),
+            guides(moving.rows(Viewport())),
+        )
+    }
+
+    @Test
+    fun `a parent whose children are all hidden gets no stem so no line leads to nothing`() {
+        val rows = moving.rows(Viewport(showCompleted = false))
+        assertEquals(
+            listOf(
+                "Moving" to true,
+                "Boxes" to true,
+                "Quotes" to false,
+                "Address" to true,
+                "Bank" to false,
+                "Tax" to false,
+            ),
+            rows.zip(guides(rows)) { row, guide -> row.title to guide.stem },
+        )
+    }
 }
