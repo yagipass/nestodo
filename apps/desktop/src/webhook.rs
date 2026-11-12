@@ -28,11 +28,20 @@ pub struct Webhooks {
     pub webhook: Option<Webhook>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Analytics {
     #[serde(default)]
     pub available: bool,
     pub enabled: bool,
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+impl Analytics {
+    #[must_use]
+    pub fn sending_token(&self) -> Option<&str> {
+        self.token.as_deref().filter(|_| self.enabled)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -244,5 +253,27 @@ mod tests {
     fn an_older_server_that_does_not_say_whether_it_sends_usage_data_shows_no_switch() {
         let analytics: Analytics = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
         assert!(!analytics.available);
+    }
+
+    #[test]
+    fn usage_data_is_sent_only_when_the_account_said_yes_and_the_server_names_a_posthog_project() {
+        let parse = |json: &str| serde_json::from_str::<Analytics>(json).unwrap();
+
+        assert_eq!(
+            parse(r#"{"available":true,"enabled":true,"token":"phc_x"}"#).sending_token(),
+            Some("phc_x")
+        );
+        assert_eq!(
+            parse(r#"{"available":true,"enabled":false,"token":"phc_x"}"#).sending_token(),
+            None
+        );
+        assert_eq!(
+            parse(r#"{"available":false,"enabled":true,"token":null}"#).sending_token(),
+            None
+        );
+        assert_eq!(
+            parse(r#"{"available":true,"enabled":true}"#).sending_token(),
+            None
+        );
     }
 }

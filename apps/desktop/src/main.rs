@@ -9,6 +9,7 @@ use gpui::{
 
 use nestodo_desktop::prefs;
 use nestodo_desktop::store::SystemStore;
+use nestodo_desktop::usage;
 
 use ui::icons::Assets;
 use ui::outline_view::ToggleShowDone;
@@ -79,7 +80,8 @@ fn main() {
                     |window, cx| {
                         let store = Arc::new(SystemStore::new());
                         let path = prefs::default_path();
-                        cx.new(|cx| Root::new(store, path, window, cx))
+                        let capture = (!cfg!(debug_assertions)).then(usage::capture_url);
+                        cx.new(|cx| Root::new(store, path, capture, window, cx))
                     },
                 )
                 .expect("the window opens");

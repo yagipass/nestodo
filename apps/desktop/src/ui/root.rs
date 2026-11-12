@@ -19,6 +19,8 @@ use nestodo_desktop::error::Error;
 use nestodo_desktop::http::Http;
 use nestodo_desktop::prefs::Prefs;
 use nestodo_desktop::store::TokenStore;
+use nestodo_desktop::usage;
+use nestodo_desktop::webhook::Analytics;
 use nestodo_desktop::wire::Todo;
 
 use crate::ui::backend::Backend;
@@ -65,9 +67,20 @@ enum Page {
     Settings,
 }
 
+impl Page {
+    fn name(self) -> &'static str {
+        match self {
+            Page::Todos => "Todos",
+            Page::Stats => "Stats",
+            Page::Settings => "Settings",
+        }
+    }
+}
+
 struct Workspace {
     client: Arc<Client>,
     page: Page,
+    usage_token: Option<String>,
     outline: Entity<OutlineView>,
     stats: Option<Entity<StatsView>>,
     settings: Option<(Entity<SettingsView>, Subscription)>,
@@ -101,6 +114,7 @@ pub struct Root {
     store: Arc<dyn TokenStore>,
     prefs_path: Option<PathBuf>,
     prefs: Prefs,
+    capture: Option<Url>,
     screen: Screen,
     focus_handle: FocusHandle,
     menu_focus: FocusHandle,
@@ -250,6 +264,7 @@ impl Root {
     pub fn new(
         store: Arc<dyn TokenStore>,
         prefs_path: Option<PathBuf>,
+        capture: Option<Url>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -270,6 +285,7 @@ impl Root {
             store,
             prefs_path,
             prefs,
+            capture,
             screen: Screen::Connecting,
             focus_handle: cx.focus_handle(),
             menu_focus: cx.focus_handle(),
@@ -495,12 +511,82 @@ impl Root {
         self.screen = Screen::Ready(Workspace {
             client,
             page: Page::Todos,
+            usage_token: None,
             outline,
             stats: None,
             settings: None,
             _subscription: subscription,
         });
+        self.check_usage(cx);
         cx.notify();
+    }
+
+    fn check_usage(&mut self, cx: &mut Context<Self>) {
+        let Screen::Ready(workspace) = &self.screen else {
+            return;
+        };
+        if self.capture.is_none() {
+            return;
+        }
+        let client = workspace.client.clone();
+        cx.spawn(async move |this, cx| {
+            let asked = client.clone();
+            let result = cx.background_spawn(async move { asked.analytics() }).await;
+            let Ok(analytics) = result else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                let current = matches!(&this.screen, Screen::Ready(workspace)
+                    if Arc::ptr_eq(&workspace.client, &client));
+                if current {
+                    this.follow_usage(&analytics);
+                    this.send_screen(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn follow_usage(&mut self, analytics: &Analytics) {
+        if self.capture.is_none() {
+            return;
+        }
+        let Screen::Ready(workspace) = &mut self.screen else {
+            return;
+        };
+        workspace.usage_token = analytics.sending_token().map(str::to_owned);
+        if workspace.usage_token.is_none() && self.prefs.usage_id.take().is_some() {
+            let _ = self.prefs.save(self.prefs_path.as_deref());
+        }
+    }
+
+    fn send_screen(&mut self, cx: &mut Context<Self>) {
+        let Some(capture) = self.capture.clone() else {
+            return;
+        };
+        let Screen::Ready(workspace) = &self.screen else {
+            return;
+        };
+        let Some(token) = workspace.usage_token.clone() else {
+            return;
+        };
+        let screen = workspace.page.name();
+        let Some(id) = self.usage_id() else {
+            return;
+        };
+        cx.background_spawn(async move {
+            let _ = usage::send_screen(&capture, &token, &id, screen);
+        })
+        .detach();
+    }
+
+    fn usage_id(&mut self) -> Option<String> {
+        if self.prefs.usage_id.is_none() {
+            self.prefs.usage_id = Some(usage::new_id()?);
+            let _ = self.prefs.save(self.prefs_path.as_deref());
+        }
+        self.prefs.usage_id.clone()
     }
 
     fn sign_in(&mut self, app: AccessApp, window: &mut Window, cx: &mut Context<Self>) {
@@ -660,6 +746,7 @@ impl Root {
                         window,
                         |this, _, event: &SettingsEvent, window, cx| match event {
                             SettingsEvent::SignedOut => this.connect(window, cx),
+                            SettingsEvent::UsageData(analytics) => this.follow_usage(analytics),
                         },
                     );
                     workspace.settings = Some((settings, subscription));
@@ -667,6 +754,7 @@ impl Root {
                 window.focus(&self.focus_handle, cx);
             }
         }
+        self.send_screen(cx);
         cx.notify();
     }
 
@@ -1386,8 +1474,9 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use gpui::{TestAppContext, VisualTestContext};
-    use mockito::{Server, ServerGuard};
+    use mockito::{Matcher, Mock, Server, ServerGuard};
     use nestodo_desktop::store::Kind;
+    use serde_json::json;
 
     use super::*;
     use crate::ui::widgets::MIN_WINDOW_WIDTH;
@@ -1432,6 +1521,10 @@ mod tests {
 
         fn saved_server(&self) -> Option<String> {
             Prefs::load(Some(&self.settings())).base_url
+        }
+
+        fn saved_usage_id(&self) -> Option<String> {
+            Prefs::load(Some(&self.settings())).usage_id
         }
     }
 
@@ -1484,13 +1577,23 @@ mod tests {
         prefs: PathBuf,
         store: Arc<NoTokens>,
     ) -> (Entity<Root>, &mut VisualTestContext) {
+        launch_sending(cx, prefs, store, None)
+    }
+
+    fn launch_sending(
+        cx: &mut TestAppContext,
+        prefs: PathBuf,
+        store: Arc<NoTokens>,
+        capture: Option<Url>,
+    ) -> (Entity<Root>, &mut VisualTestContext) {
         cx.update(|cx| {
             cx.bind_keys(crate::ui::text_field::bindings());
             cx.bind_keys(crate::ui::outline_view::bindings());
             cx.bind_keys(crate::ui::settings_view::bindings());
             cx.bind_keys(bindings());
         });
-        let (root, cx) = cx.add_window_view(|window, cx| Root::new(store, Some(prefs), window, cx));
+        let (root, cx) =
+            cx.add_window_view(|window, cx| Root::new(store, Some(prefs), capture, window, cx));
         cx.run_until_parked();
         (root, cx)
     }
@@ -1503,6 +1606,7 @@ mod tests {
         Prefs {
             show_completed: true,
             base_url: Some(address.to_string()),
+            usage_id: None,
         }
         .save(Some(&prefs.settings()))
         .unwrap();
@@ -1682,6 +1786,213 @@ mod tests {
         assert!(cx.debug_bounds("usage-analytics").is_some());
         webhook.assert();
         analytics.assert();
+    }
+
+    fn account_usage(server: &mut ServerGuard, analytics: &str) {
+        server
+            .mock("GET", "/api/v1/analytics")
+            .with_body(analytics)
+            .create();
+        server
+            .mock("GET", "/api/v1/webhook")
+            .with_body(r#"{"available":true,"webhook":null}"#)
+            .create();
+    }
+
+    fn capture_of(posthog: &ServerGuard) -> Url {
+        Url::parse(&format!("{}/i/v0/e/", posthog.url())).unwrap()
+    }
+
+    fn screen_sent(posthog: &mut ServerGuard, name: &str, times: usize) -> Mock {
+        posthog
+            .mock("POST", "/i/v0/e/")
+            .match_body(Matcher::PartialJson(json!({
+                "api_key": "phc_test",
+                "event": "$screen",
+                "properties": { "$screen_name": name },
+            })))
+            .expect(times)
+            .create()
+    }
+
+    fn open_sending<'a>(
+        cx: &'a mut TestAppContext,
+        prefs: &TempDir,
+        posthog: &ServerGuard,
+    ) -> (Entity<Root>, &'a mut VisualTestContext) {
+        let (root, cx) = launch_sending(
+            cx,
+            prefs.settings(),
+            Arc::default(),
+            Some(capture_of(posthog)),
+        );
+        assert!(root.read_with(cx, |root, _| matches!(root.screen, Screen::Ready(_))));
+        (root, cx)
+    }
+
+    fn settings_of(root: &Entity<Root>, cx: &mut VisualTestContext) -> Entity<SettingsView> {
+        root.read_with(cx, |root, _| match &root.screen {
+            Screen::Ready(workspace) => workspace
+                .settings
+                .as_ref()
+                .map(|(settings, _)| settings.clone())
+                .expect("the settings page was opened"),
+            _ => panic!("the workspace did not open"),
+        })
+    }
+
+    #[gpui::test]
+    fn with_usage_data_on_each_page_opened_reaches_posthog_by_name_under_one_id_kept_for_this_mac(
+        cx: &mut TestAppContext,
+    ) {
+        let mut server = refusing_saves();
+        account_usage(
+            &mut server,
+            r#"{"available":true,"enabled":true,"token":"phc_test"}"#,
+        );
+        let mut posthog = Server::new();
+        let todos = screen_sent(&mut posthog, "Todos", 1);
+        let prefs = TempDir::new();
+        remember(&server, &prefs);
+
+        let (_, cx) = open_sending(cx, &prefs, &posthog);
+        todos.assert();
+        let id = prefs
+            .saved_usage_id()
+            .expect("the id is kept for the next launch");
+
+        let stats = posthog
+            .mock("POST", "/i/v0/e/")
+            .match_body(Matcher::PartialJson(json!({
+                "distinct_id": id,
+                "properties": { "$screen_name": "Stats" },
+            })))
+            .expect(1)
+            .create();
+        cx.dispatch_action(ShowStats);
+        cx.run_until_parked();
+
+        stats.assert();
+        assert_eq!(prefs.saved_usage_id(), Some(id));
+    }
+
+    #[gpui::test]
+    fn nothing_reaches_posthog_while_the_account_has_usage_data_off_and_an_id_left_from_before_is_deleted(
+        cx: &mut TestAppContext,
+    ) {
+        let mut server = refusing_saves();
+        account_usage(
+            &mut server,
+            r#"{"available":true,"enabled":false,"token":"phc_test"}"#,
+        );
+        let mut posthog = Server::new();
+        let anything = posthog.mock("POST", Matcher::Any).expect(0).create();
+        let prefs = TempDir::new();
+        Prefs {
+            show_completed: true,
+            base_url: Some(server.url()),
+            usage_id: Some("0f8fad5b-d9cb-469f-a165-70867728950e".into()),
+        }
+        .save(Some(&prefs.settings()))
+        .unwrap();
+
+        let (_, cx) = open_sending(cx, &prefs, &posthog);
+        cx.dispatch_action(ShowStats);
+        cx.run_until_parked();
+        cx.dispatch_action(ShowTodos);
+        cx.run_until_parked();
+
+        anything.assert();
+        assert_eq!(prefs.saved_usage_id(), None);
+    }
+
+    #[gpui::test]
+    fn a_server_without_a_posthog_project_sends_nothing_even_when_the_account_said_yes(
+        cx: &mut TestAppContext,
+    ) {
+        let mut server = refusing_saves();
+        account_usage(
+            &mut server,
+            r#"{"available":false,"enabled":true,"token":null}"#,
+        );
+        let mut posthog = Server::new();
+        let anything = posthog.mock("POST", Matcher::Any).expect(0).create();
+        let prefs = TempDir::new();
+        remember(&server, &prefs);
+
+        let (_, cx) = open_sending(cx, &prefs, &posthog);
+        cx.dispatch_action(ShowStats);
+        cx.run_until_parked();
+
+        anything.assert();
+        assert_eq!(prefs.saved_usage_id(), None);
+    }
+
+    #[gpui::test]
+    fn turning_usage_data_off_in_settings_stops_sending_at_once_and_deletes_this_macs_id(
+        cx: &mut TestAppContext,
+    ) {
+        let mut server = refusing_saves();
+        account_usage(
+            &mut server,
+            r#"{"available":true,"enabled":true,"token":"phc_test"}"#,
+        );
+        server
+            .mock("PUT", "/api/v1/analytics")
+            .with_body(r#"{"enabled":false}"#)
+            .create();
+        let mut posthog = Server::new();
+        screen_sent(&mut posthog, "Todos", 1);
+        let settings_sent = screen_sent(&mut posthog, "Settings", 1);
+        let stats = screen_sent(&mut posthog, "Stats", 0);
+        let prefs = TempDir::new();
+        remember(&server, &prefs);
+        let (root, cx) = open_sending(cx, &prefs, &posthog);
+        cx.dispatch_action(ShowSettings);
+        cx.run_until_parked();
+        settings_sent.assert();
+        assert!(prefs.saved_usage_id().is_some());
+
+        let settings = settings_of(&root, cx);
+        settings.update(cx, |settings, cx| settings.set_analytics(false, cx));
+        cx.run_until_parked();
+        cx.dispatch_action(ShowStats);
+        cx.run_until_parked();
+
+        stats.assert();
+        assert_eq!(prefs.saved_usage_id(), None);
+    }
+
+    #[gpui::test]
+    fn turning_usage_data_on_in_settings_sends_nothing_until_the_next_page_like_the_web_app(
+        cx: &mut TestAppContext,
+    ) {
+        let mut server = refusing_saves();
+        account_usage(
+            &mut server,
+            r#"{"available":true,"enabled":false,"token":"phc_test"}"#,
+        );
+        server
+            .mock("PUT", "/api/v1/analytics")
+            .with_body(r#"{"enabled":true}"#)
+            .create();
+        let mut posthog = Server::new();
+        let settings_sent = screen_sent(&mut posthog, "Settings", 0);
+        let todos = screen_sent(&mut posthog, "Todos", 1);
+        let prefs = TempDir::new();
+        remember(&server, &prefs);
+        let (root, cx) = open_sending(cx, &prefs, &posthog);
+        cx.dispatch_action(ShowSettings);
+        cx.run_until_parked();
+
+        let settings = settings_of(&root, cx);
+        settings.update(cx, |settings, cx| settings.set_analytics(true, cx));
+        cx.run_until_parked();
+        settings_sent.assert();
+
+        cx.dispatch_action(ShowTodos);
+        cx.run_until_parked();
+        todos.assert();
     }
 
     fn press_with_a_wobble(selector: &'static str, cx: &mut VisualTestContext) {

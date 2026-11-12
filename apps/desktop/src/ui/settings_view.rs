@@ -29,6 +29,7 @@ const KEEP_URL: &str = "Leave blank to keep the saved URL";
 
 pub enum SettingsEvent {
     SignedOut,
+    UsageData(Analytics),
 }
 
 struct Loaded {
@@ -167,6 +168,7 @@ impl SettingsView {
     }
 
     fn show(&mut self, loaded: Loaded, cx: &mut Context<Self>) {
+        cx.emit(SettingsEvent::UsageData(loaded.analytics.clone()));
         let empty = loaded.webhooks.available && loaded.webhooks.webhook.is_none();
         self.load = Load::Ready(loaded);
         if self.editor.as_ref().is_some_and(Editor::dirty) {
@@ -497,7 +499,7 @@ impl SettingsView {
         .detach();
     }
 
-    fn set_analytics(&mut self, enabled: bool, cx: &mut Context<Self>) {
+    pub(crate) fn set_analytics(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.analytics_saving || !matches!(self.load, Load::Ready(_)) {
             return;
         }
@@ -518,6 +520,7 @@ impl SettingsView {
                     Ok(enabled) => {
                         if let Load::Ready(loaded) = &mut this.load {
                             loaded.analytics.enabled = enabled;
+                            cx.emit(SettingsEvent::UsageData(loaded.analytics.clone()));
                         }
                     }
                     Err(Error::NotSignedIn) => cx.emit(SettingsEvent::SignedOut),
@@ -978,14 +981,15 @@ impl SettingsView {
             .into_any_element()
     }
 
-    fn render_analytics(&self, analytics: Analytics, cx: &mut Context<Self>) -> AnyElement {
+    fn render_analytics(&self, analytics: &Analytics, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme(cx);
         let saving = self.analytics_saving;
+        let enabled = analytics.enabled;
         card(&colors)
             .debug_selector(|| "usage-analytics".into())
             .child(div().flex().child(heading("Usage analytics")))
             .child(note(
-                "This setting belongs to your account and applies to the web app on every device.",
+                "When on, the pages and screens you open in the web, desktop and Android apps, your browser or device, and your approximate location from your IP address are sent to PostHog. Your todos and email address are never sent. This applies to your account on every device.",
                 &colors,
             ))
             .when(self.analytics_failed, |card| {
@@ -999,13 +1003,13 @@ impl SettingsView {
                     checkbox(
                         "send-usage-data",
                         "Send usage data",
-                        analytics.enabled,
+                        enabled,
                         &colors,
                     )
                     .when(saving, |checkbox| checkbox.opacity(0.5))
                     .when(!saving, |checkbox| {
                         checkbox.on_click(cx.listener(move |this, _, _, cx| {
-                            this.set_analytics(!analytics.enabled, cx);
+                            this.set_analytics(!enabled, cx);
                         }))
                     }),
                 ),
@@ -1045,7 +1049,7 @@ impl Render for SettingsView {
                 .gap(px(16.))
                 .child(self.render_webhook(loaded, cx))
                 .when(loaded.analytics.available, |page| {
-                    page.child(self.render_analytics(loaded.analytics, cx))
+                    page.child(self.render_analytics(&loaded.analytics, cx))
                 })
                 .into_any_element(),
         };
@@ -1080,7 +1084,7 @@ impl Render for SettingsView {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::sync::Mutex;
 
@@ -1114,6 +1118,7 @@ mod tests {
                 analytics: Analytics {
                     available: true,
                     enabled: false,
+                    token: Some("phc_test".into()),
                 },
                 saved: Vec::new(),
                 removed: 0,
@@ -1200,7 +1205,7 @@ mod tests {
 
         fn analytics(&self) -> Result<Analytics, Error> {
             self.answer()?;
-            Ok(self.state().analytics)
+            Ok(self.state().analytics.clone())
         }
 
         fn set_analytics(&self, enabled: bool) -> Result<bool, Error> {
@@ -1487,6 +1492,35 @@ mod tests {
         });
         assert!(enabled);
         assert!(failed);
+    }
+
+    #[gpui::test]
+    fn the_usage_data_choice_is_passed_on_when_loaded_and_when_saved_so_the_app_sends_only_what_the_account_allows(
+        cx: &mut TestAppContext,
+    ) {
+        let server = Server::with(None);
+        let (view, cx) = open(cx, server.clone());
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(&view, move |_, event: &SettingsEvent, _| {
+                if let SettingsEvent::UsageData(analytics) = event {
+                    log.borrow_mut()
+                        .push(analytics.sending_token().map(str::to_owned));
+                }
+            })
+            .detach();
+        });
+
+        view.update(cx, SettingsView::reload);
+        cx.run_until_parked();
+        view.update(cx, |view, cx| view.set_analytics(true, cx));
+        cx.run_until_parked();
+        server.state().busy = true;
+        view.update(cx, |view, cx| view.set_analytics(false, cx));
+        cx.run_until_parked();
+
+        assert_eq!(*seen.borrow(), [None, Some("phc_test".to_owned())]);
     }
 
     #[gpui::test]
