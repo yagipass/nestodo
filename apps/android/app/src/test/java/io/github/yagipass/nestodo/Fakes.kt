@@ -6,8 +6,10 @@ import androidx.datastore.preferences.SharedPreferencesMigration
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import io.github.yagipass.nestodo.data.Backend
+import io.github.yagipass.nestodo.data.Capture
 import io.github.yagipass.nestodo.data.Connection
 import io.github.yagipass.nestodo.data.LoginFlow
+import io.github.yagipass.nestodo.data.Screen
 import io.github.yagipass.nestodo.data.Settings
 import io.github.yagipass.nestodo.data.TodoRepository
 import io.github.yagipass.nestodo.domain.Analytics
@@ -30,6 +32,8 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
     var analytics = Analytics(available = true, enabled = false)
     val savedWebhooks = mutableListOf<WebhookEdit>()
     var failure: Exception? = null
+    var analyticsFailure: Exception? = null
+    var analyticsGate: CompletableDeferred<Unit>? = null
     var gate: CompletableDeferred<Unit>? = null
     private var nextId = 100L
 
@@ -115,6 +119,8 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
 
     override suspend fun analytics(): Analytics {
         answer("GET analytics")
+        analyticsGate?.await()
+        analyticsFailure?.let { throw it }
         return analytics
     }
 
@@ -149,6 +155,7 @@ class FakeSettings : Settings {
     var baseUrlFailure: IOException? = null
     var showCompleted = true
     var shareParent: Long? = null
+    var analyticsId: String? = null
 
     override suspend fun baseUrl() = baseUrl
 
@@ -167,6 +174,22 @@ class FakeSettings : Settings {
 
     override suspend fun setShareParent(value: Long?) {
         shareParent = value
+    }
+
+    override suspend fun analyticsId() = analyticsId
+
+    override suspend fun setAnalyticsId(value: String?) {
+        analyticsId = value
+    }
+}
+
+class RecordingCapture : Capture {
+    data class Sent(val token: String, val distinctId: String, val screen: Screen)
+
+    val sent = mutableListOf<Sent>()
+
+    override suspend fun screen(token: String, distinctId: String, screen: Screen) {
+        sent += Sent(token, distinctId, screen)
     }
 }
 

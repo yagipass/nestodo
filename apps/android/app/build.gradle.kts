@@ -27,7 +27,10 @@ android {
 
     androidResources { localeFilters += "en" }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        buildConfig = true
+        compose = true
+    }
 }
 
 dependencies {

@@ -17,7 +17,12 @@ data class Webhook(
 
 @Serializable data class Webhooks(val available: Boolean, val webhook: Webhook? = null)
 
-@Serializable data class Analytics(val available: Boolean = false, val enabled: Boolean)
+@Serializable
+data class Analytics(
+    val available: Boolean = false,
+    val enabled: Boolean,
+    val token: String? = null,
+)
 
 @Serializable
 data class WebhookEdit(
