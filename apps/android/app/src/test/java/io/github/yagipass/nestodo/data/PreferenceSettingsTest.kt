@@ -73,6 +73,19 @@ class PreferenceSettingsTest {
         }
 
     @Test
+    fun `the usage data ID is kept until it is removed, so one phone is counted as one install across launches`() =
+        runTest {
+            val settings = PreferenceSettings(preferenceStore(folder))
+            assertNull(settings.analyticsId())
+
+            settings.setAnalyticsId("install-id")
+            assertEquals("install-id", settings.analyticsId())
+
+            settings.setAnalyticsId(null)
+            assertNull(settings.analyticsId())
+        }
+
+    @Test
     fun `sharing at the top level after sharing under a todo forgets the todo, so the next share starts from the top level`() =
         runTest {
             val settings = PreferenceSettings(preferenceStore(folder))

@@ -371,6 +371,16 @@ class TodoApiTest {
         }
 
     @Test
+    fun `the PostHog project token the server sends is kept, so usage data goes to the project this server chose`() =
+        runTest {
+            respond(200, """{"available":true,"enabled":true,"token":"phc_test"}""")
+            assertEquals(
+                Analytics(available = true, enabled = true, token = "phc_test"),
+                api().analytics(),
+            )
+        }
+
+    @Test
     fun `turning usage data on sends the choice and returns what the server saved`() = runTest {
         respond(200, """{"enabled":true}""")
         assertEquals(true, api().setAnalytics(true))

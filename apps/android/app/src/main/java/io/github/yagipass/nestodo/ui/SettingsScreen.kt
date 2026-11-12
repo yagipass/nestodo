@@ -447,7 +447,9 @@ private fun HeaderFields(
 @Composable
 private fun AnalyticsCard(settings: SettingsState.Loaded, viewModel: TodoViewModel) {
     SettingsCard(title = "Usage analytics") {
-        Note("This setting belongs to your account and applies to the web app on every device.")
+        Note(
+            "When on, the pages and screens you open in the web, desktop and Android apps, your browser or device, and your approximate location from your IP address are sent to PostHog. Your todos and email address are never sent. This applies to your account on every device."
+        )
         if (settings.analyticsFailed) Problem("The setting could not be saved. Try again.")
         Row(
             verticalAlignment = Alignment.CenterVertically,

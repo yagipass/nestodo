@@ -14,9 +14,12 @@ import io.github.yagipass.nestodo.data.AccessBackend
 import io.github.yagipass.nestodo.data.ApiException
 import io.github.yagipass.nestodo.data.Backend
 import io.github.yagipass.nestodo.data.Connection
+import io.github.yagipass.nestodo.data.PostHogCapture
 import io.github.yagipass.nestodo.data.PreferenceSettings
+import io.github.yagipass.nestodo.data.Screen
 import io.github.yagipass.nestodo.data.Settings
 import io.github.yagipass.nestodo.data.TodoRepository
+import io.github.yagipass.nestodo.data.UsageAnalytics
 import io.github.yagipass.nestodo.data.baseUrlOf
 import io.github.yagipass.nestodo.data.label
 import io.github.yagipass.nestodo.domain.Analytics
@@ -61,6 +64,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -138,6 +143,15 @@ data class TodoUiState(
 
     val rows: List<OutlineRow>
         get() = outline.rows(viewport)
+
+    val screen: Screen?
+        get() =
+            when {
+                auth != AuthState.SignedIn -> null
+                stats != null -> Screen.Stats
+                settings != null -> Screen.Settings
+                else -> Screen.Todos
+            }
 }
 
 class TodoViewModel(
@@ -146,6 +160,7 @@ class TodoViewModel(
     private val cleartextAllowed: (String) -> Boolean = { false },
     private val timeZone: () -> String = { ZoneId.systemDefault().id },
     private val timeSource: TimeSource = TimeSource.Monotonic,
+    private val usage: UsageAnalytics? = null,
 ) : ViewModel() {
     private sealed interface Task {
         data class Send(val change: Change) : Task
@@ -195,6 +210,7 @@ class TodoViewModel(
     private var backend: Backend? = null
     private var loginJob: Job? = null
     private var syncJob: Job? = null
+    private var analyticsJob: Job? = null
     private var typingJob: Job? = null
     private var tasks: Channel<Queued>? = null
     private var generation = 0
@@ -210,6 +226,14 @@ class TodoViewModel(
     private var settingsRequest = 0L
 
     init {
+        usage?.let { usage ->
+            viewModelScope.launch {
+                state
+                    .map { it.screen }
+                    .distinctUntilChanged()
+                    .collect { screen -> launch { usage.show(screen) } }
+            }
+        }
         connect()
     }
 
@@ -750,6 +774,22 @@ class TodoViewModel(
         }
         startSync(ready.todos)
         if (todos == null) enqueue(Task.Load(force = true)) else show(todos)
+        startAnalytics(ready.todos)
+    }
+
+    private fun startAnalytics(repository: TodoRepository) {
+        val usage = usage ?: return
+        analyticsJob = viewModelScope.launch {
+            val analytics =
+                try {
+                    repository.analytics()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    return@launch
+                }
+            usage.start(analytics)
+        }
     }
 
     private fun startSync(repository: TodoRepository) {
@@ -778,6 +818,9 @@ class TodoViewModel(
     }
 
     private fun disconnect() {
+        analyticsJob?.cancel()
+        analyticsJob = null
+        usage?.stop()
         syncJob?.cancel()
         syncJob = null
         tasks?.close()
@@ -812,6 +855,7 @@ class TodoViewModel(
         when (val call = task.call) {
             SettingsCall.Load -> {
                 val loaded = SettingsState.Loaded(repository.webhooks(), repository.analytics())
+                usage?.consent(loaded.analytics)
                 showSettings(task.request) { loaded.showing(loaded.webhooks) }
             }
             is SettingsCall.Save -> {
@@ -826,6 +870,7 @@ class TodoViewModel(
             }
             is SettingsCall.SetAnalytics -> {
                 val enabled = repository.setAnalytics(call.enabled)
+                usage?.consent(enabled)
                 showSettings(task.request) { settings ->
                     settings.loaded()?.let {
                         it.copy(
@@ -978,10 +1023,12 @@ class TodoViewModel(
             val appContext = context.applicationContext
             return viewModelFactory {
                 initializer {
+                    val settings = PreferenceSettings(appContext)
                     TodoViewModel(
                         accessBackends(appContext),
-                        PreferenceSettings(appContext),
+                        settings,
                         NetworkSecurityPolicy.getInstance()::isCleartextTrafficPermitted,
+                        usage = usageAnalytics(settings),
                     )
                 }
             }
@@ -999,6 +1046,15 @@ internal fun accessBackends(context: Context): (HttpUrl) -> Backend {
             .build()
     val store = KeystoreTokenStore(context)
     return { base -> AccessBackend(http, base, store) }
+}
+
+private fun usageAnalytics(settings: Settings): UsageAnalytics? {
+    if (BuildConfig.DEBUG) return null
+    val http = OkHttpClient.Builder().callTimeout(10, TimeUnit.SECONDS).build()
+    return UsageAnalytics(
+        settings,
+        PostHogCapture(http, PostHogCapture.ENDPOINT, BuildConfig.VERSION_NAME),
+    )
 }
 
 private fun editEnd(before: String, after: String): Int {

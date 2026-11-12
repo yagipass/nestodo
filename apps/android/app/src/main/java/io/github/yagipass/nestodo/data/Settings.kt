@@ -29,6 +29,10 @@ interface Settings {
     suspend fun shareParent(): Long?
 
     suspend fun setShareParent(value: Long?)
+
+    suspend fun analyticsId(): String?
+
+    suspend fun setAnalyticsId(value: String?)
 }
 
 private val Context.settingsStore by
@@ -58,6 +62,12 @@ class PreferenceSettings internal constructor(private val store: DataStore<Prefe
         if (value == null) it.remove(SHARE_PARENT) else it[SHARE_PARENT] = value
     }
 
+    override suspend fun analyticsId() = read()[ANALYTICS_ID]
+
+    override suspend fun setAnalyticsId(value: String?) = write {
+        if (value == null) it.remove(ANALYTICS_ID) else it[ANALYTICS_ID] = value
+    }
+
     private suspend fun read() =
         try {
             store.data.first()
@@ -75,5 +85,6 @@ class PreferenceSettings internal constructor(private val store: DataStore<Prefe
         val BASE_URL = stringPreferencesKey("base_url")
         val SHOW_COMPLETED = booleanPreferencesKey("show_completed")
         val SHARE_PARENT = longPreferencesKey("share_parent")
+        val ANALYTICS_ID = stringPreferencesKey("analytics_id")
     }
 }
