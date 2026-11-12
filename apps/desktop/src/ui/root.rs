@@ -23,6 +23,7 @@ use nestodo_desktop::wire::Todo;
 use crate::ui::backend::Backend;
 use crate::ui::icons::{APP_ICON, Icon};
 use crate::ui::outline_view::{OutlineEvent, OutlineView, ToggleShowDone};
+use crate::ui::settings_view::{SettingsEvent, SettingsView};
 use crate::ui::shortcuts::shortcuts_dialog;
 use crate::ui::stats_view::StatsView;
 use crate::ui::text_field::{FieldEvent, TextField};
@@ -36,6 +37,7 @@ actions!(
     [
         ShowShortcuts,
         ShowStats,
+        ShowSettings,
         ShowTodos,
         CloseDialog,
         CloseMenu,
@@ -59,6 +61,7 @@ pub fn bindings() -> Vec<KeyBinding> {
 enum Page {
     Todos,
     Stats,
+    Settings,
 }
 
 struct Workspace {
@@ -66,6 +69,7 @@ struct Workspace {
     page: Page,
     outline: Entity<OutlineView>,
     stats: Option<Entity<StatsView>>,
+    settings: Option<(Entity<SettingsView>, Subscription)>,
     _subscription: Subscription,
 }
 
@@ -492,6 +496,7 @@ impl Root {
             page: Page::Todos,
             outline,
             stats: None,
+            settings: None,
             _subscription: subscription,
         });
         cx.notify();
@@ -639,16 +644,27 @@ impl Root {
                 }
                 window.focus(&self.focus_handle, cx);
             }
-        }
-        cx.notify();
-    }
-
-    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_menu(window, cx);
-        if let Some(base) = &self.base
-            && let Ok(url) = base.join("/settings")
-        {
-            cx.open_url(url.as_str());
+            Page::Settings => {
+                window.set_window_title("Settings | Nestodo");
+                workspace
+                    .outline
+                    .update(cx, super::outline_view::OutlineView::flush_now);
+                if let Some((settings, _)) = &workspace.settings {
+                    settings.update(cx, SettingsView::reload);
+                } else {
+                    let backend: Arc<dyn Backend> = workspace.client.clone();
+                    let settings = cx.new(|cx| SettingsView::new(backend, cx));
+                    let subscription = cx.subscribe_in(
+                        &settings,
+                        window,
+                        |this, _, event: &SettingsEvent, window, cx| match event {
+                            SettingsEvent::SignedOut => this.connect(window, cx),
+                        },
+                    );
+                    workspace.settings = Some((settings, subscription));
+                }
+                window.focus(&self.focus_handle, cx);
+            }
         }
         cx.notify();
     }
@@ -720,6 +736,12 @@ impl Root {
     fn on_show_stats(&mut self, _: &ShowStats, window: &mut Window, cx: &mut Context<Self>) {
         if !self.modal_open(cx) {
             self.show_page(Page::Stats, window, cx);
+        }
+    }
+
+    fn on_show_settings(&mut self, _: &ShowSettings, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.modal_open(cx) {
+            self.show_page(Page::Settings, window, cx);
         }
     }
 
@@ -850,9 +872,15 @@ impl Root {
                     ),
                 )
                 .child(
-                    item("menu-settings", Icon::Settings, "Settings", false).on_click(
-                        cx.listener(|this, _, window, cx| this.open_settings(window, cx)),
-                    ),
+                    item(
+                        "menu-settings",
+                        Icon::Settings,
+                        "Settings",
+                        page == Page::Settings,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_page(Page::Settings, window, cx);
+                    })),
                 )
                 .child(
                     item("menu-help", Icon::Help, "Help", false).on_click(
@@ -1266,10 +1294,13 @@ impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = theme(cx);
         let content: AnyElement = match &self.screen {
-            Screen::Ready(workspace) => match (workspace.page, &workspace.stats) {
-                (Page::Stats, Some(stats)) => stats.clone().into_any_element(),
-                _ => workspace.outline.clone().into_any_element(),
-            },
+            Screen::Ready(workspace) => {
+                match (workspace.page, &workspace.stats, &workspace.settings) {
+                    (Page::Stats, Some(stats), _) => stats.clone().into_any_element(),
+                    (Page::Settings, _, Some((settings, _))) => settings.clone().into_any_element(),
+                    _ => workspace.outline.clone().into_any_element(),
+                }
+            }
             _ => self.render_login(cx),
         };
         let body = div()
@@ -1317,6 +1348,7 @@ impl Render for Root {
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_show_shortcuts))
             .on_action(cx.listener(Self::on_show_stats))
+            .on_action(cx.listener(Self::on_show_settings))
             .on_action(cx.listener(Self::on_show_todos))
             .on_action(cx.listener(Self::on_toggle_show_done))
             .size_full()
@@ -1440,6 +1472,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys(crate::ui::text_field::bindings());
             cx.bind_keys(crate::ui::outline_view::bindings());
+            cx.bind_keys(crate::ui::settings_view::bindings());
             cx.bind_keys(bindings());
         });
         let (root, cx) = cx.add_window_view(|window, cx| Root::new(store, Some(prefs), window, cx));
@@ -1582,9 +1615,18 @@ mod tests {
         let (root, outline, cx) = open(cx, &server, &prefs);
 
         root.update_in(cx, Root::toggle_menu);
-        root.update_in(cx, Root::open_settings);
+        root.update_in(cx, Root::close_menu);
         outline.update_in(cx, |outline, window, cx| {
             assert!(outline.focus_handle(cx).contains_focused(window, cx));
+        });
+
+        root.update_in(cx, Root::toggle_menu);
+        root.update_in(cx, |root, window, cx| {
+            root.show_page(Page::Settings, window, cx);
+        });
+        root.update_in(cx, |root, window, _| {
+            assert!(!root.menu_open);
+            assert!(root.focus_handle.is_focused(window));
         });
 
         cx.dispatch_action(ShowStats);
@@ -1595,6 +1637,36 @@ mod tests {
         root.update_in(cx, |root, window, _| {
             assert!(root.focus_handle.is_focused(window));
         });
+    }
+
+    #[gpui::test]
+    fn settings_open_in_the_app_like_stats_instead_of_sending_people_to_sign_in_again_in_the_browser(
+        cx: &mut TestAppContext,
+    ) {
+        let mut server = refusing_saves();
+        let webhook = server
+            .mock("GET", "/api/v1/webhook")
+            .with_body(r#"{"available":true,"webhook":null}"#)
+            .create();
+        let analytics = server
+            .mock("GET", "/api/v1/analytics")
+            .with_body(r#"{"available":true,"enabled":false}"#)
+            .create();
+        let prefs = TempDir::new();
+        let (root, _, cx) = open(cx, &server, &prefs);
+
+        cx.dispatch_action(ShowSettings);
+        cx.run_until_parked();
+
+        assert_eq!(cx.opened_url(), None);
+        root.read_with(cx, |root, _| {
+            assert!(
+                matches!(&root.screen, Screen::Ready(workspace) if workspace.page == Page::Settings)
+            );
+        });
+        assert!(cx.debug_bounds("usage-analytics").is_some());
+        webhook.assert();
+        analytics.assert();
     }
 
     fn press_with_a_wobble(selector: &'static str, cx: &mut VisualTestContext) {

@@ -57,6 +57,8 @@ actions!(
 
 pub const CONTEXT: &str = "TextField";
 
+const BULLET: char = '\u{2022}';
+
 pub fn bindings() -> Vec<KeyBinding> {
     let c = Some(CONTEXT);
     let multi = Some("TextField && multiline");
@@ -126,14 +128,42 @@ struct Paragraph {
 #[derive(Clone)]
 struct FieldLayout {
     text: String,
+    masked: bool,
     paragraphs: Vec<Paragraph>,
     origin: Point<Pixels>,
     bounds: Bounds<Pixels>,
     line_height: Pixels,
 }
 
+fn mask(text: &str) -> String {
+    text.chars().map(|_| BULLET).collect()
+}
+
+fn shown_offset(text: &str, masked: bool, index: usize) -> usize {
+    match text.get(..index) {
+        Some(before) if masked => before.chars().count() * BULLET.len_utf8(),
+        _ => index,
+    }
+}
+
 impl FieldLayout {
+    fn shown(&self, index: usize) -> usize {
+        shown_offset(&self.text, self.masked, index)
+    }
+
+    fn actual(&self, shown: usize) -> usize {
+        if self.masked {
+            self.text
+                .char_indices()
+                .nth(shown / BULLET.len_utf8())
+                .map_or(self.text.len(), |(index, _)| index)
+        } else {
+            shown
+        }
+    }
+
     fn position_for(&self, index: usize) -> Point<Pixels> {
+        let index = self.shown(index);
         let paragraph = self.paragraph_at(index);
         let local = index - paragraph.start;
         let at = paragraph
@@ -168,7 +198,7 @@ impl FieldLayout {
         {
             Ok(index) | Err(index) => index,
         };
-        paragraph.start + index
+        self.actual(paragraph.start + index)
     }
 
     fn visual_line_starts(paragraph: &Paragraph) -> Vec<usize> {
@@ -204,6 +234,7 @@ pub struct TextField {
     placeholder: SharedString,
     context: SharedString,
     multiline: bool,
+    masked: bool,
     max_len: Option<usize>,
     read_only: bool,
     encode_urls: bool,
@@ -235,6 +266,7 @@ impl TextField {
             placeholder: SharedString::default(),
             context: SharedString::from(format!("{CONTEXT} {context}")),
             multiline: false,
+            masked: false,
             max_len: None,
             read_only: false,
             encode_urls: false,
@@ -257,6 +289,30 @@ impl TextField {
         self
     }
 
+    pub fn set_masked(&mut self, masked: bool, cx: &mut Context<Self>) {
+        if self.multiline || self.masked == masked {
+            return;
+        }
+        self.masked = masked;
+        self.layout = None;
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub fn placeholder_text(&self) -> &str {
+        &self.placeholder
+    }
+
+    #[cfg(test)]
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    #[cfg(test)]
+    pub fn is_masked(&self) -> bool {
+        self.masked
+    }
+
     pub fn max_len(mut self, max: usize) -> Self {
         self.max_len = Some(max);
         self
@@ -270,6 +326,14 @@ impl TextField {
     pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
         self.placeholder = text.into();
         self
+    }
+
+    pub fn set_placeholder(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        let text = text.into();
+        if self.placeholder != text {
+            self.placeholder = text;
+            cx.notify();
+        }
     }
 
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
@@ -393,6 +457,9 @@ impl TextField {
     }
 
     fn previous_word(&self, offset: usize) -> usize {
+        if self.masked {
+            return 0;
+        }
         self.content
             .unicode_word_indices()
             .map(|(index, _)| index)
@@ -402,6 +469,9 @@ impl TextField {
     }
 
     fn next_word(&self, offset: usize) -> usize {
+        if self.masked {
+            return self.content.len();
+        }
         for (index, word) in self.content.unicode_word_indices() {
             if index + word.len() > offset {
                 return index + word.len();
@@ -697,7 +767,7 @@ impl TextField {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
+        if !self.selected_range.is_empty() && !self.masked {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
             ));
@@ -705,7 +775,7 @@ impl TextField {
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() && !self.read_only {
+        if !self.selected_range.is_empty() && !self.read_only && !self.masked {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
             ));
@@ -778,6 +848,9 @@ impl TextField {
     }
 
     fn word_around(&self, index: usize) -> (usize, usize) {
+        if self.masked {
+            return (0, self.content.len());
+        }
         for (start, word) in self.content.split_word_bound_indices() {
             let end = start + word.len();
             if start <= index && index < end || end == index && end == self.content.len() {
@@ -813,9 +886,11 @@ impl TextField {
             }
             let line = &layout.paragraphs[0].line;
             let local = point(position.x - layout.origin.x, px(0.));
-            return match line.closest_index_for_position(local, layout.line_height) {
-                Ok(index) | Err(index) => index,
-            };
+            return layout.actual(
+                match line.closest_index_for_position(local, layout.line_height) {
+                    Ok(index) | Err(index) => index,
+                },
+            );
         }
         layout.index_for(position)
     }
@@ -914,7 +989,12 @@ impl EntityInputHandler for TextField {
     ) -> Option<String> {
         let range = self.range_from_utf16(&range_utf16);
         actual_range.replace(self.range_to_utf16(&range));
-        Some(self.content[range].to_string())
+        let text = &self.content[range];
+        Some(if self.masked {
+            BULLET.to_string().repeat(utf16_len(text))
+        } else {
+            text.to_string()
+        })
     }
 
     fn selected_text_range(
@@ -1246,19 +1326,24 @@ impl Element for FieldElement {
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line_height = window.line_height();
         let placeholder = field.content.is_empty() && !field.placeholder.is_empty();
+        let dotted = field.masked && !placeholder;
         let (text, color) = if placeholder {
             (field.placeholder.to_string(), colors.muted)
+        } else if dotted {
+            (mask(&field.content), style.color)
         } else {
             (field.content.clone(), style.color)
         };
+        let shown = |index| shown_offset(&field.content, dotted, index);
+        let marked = field
+            .marked_range
+            .as_ref()
+            .filter(|_| !placeholder)
+            .map(|range| shown(range.start)..shown(range.end));
         let wrap = field.multiline.then_some(bounds.size.width);
         let paragraphs = shape_paragraphs(
             &text,
-            if placeholder {
-                None
-            } else {
-                field.marked_range.as_ref()
-            },
+            marked.as_ref(),
             &Shape {
                 color,
                 font: style.font(),
@@ -1275,7 +1360,8 @@ impl Element for FieldElement {
         let mut scroll_x = field.scroll_x;
 
         let mut layout = FieldLayout {
-            text,
+            text: if dotted { content.clone() } else { text },
+            masked: dotted,
             paragraphs,
             origin: bounds.origin,
             bounds,
@@ -1284,7 +1370,7 @@ impl Element for FieldElement {
         if !multiline && !placeholder {
             let cursor_x = layout.paragraphs[0]
                 .line
-                .position_for_index(cursor_at, line_height)
+                .position_for_index(layout.shown(cursor_at), line_height)
                 .map_or(px(0.), |at| at.x);
             let width = bounds.size.width - px(2.);
             let line_width = layout.paragraphs[0].line.width();
@@ -1421,6 +1507,7 @@ impl Element for FieldElement {
             field.layout = (!placeholder).then_some(layout).or_else(|| {
                 field.content.is_empty().then(|| FieldLayout {
                     text: String::new(),
+                    masked: false,
                     paragraphs: vec![Paragraph {
                         start: 0,
                         line: Rc::default(),
@@ -1575,5 +1662,133 @@ mod tests {
         });
 
         assert_eq!(rect.map(|rect| rect.origin), Some(after_b));
+    }
+
+    fn secret_field<'a>(
+        cx: &'a mut TestAppContext,
+        text: &str,
+    ) -> (Entity<TextField>, &'a mut gpui::VisualTestContext) {
+        cx.update(|cx| cx.set_global(Theme::light()));
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new("Token", cx));
+        field.update(cx, |field, cx| {
+            field.set_masked(true, cx);
+            field.set_text(text, text.len(), cx);
+        });
+        cx.run_until_parked();
+        (field, cx)
+    }
+
+    #[gpui::test]
+    fn a_secret_field_draws_a_dot_for_each_character_so_someone_looking_at_the_screen_cannot_read_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (field, cx) = secret_field(cx, "t\u{f6}ken 1");
+
+        let drawn = field.read_with(cx, |field, _| {
+            field
+                .layout
+                .as_ref()
+                .map(|layout| layout.paragraphs[0].line.text.to_string())
+        });
+
+        assert_eq!(drawn.as_deref(), Some("\u{2022}".repeat(7).as_str()));
+        assert_eq!(
+            field.read_with(cx, |field, _| field.text().to_string()),
+            "t\u{f6}ken 1"
+        );
+    }
+
+    #[gpui::test]
+    fn a_secret_stays_off_the_clipboard_so_it_cannot_be_pasted_somewhere_else_by_mistake(
+        cx: &mut TestAppContext,
+    ) {
+        let (field, cx) = secret_field(cx, "e2e-token");
+        cx.write_to_clipboard(ClipboardItem::new_string("kept".into()));
+
+        field.update_in(cx, |field, window, cx| {
+            field.select_all(&SelectAll, window, cx);
+            field.copy(&Copy, window, cx);
+            field.cut(&Cut, window, cx);
+        });
+
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some("kept".into())
+        );
+        assert_eq!(
+            field.read_with(cx, |field, _| field.text().to_string()),
+            "e2e-token"
+        );
+    }
+
+    #[gpui::test]
+    fn a_click_between_two_dots_puts_the_caret_between_the_characters_they_stand_for(
+        cx: &mut TestAppContext,
+    ) {
+        let (field, cx) = secret_field(cx, "\u{e9}a\u{e9}");
+        let after_a = "\u{e9}a".len();
+
+        let (clicked, caret, second_dot) = field.read_with(cx, |field, _| {
+            let layout = field.layout.as_ref().expect("the field was drawn");
+            let second_dot = layout.paragraphs[0]
+                .line
+                .position_for_index(2 * BULLET.len_utf8(), layout.line_height)
+                .expect("the second dot was drawn");
+            let second_dot = point(layout.origin.x + second_dot.x, layout.origin.y);
+            (
+                field.index_for_mouse(second_dot),
+                layout.position_for(after_a),
+                second_dot,
+            )
+        });
+
+        assert_eq!(clicked, after_a);
+        assert_eq!(caret, second_dot);
+    }
+
+    #[gpui::test]
+    fn moving_by_word_crosses_the_whole_secret_so_the_caret_does_not_reveal_where_its_spaces_are(
+        cx: &mut TestAppContext,
+    ) {
+        let (field, cx) = secret_field(cx, "two words");
+
+        let (left, right, around) = field.read_with(cx, |field, _| {
+            (
+                field.previous_word(9),
+                field.next_word(0),
+                field.word_around(1),
+            )
+        });
+
+        assert_eq!((left, right, around), (0, 9, (0, 9)));
+    }
+
+    #[gpui::test]
+    fn the_input_method_reads_dots_instead_of_the_secret(cx: &mut TestAppContext) {
+        let (field, cx) = secret_field(cx, "e2e");
+
+        let read = field.update_in(cx, |field, window, cx| {
+            field.text_for_range(0..3, &mut None, window, cx)
+        });
+
+        assert_eq!(read.as_deref(), Some("\u{2022}".repeat(3).as_str()));
+    }
+
+    #[gpui::test]
+    fn turning_secret_off_shows_the_characters_again_so_a_url_can_be_checked_before_saving(
+        cx: &mut TestAppContext,
+    ) {
+        let (field, cx) = secret_field(cx, "https://a");
+
+        field.update(cx, |field, cx| field.set_masked(false, cx));
+        cx.run_until_parked();
+
+        let drawn = field.read_with(cx, |field, _| {
+            field
+                .layout
+                .as_ref()
+                .map(|layout| layout.paragraphs[0].line.text.to_string())
+        });
+        assert_eq!(drawn.as_deref(), Some("https://a"));
     }
 }

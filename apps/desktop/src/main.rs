@@ -13,7 +13,8 @@ use nestodo_desktop::store::SystemStore;
 use ui::icons::Assets;
 use ui::outline_view::ToggleShowDone;
 use ui::root::{
-    Quit, Root, ShowShortcuts, ShowStats, ShowTodos, ask_before_leaving_unsaved_changes,
+    Quit, Root, ShowSettings, ShowShortcuts, ShowStats, ShowTodos,
+    ask_before_leaving_unsaved_changes,
 };
 use ui::text_field::{Copy, Cut, Paste, SelectAll};
 use ui::widgets::MIN_WINDOW_WIDTH;
@@ -22,6 +23,7 @@ fn bind_keys(cx: &mut App) {
     cx.bind_keys(ui::text_field::bindings());
     cx.bind_keys(ui::move_picker::bindings());
     cx.bind_keys(ui::outline_view::bindings());
+    cx.bind_keys(ui::settings_view::bindings());
     cx.bind_keys(ui::root::bindings());
 }
 
@@ -37,6 +39,7 @@ fn set_menus(cx: &mut App) {
         Menu::new("View").items([
             MenuItem::action("Todos", ShowTodos),
             MenuItem::action("Stats", ShowStats),
+            MenuItem::action("Settings", ShowSettings),
             MenuItem::separator(),
             MenuItem::action("Show Completed", ToggleShowDone),
         ]),
