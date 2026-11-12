@@ -869,7 +869,7 @@ fn clicking_a_letter_puts_the_caret_on_its_nearer_side_so_typing_lands_where_the
         seed("Tea"),
     ]));
     let (_, cx) = open(cx, &server, true);
-    let glyph = 16. * 0.6;
+    let glyph = 15. * 0.6;
     let at = |cx: &mut VisualTestContext, selector: &'static str, glyphs: f32| {
         let title = cx.debug_bounds(selector).expect("the title was drawn");
         gpui::point(
@@ -899,7 +899,7 @@ fn a_click_on_the_first_letter_of_a_link_after_text_opens_the_link_like_the_rest
     let server = Arc::new(FakeServer::with(vec![seed("See https://example.com")]));
     let (_, cx) = open(cx, &server, true);
     let title = cx.debug_bounds("title-t1").expect("the title was drawn");
-    let glyph = 16. * 0.6;
+    let glyph = 15. * 0.6;
     let at = gpui::point(
         title.origin.x + px(4. + glyph * 4.5),
         title.origin.y + title.size.height / 2.,

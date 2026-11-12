@@ -62,6 +62,7 @@ rustPlatform.buildRustPackage {
     license = with lib.licenses; [
       mit
       asl20
+      ofl
     ];
     platforms = lib.platforms.darwin;
   };

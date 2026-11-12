@@ -51,6 +51,7 @@ fn main() {
     gpui_platform::application()
         .with_assets(Assets)
         .run(|cx: &mut App| {
+            ui::theme::load_fonts(cx);
             bind_keys(cx);
             set_menus(cx);
             cx.on_window_closed(|cx, _| {

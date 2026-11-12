@@ -35,7 +35,7 @@ pub fn icon_button(
         .items_center()
         .justify_center()
         .size(px(32.))
-        .rounded(px(6.))
+        .rounded(px(9.))
         .text_color(colors.muted)
         .cursor_pointer()
         .hover(move |style| style.bg(colors.hover))
@@ -47,12 +47,12 @@ pub fn kbd(text: impl Into<SharedString>, cx: &App) -> Div {
     div()
         .flex_none()
         .min_w(px(22.))
-        .px(px(5.))
+        .px(px(6.))
         .py(px(1.))
         .border_1()
         .border_b_2()
         .border_color(colors.border)
-        .rounded(px(4.))
+        .rounded(px(6.))
         .bg(colors.surface)
         .text_color(colors.text)
         .text_size(px(11.5))
@@ -63,15 +63,16 @@ pub fn kbd(text: impl Into<SharedString>, cx: &App) -> Div {
 }
 
 pub fn shadow(colors: &Theme, large: bool) -> Vec<BoxShadow> {
-    let (blur, y, alpha) = if large {
-        (48., 16., 0.18)
-    } else {
-        (24., 8., 0.10)
+    let (blur, y, alpha) = match (large, colors.dark) {
+        (false, false) => (32., 12., 0.14),
+        (true, false) => (56., 24., 0.24),
+        (false, true) => (40., 16., 0.45),
+        (true, true) => (56., 24., 0.5),
     };
     let mut base = colors.shadow;
-    base.a = if colors.dark { alpha * 2.5 } else { alpha };
+    base.a = alpha;
     let mut edge = colors.shadow;
-    edge.a = if colors.dark { 0.2 } else { 0.06 };
+    edge.a = if colors.dark { 0.2 } else { 0.08 };
     vec![
         BoxShadow {
             color: base,
@@ -84,6 +85,32 @@ pub fn shadow(colors: &Theme, large: bool) -> Vec<BoxShadow> {
             color: edge,
             offset: point(px(0.), px(1.)),
             blur_radius: px(2.),
+            spread_radius: px(0.),
+            inset: false,
+        },
+    ]
+}
+
+pub fn sheet_shadow(colors: &Theme) -> Vec<BoxShadow> {
+    if colors.dark {
+        return Vec::new();
+    }
+    let mut near = colors.shadow;
+    near.a = 0.06;
+    let mut far = colors.shadow;
+    far.a = 0.07;
+    vec![
+        BoxShadow {
+            color: near,
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(2.),
+            spread_radius: px(0.),
+            inset: false,
+        },
+        BoxShadow {
+            color: far,
+            offset: point(px(0.), px(12.)),
+            blur_radius: px(32.),
             spread_radius: px(0.),
             inset: false,
         },
@@ -124,7 +151,7 @@ pub fn modal(
                         .overflow_hidden()
                         .border_1()
                         .border_color(colors.border)
-                        .rounded(px(10.))
+                        .rounded(px(16.))
                         .bg(colors.surface)
                         .text_color(colors.text)
                         .shadow(shadow(&colors, true))
@@ -159,7 +186,7 @@ impl Render for Tooltip {
             div()
                 .px(px(8.))
                 .py(px(4.))
-                .rounded(px(6.))
+                .rounded(px(8.))
                 .bg(colors.text)
                 .text_color(colors.bg)
                 .text_size(px(12.))
