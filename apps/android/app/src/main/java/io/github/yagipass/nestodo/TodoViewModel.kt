@@ -19,6 +19,7 @@ import io.github.yagipass.nestodo.data.Settings
 import io.github.yagipass.nestodo.data.TodoRepository
 import io.github.yagipass.nestodo.data.baseUrlOf
 import io.github.yagipass.nestodo.data.label
+import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Caret
 import io.github.yagipass.nestodo.domain.Change
 import io.github.yagipass.nestodo.domain.Day
@@ -29,6 +30,9 @@ import io.github.yagipass.nestodo.domain.Outline
 import io.github.yagipass.nestodo.domain.OutlineRow
 import io.github.yagipass.nestodo.domain.Todo
 import io.github.yagipass.nestodo.domain.Viewport
+import io.github.yagipass.nestodo.domain.WebhookEdit
+import io.github.yagipass.nestodo.domain.WebhookForm
+import io.github.yagipass.nestodo.domain.Webhooks
 import io.github.yagipass.nestodo.domain.append
 import io.github.yagipass.nestodo.domain.delete
 import io.github.yagipass.nestodo.domain.deleteBackward
@@ -83,6 +87,31 @@ sealed interface StatsState {
     data class Failed(val message: String) : StatsState
 }
 
+sealed interface SettingsState {
+    data object Loading : SettingsState
+
+    data class Loaded(
+        val webhooks: Webhooks,
+        val analytics: Analytics,
+        val form: WebhookForm? = null,
+        val errors: Map<String, String> = emptyMap(),
+        val saving: Boolean = false,
+        val analyticsSaving: Boolean = false,
+        val analyticsFailed: Boolean = false,
+    ) : SettingsState {
+        fun showing(webhooks: Webhooks): Loaded =
+            copy(
+                webhooks = webhooks,
+                form =
+                    WebhookForm.of(null).takeIf { webhooks.available && webhooks.webhook == null },
+                errors = emptyMap(),
+                saving = false,
+            )
+    }
+
+    data class Failed(val message: String) : SettingsState
+}
+
 data class TodoUiState(
     val auth: AuthState = AuthState.Checking,
     val loginError: String? = null,
@@ -102,6 +131,7 @@ data class TodoUiState(
     val canUndo: Boolean = false,
     val notice: Notice? = null,
     val stats: StatsState? = null,
+    val settings: SettingsState? = null,
 ) {
     val viewport: Viewport
         get() = Viewport(showCompleted)
@@ -123,6 +153,18 @@ class TodoViewModel(
         data class Load(val force: Boolean) : Task
 
         data class Stats(val request: Long) : Task
+
+        data class Settings(val request: Long, val call: SettingsCall) : Task
+    }
+
+    private sealed interface SettingsCall {
+        data object Load : SettingsCall
+
+        data class Save(val edit: WebhookEdit) : SettingsCall
+
+        data object Remove : SettingsCall
+
+        data class SetAnalytics(val enabled: Boolean) : SettingsCall
     }
 
     private data class Queued(val task: Task, val generation: Int)
@@ -165,6 +207,7 @@ class TodoViewModel(
     private val history = ArrayDeque<Undo>()
     private var noticeId = 0L
     private var statsRequest = 0L
+    private var settingsRequest = 0L
 
     init {
         connect()
@@ -512,6 +555,59 @@ class TodoViewModel(
         _state.update { it.copy(stats = null) }
     }
 
+    fun openSettings() {
+        _state.update { it.copy(settings = SettingsState.Loading) }
+        settingsRequest += 1
+        enqueue(Task.Settings(settingsRequest, SettingsCall.Load))
+    }
+
+    fun closeSettings() {
+        _state.update { it.copy(settings = null) }
+    }
+
+    fun editWebhook() = updateSettings { settings ->
+        settings.copy(form = WebhookForm.of(settings.webhooks.webhook), errors = emptyMap())
+    }
+
+    fun cancelWebhook() = updateSettings { settings ->
+        if (settings.webhooks.webhook == null || settings.saving) settings
+        else settings.copy(form = null, errors = emptyMap())
+    }
+
+    fun changeWebhook(form: WebhookForm) = updateSettings { settings ->
+        if (settings.form == null) settings else settings.copy(form = form)
+    }
+
+    fun saveWebhook() {
+        val form = (current.settings as? SettingsState.Loaded)?.form ?: return
+        callSettings(SettingsCall.Save(form.edit))
+    }
+
+    fun removeWebhook() {
+        callSettings(SettingsCall.Remove)
+    }
+
+    fun setAnalytics(enabled: Boolean) {
+        val settings = current.settings as? SettingsState.Loaded ?: return
+        if (settings.analyticsSaving) return
+        updateSettings { it.copy(analyticsSaving = true, analyticsFailed = false) }
+        enqueue(Task.Settings(settingsRequest, SettingsCall.SetAnalytics(enabled)))
+    }
+
+    private fun callSettings(call: SettingsCall) {
+        val settings = current.settings as? SettingsState.Loaded ?: return
+        if (settings.saving) return
+        updateSettings { it.copy(saving = true, errors = emptyMap()) }
+        enqueue(Task.Settings(settingsRequest, call))
+    }
+
+    private fun updateSettings(change: (SettingsState.Loaded) -> SettingsState.Loaded) {
+        _state.update { state ->
+            val settings = state.settings as? SettingsState.Loaded ?: return@update state
+            state.copy(settings = change(settings))
+        }
+    }
+
     fun undo() {
         val undo = history.removeLastOrNull() ?: return
         saveTyping(undo.changes)
@@ -663,7 +759,11 @@ class TodoViewModel(
         syncJob = viewModelScope.launch {
             for (queued in channel) {
                 try {
-                    if (queued.generation == generation || queued.task is Task.Stats) {
+                    if (
+                        queued.generation == generation ||
+                            queued.task is Task.Stats ||
+                            queued.task is Task.Settings
+                    ) {
                         execute(repository, queued.task)
                     }
                 } catch (e: CancellationException) {
@@ -704,8 +804,41 @@ class TodoViewModel(
             is Task.Send -> send(repository, task.change)
             is Task.Stats ->
                 showStats(task.request, StatsState.Loaded(repository.stats(timeZone())))
+            is Task.Settings -> settle(repository, task)
         }
     }
+
+    private suspend fun settle(repository: TodoRepository, task: Task.Settings) {
+        when (val call = task.call) {
+            SettingsCall.Load -> {
+                val loaded = SettingsState.Loaded(repository.webhooks(), repository.analytics())
+                showSettings(task.request) { loaded.showing(loaded.webhooks) }
+            }
+            is SettingsCall.Save -> {
+                val webhooks = repository.saveWebhook(call.edit)
+                showSettings(task.request) { it.loaded()?.showing(webhooks) }
+            }
+            SettingsCall.Remove -> {
+                repository.removeWebhook()
+                showSettings(task.request) { settings ->
+                    settings.loaded()?.let { it.showing(it.webhooks.copy(webhook = null)) }
+                }
+            }
+            is SettingsCall.SetAnalytics -> {
+                val enabled = repository.setAnalytics(call.enabled)
+                showSettings(task.request) { settings ->
+                    settings.loaded()?.let {
+                        it.copy(
+                            analytics = it.analytics.copy(enabled = enabled),
+                            analyticsSaving = false,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun SettingsState.loaded(): SettingsState.Loaded? = this as? SettingsState.Loaded
 
     private suspend fun send(repository: TodoRepository, change: Change) {
         fun id(key: Long): Long = serverIds[key] ?: key
@@ -760,6 +893,14 @@ class TodoViewModel(
         _state.update { if (it.stats == null) it else it.copy(stats = stats) }
     }
 
+    private fun showSettings(request: Long, change: (SettingsState) -> SettingsState?) {
+        if (request != settingsRequest) return
+        _state.update { state ->
+            val settings = state.settings ?: return@update state
+            state.copy(settings = change(settings) ?: settings)
+        }
+    }
+
     private fun recover(error: Exception, task: Task) {
         if (task is Task.Load) {
             fail(error, retry = ::refresh)
@@ -773,11 +914,35 @@ class TodoViewModel(
             }
             return
         }
+        if (task is Task.Settings) {
+            recoverSettings(error, task)
+            return
+        }
         discardPending()
         history.clear()
         _state.update { it.copy(canUndo = false) }
         fail(error, retry = null)
         enqueue(Task.Load(force = true))
+    }
+
+    private fun recoverSettings(error: Exception, task: Task.Settings) {
+        if (error is ApiException.NotSignedIn) {
+            fail(error, retry = null)
+            return
+        }
+        when (task.call) {
+            SettingsCall.Load -> showSettings(task.request) { SettingsState.Failed(reason(error)) }
+            is SettingsCall.SetAnalytics ->
+                showSettings(task.request) {
+                    it.loaded()?.copy(analyticsSaving = false, analyticsFailed = true)
+                }
+            is SettingsCall.Save,
+            SettingsCall.Remove -> {
+                val fields = (error as? ApiException.Invalid)?.fields.orEmpty()
+                showSettings(task.request) { it.loaded()?.copy(saving = false, errors = fields) }
+                if (fields.isEmpty() && task.request == settingsRequest) fail(error, retry = null)
+            }
+        }
     }
 
     private fun fail(error: Exception, retry: (() -> Unit)?) {

@@ -2,13 +2,18 @@ package io.github.yagipass.nestodo.data
 
 import io.github.yagipass.nestodo.access.HttpResult
 import io.github.yagipass.nestodo.access.fetch
+import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.Todo
+import io.github.yagipass.nestodo.domain.WebhookEdit
+import io.github.yagipass.nestodo.domain.Webhooks
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -27,7 +32,8 @@ sealed class ApiException(message: String) : Exception(message) {
 
     class NotFound(val id: Long) : ApiException("todo $id was not found")
 
-    class Invalid : ApiException("the server rejected the input")
+    class Invalid(val fields: Map<String, String> = emptyMap()) :
+        ApiException("the server rejected the input")
 
     class Server(val status: Int) : ApiException("the server returned $status")
 }
@@ -50,6 +56,16 @@ interface TodoRepository {
     suspend fun delete(id: Long, recursive: Boolean)
 
     suspend fun stats(timeZone: String): List<Day>
+
+    suspend fun webhooks(): Webhooks
+
+    suspend fun saveWebhook(edit: WebhookEdit): Webhooks
+
+    suspend fun removeWebhook()
+
+    suspend fun analytics(): Analytics
+
+    suspend fun setAnalytics(enabled: Boolean): Boolean
 }
 
 class TodoApi(
@@ -62,6 +78,18 @@ class TodoApi(
     @Serializable private data class One(val todo: Todo)
 
     @Serializable private data class Stats(val days: List<Day>)
+
+    @Serializable private data class Consent(val enabled: Boolean)
+
+    @Serializable
+    private data class Issue(val path: String = "", val message: String) {
+        val field: String
+            get() = path.substringBefore('.')
+    }
+
+    @Serializable private data class Slot(val issues: List<Issue> = emptyList())
+
+    @Serializable private data class Refusal(val issues: List<Slot> = emptyList())
 
     override suspend fun list(): List<Todo> = parse<Many>(call("GET", url(COLLECTION))).todos
 
@@ -110,6 +138,21 @@ class TodoApi(
         return parse<Stats>(call("GET", url)).days
     }
 
+    override suspend fun webhooks(): Webhooks = parse(call("GET", url(WEBHOOK)))
+
+    override suspend fun saveWebhook(edit: WebhookEdit): Webhooks =
+        parse(call("PUT", url(WEBHOOK), json.encodeToJsonElement(edit).jsonObject))
+
+    override suspend fun removeWebhook() {
+        call("DELETE", url(WEBHOOK))
+    }
+
+    override suspend fun analytics(): Analytics = parse(call("GET", url(ANALYTICS)))
+
+    override suspend fun setAnalytics(enabled: Boolean): Boolean =
+        parse<Consent>(call("PUT", url(ANALYTICS), buildJsonObject { put("enabled", enabled) }))
+            .enabled
+
     private suspend fun patch(id: Long, body: JsonObject): Todo =
         parse<One>(call("PATCH", url(item(id)), body, id)).todo
 
@@ -132,7 +175,7 @@ class TodoApi(
         return when {
             response.code in 200..299 -> response
             response.code == 404 && id != null -> throw ApiException.NotFound(id)
-            response.code == 400 -> throw ApiException.Invalid()
+            response.code == 400 -> throw ApiException.Invalid(refusedFields(response))
             else -> throw ApiException.Server(response.code)
         }
     }
@@ -158,6 +201,20 @@ class TodoApi(
             response.code == 403 ||
             response.location()?.encodedPath?.startsWith(LOGIN_PATH) == true
 
+    private fun refusedFields(response: HttpResult): Map<String, String> =
+        try {
+            json
+                .decodeFromString<Refusal>(response.body.decodeToString())
+                .issues
+                .flatMap { it.issues }
+                .distinctBy { it.field }
+                .associate { it.field to it.message }
+        } catch (_: SerializationException) {
+            emptyMap()
+        } catch (_: IllegalArgumentException) {
+            emptyMap()
+        }
+
     private inline fun <reified T> parse(response: HttpResult): T =
         try {
             json.decodeFromString<T>(response.body.decodeToString())
@@ -170,6 +227,8 @@ class TodoApi(
     private companion object {
         const val COLLECTION = "/api/v1/todos"
         const val STATS = "/api/v1/stats"
+        const val WEBHOOK = "/api/v1/webhook"
+        const val ANALYTICS = "/api/v1/analytics"
         const val LOGIN_PATH = "/cdn-cgi/access/login"
         val JSON = "application/json".toMediaType()
         val json = Json { ignoreUnknownKeys = true }

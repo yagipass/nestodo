@@ -55,6 +55,11 @@ fun NestodoApp(viewModel: TodoViewModel, openInBrowser: (String) -> Unit) {
         return
     }
 
+    state.settings?.let { settings ->
+        SettingsScreen(settings = settings, snackbar = snackbar, viewModel = viewModel)
+        return
+    }
+
     OutlineScreen(
         state = state,
         viewModel = viewModel,

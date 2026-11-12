@@ -5,6 +5,10 @@ import io.github.yagipass.nestodo.access.DeviceLockedException
 import io.github.yagipass.nestodo.data.ApiException
 import io.github.yagipass.nestodo.domain.Caret
 import io.github.yagipass.nestodo.domain.Todo
+import io.github.yagipass.nestodo.domain.Webhook
+import io.github.yagipass.nestodo.domain.WebhookEdit
+import io.github.yagipass.nestodo.domain.WebhookForm
+import io.github.yagipass.nestodo.domain.WebhookHeader
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -1347,6 +1351,215 @@ class TodoViewModelTest {
         val state = viewModel.state.value
         assertEquals(AuthState.SignedOut, state.auth)
         assertNull(state.stats)
+        assertNotNull(state.loginError)
+    }
+
+    private val savedWebhook =
+        Webhook(
+            url = null,
+            hasToken = true,
+            headers = listOf(WebhookHeader("X-Api-Key", "", secret = true)),
+            project = "Side projects",
+        )
+
+    private fun TodoViewModel.settings(): SettingsState.Loaded =
+        state.value.settings as SettingsState.Loaded
+
+    private fun TodoViewModel.typeWebhook(change: (WebhookForm) -> WebhookForm) {
+        changeWebhook(change(settings().form!!))
+    }
+
+    @Test
+    fun `Settings shows the saved webhook and usage data in the app instead of sending people to the browser`() {
+        repository.webhooks = repository.webhooks.copy(webhook = savedWebhook)
+        val viewModel = viewModel()
+
+        viewModel.openSettings()
+
+        assertEquals(listOf("GET webhook", "GET analytics"), repository.calls)
+        val settings = viewModel.settings()
+        assertEquals(savedWebhook, settings.webhooks.webhook)
+        assertEquals(repository.analytics, settings.analytics)
+        assertNull(settings.form)
+    }
+
+    @Test
+    fun `Settings opens on an empty form when there is no webhook yet, so setting one up takes no extra tap`() {
+        val viewModel = viewModel()
+
+        viewModel.openSettings()
+
+        assertEquals(WebhookForm.of(null), viewModel.settings().form)
+    }
+
+    @Test
+    fun `Settings opened while the outline reloads still arrive instead of loading forever`() {
+        val viewModel = viewModel()
+        repository.gate = CompletableDeferred()
+        viewModel.refresh()
+        viewModel.openSettings()
+
+        repository.gate!!.complete(Unit)
+
+        assertEquals(listOf("GET", "GET webhook", "GET analytics"), repository.calls)
+        assertTrue(viewModel.state.value.settings is SettingsState.Loaded)
+    }
+
+    @Test
+    fun `a webhook saved in the app is sent as typed and then shown saved, so the member sees it took`() {
+        val viewModel = viewModel()
+        viewModel.openSettings()
+        viewModel.typeWebhook {
+            it.copy(url = "https://example.com/hook", token = "e2e-token", project = "Work")
+        }
+
+        viewModel.saveWebhook()
+
+        assertEquals(
+            listOf(
+                WebhookEdit(
+                    "https://example.com/hook",
+                    urlSecret = true,
+                    token = "e2e-token",
+                    headers = emptyList(),
+                    project = "Work",
+                )
+            ),
+            repository.savedWebhooks,
+        )
+        val settings = viewModel.settings()
+        assertNull(settings.form)
+        assertEquals("Work", settings.webhooks.webhook?.project)
+        assertFalse(settings.saving)
+    }
+
+    @Test
+    fun `a value the server refuses stays in the form with the message under its field, so nothing typed is lost`() {
+        val viewModel = viewModel()
+        viewModel.openSettings()
+        viewModel.typeWebhook { it.copy(url = "ftp://example.com/hook", project = "Work") }
+        val typed = viewModel.settings().form
+        repository.failure = ApiException.Invalid(mapOf("url" to "Enter an http or https URL"))
+
+        viewModel.saveWebhook()
+
+        val settings = viewModel.settings()
+        assertEquals(typed, settings.form)
+        assertEquals(mapOf("url" to "Enter an http or https URL"), settings.errors)
+        assertFalse(settings.saving)
+        assertNull(viewModel.state.value.notice)
+    }
+
+    @Test
+    fun `a save that fails to reach the server keeps the form and says why, so it can be sent again`() {
+        val viewModel = viewModel()
+        viewModel.openSettings()
+        viewModel.typeWebhook { it.copy(url = "https://example.com/hook", project = "Work") }
+        repository.failure = IOException("offline")
+
+        viewModel.saveWebhook()
+
+        val settings = viewModel.settings()
+        assertEquals("https://example.com/hook", settings.form?.url)
+        assertFalse(settings.saving)
+        assertEquals("Can't connect. Check your connection.", viewModel.state.value.notice?.text)
+    }
+
+    @Test
+    fun `editing starts from the saved webhook, and Cancel goes back to it without saving anything`() {
+        repository.webhooks = repository.webhooks.copy(webhook = savedWebhook)
+        val viewModel = viewModel()
+        viewModel.openSettings()
+
+        viewModel.editWebhook()
+        assertEquals(WebhookForm.of(savedWebhook), viewModel.settings().form)
+        viewModel.typeWebhook { it.copy(project = "Work") }
+        viewModel.cancelWebhook()
+
+        assertNull(viewModel.settings().form)
+        assertEquals(savedWebhook, viewModel.settings().webhooks.webhook)
+        assertTrue(repository.savedWebhooks.isEmpty())
+    }
+
+    @Test
+    fun `removing the webhook leaves an empty form, so another can be set up right away`() {
+        repository.webhooks = repository.webhooks.copy(webhook = savedWebhook)
+        val viewModel = viewModel()
+        viewModel.openSettings()
+        viewModel.editWebhook()
+
+        viewModel.removeWebhook()
+
+        assertEquals(listOf("GET webhook", "GET analytics", "DELETE webhook"), repository.calls)
+        assertNull(viewModel.settings().webhooks.webhook)
+        assertEquals(WebhookForm.of(null), viewModel.settings().form)
+    }
+
+    @Test
+    fun `turning usage data on is saved for the account and shown on`() {
+        val viewModel = viewModel()
+        viewModel.openSettings()
+
+        viewModel.setAnalytics(true)
+
+        assertTrue(repository.calls.contains("PUT analytics true"))
+        assertTrue(viewModel.settings().analytics.enabled)
+        assertFalse(viewModel.settings().analyticsSaving)
+    }
+
+    @Test
+    fun `usage data that fails to save stays as it was and says so, so the switch never shows a choice the server lacks`() {
+        val viewModel = viewModel()
+        viewModel.openSettings()
+        repository.failure = IOException("offline")
+
+        viewModel.setAnalytics(true)
+
+        val settings = viewModel.settings()
+        assertFalse(settings.analytics.enabled)
+        assertTrue(settings.analyticsFailed)
+        assertFalse(settings.analyticsSaving)
+    }
+
+    @Test
+    fun `Settings that fail to load say why and load when opened again`() {
+        val viewModel = viewModel()
+        repository.failure = IOException("offline")
+        viewModel.openSettings()
+        assertEquals(
+            SettingsState.Failed("Can't connect. Check your connection."),
+            viewModel.state.value.settings,
+        )
+
+        viewModel.openSettings()
+
+        assertTrue(viewModel.state.value.settings is SettingsState.Loaded)
+    }
+
+    @Test
+    fun `a save answered after leaving Settings does not open the screen again`() {
+        val viewModel = viewModel()
+        viewModel.openSettings()
+        viewModel.typeWebhook { it.copy(url = "https://example.com/hook", project = "Work") }
+        repository.gate = CompletableDeferred()
+        viewModel.saveWebhook()
+        viewModel.closeSettings()
+
+        repository.gate!!.complete(Unit)
+
+        assertNull(viewModel.state.value.settings)
+    }
+
+    @Test
+    fun `an expired login on Settings returns to the login screen with the reason`() {
+        val viewModel = viewModel()
+        repository.failure = ApiException.NotSignedIn()
+
+        viewModel.openSettings()
+
+        val state = viewModel.state.value
+        assertEquals(AuthState.SignedOut, state.auth)
+        assertNull(state.settings)
         assertNotNull(state.loginError)
     }
 }

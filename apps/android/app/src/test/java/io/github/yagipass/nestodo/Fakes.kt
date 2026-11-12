@@ -10,8 +10,12 @@ import io.github.yagipass.nestodo.data.Connection
 import io.github.yagipass.nestodo.data.LoginFlow
 import io.github.yagipass.nestodo.data.Settings
 import io.github.yagipass.nestodo.data.TodoRepository
+import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.Todo
+import io.github.yagipass.nestodo.domain.Webhook
+import io.github.yagipass.nestodo.domain.WebhookEdit
+import io.github.yagipass.nestodo.domain.Webhooks
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.TestScope
@@ -22,6 +26,9 @@ import org.junit.rules.TemporaryFolder
 class FakeRepository(var todos: List<Todo>) : TodoRepository {
     val calls = mutableListOf<String>()
     var days = listOf(Day("2026-10-26", added = 2, completed = 1, open = 3))
+    var webhooks = Webhooks(available = true)
+    var analytics = Analytics(available = true, enabled = false)
+    val savedWebhooks = mutableListOf<WebhookEdit>()
     var failure: Exception? = null
     var gate: CompletableDeferred<Unit>? = null
     private var nextId = 100L
@@ -80,6 +87,41 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
     override suspend fun stats(timeZone: String): List<Day> {
         answer("GET stats in $timeZone")
         return days
+    }
+
+    override suspend fun webhooks(): Webhooks {
+        answer("GET webhook")
+        return webhooks
+    }
+
+    override suspend fun saveWebhook(edit: WebhookEdit): Webhooks {
+        answer("PUT webhook")
+        savedWebhooks += edit
+        val webhook =
+            Webhook(
+                url = edit.url.takeUnless { edit.urlSecret },
+                hasToken = !edit.token.isNullOrEmpty(),
+                headers = edit.headers.map { if (it.secret) it.copy(value = "") else it },
+                project = edit.project,
+            )
+        webhooks = webhooks.copy(webhook = webhook)
+        return webhooks
+    }
+
+    override suspend fun removeWebhook() {
+        answer("DELETE webhook")
+        webhooks = webhooks.copy(webhook = null)
+    }
+
+    override suspend fun analytics(): Analytics {
+        answer("GET analytics")
+        return analytics
+    }
+
+    override suspend fun setAnalytics(enabled: Boolean): Boolean {
+        answer("PUT analytics $enabled")
+        analytics = analytics.copy(enabled = enabled)
+        return enabled
     }
 }
 
