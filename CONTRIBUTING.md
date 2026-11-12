@@ -101,7 +101,7 @@ Merge the release pull request that [tagpr](https://github.com/Songmu/tagpr) kee
 
 The deploy runs in the `Cloudflare` environment, which only `main` can deploy from. It needs the environment's secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `NESTODO_HOST` and `NESTODO_MCP_HOST`, and stops before deploying when `CLOUDFLARE_ACCOUNT_ID`, `NESTODO_HOST` or `NESTODO_MCP_HOST` is empty. The hosts are secrets so that the public workflow logs mask them.
 
-The environment's secret `POSTHOG_PROJECT_TOKEN` is optional. Leave it empty to send nothing to PostHog and hide the usage analytics setting. When it is set, the web app sends page views only for users who turned on **Send usage data** in **Settings**. The dev server never sends.
+The environment's secret `POSTHOG_PROJECT_TOKEN` is optional. Leave it empty to send nothing to PostHog and hide the usage analytics setting. When it is set, the server hands the token to the desktop and Android apps, and the web app sends page views and the apps send the screens they show, only for users who turned on **Send usage data** in **Settings**. The dev server and debug builds of the apps never send.
 
 `void.lock.json` is not committed. Each deploy finds the D1 database `nestodo-db` by name in `CLOUDFLARE_ACCOUNT_ID` and creates it only when it does not exist, so renaming the database in Cloudflare or in `void.config.ts` starts from an empty one. Void keeps Durable Object migration history in the lock, so commit it again before adding a Durable Object.
 

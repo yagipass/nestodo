@@ -49,7 +49,15 @@ describe("consent to usage analytics", () => {
 
     const res = await member.request("/api/v1/analytics", { origin: null });
 
-    expect(await res.json()).toEqual({ available: true, enabled: false });
+    expect(await res.json()).toEqual(expect.objectContaining({ available: true, enabled: false }));
+  });
+
+  it("hands the apps this server's PostHog project, so their usage data goes to the project the server's owner chose", async () => {
+    const member = await signedInUser();
+
+    const res = await member.request("/api/v1/analytics", { origin: null });
+
+    expect(await res.json()).toEqual(expect.objectContaining({ token: "phc_e2e" }));
   });
 
   it("rejects anything but a yes or no, so a malformed request cannot record consent", async () => {

@@ -247,8 +247,8 @@ function AnalyticsCard({ consented }: { consented: boolean }) {
     <section className="card" aria-labelledby="analytics-title">
       <h2 id="analytics-title">Usage analytics</h2>
       <p className="card-note">
-        When on, the pages you open, your browser and device, and your approximate location from your IP address are sent to PostHog. Your todos and email address are
-        never sent. This applies to your account on every device.
+        When on, the pages and screens you open in the web, desktop and Android apps, your browser or device, and your approximate location from your IP address are sent
+        to PostHog. Your todos and email address are never sent. This applies to your account on every device.
       </p>
       {failed && (
         <p className="webhook-error" role="alert">
