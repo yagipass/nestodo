@@ -134,6 +134,15 @@ fn change_elsewhere(
         .unwrap();
 }
 
+fn half_bought() -> Arc<FakeServer> {
+    Arc::new(FakeServer::with(vec![
+        seed("Groceries"),
+        seed("Milk").under(1).done(),
+        seed("Bread").under(1),
+        seed("Trip"),
+    ]))
+}
+
 fn groceries() -> Arc<FakeServer> {
     Arc::new(FakeServer::with(vec![
         seed("Groceries"),
@@ -527,9 +536,181 @@ fn deleting_a_row_with_children_asks_first_and_keeps_it_when_cancelled(cx: &mut 
     assert_eq!(server.tree(), "Groceries\n  Milk\n  Bread\nTrip");
 
     cx.simulate_keystrokes("cmd-shift-backspace");
-    cx.simulate_prompt_answer("Delete");
+    cx.simulate_prompt_answer("Delete all");
     settle(cx);
     assert_eq!(server.tree(), "Trip");
+}
+
+#[gpui::test]
+fn marking_a_todo_done_with_open_todos_under_it_asks_first_and_cancelling_leaves_everything_and_the_caret_as_it_was(
+    cx: &mut TestAppContext,
+) {
+    let server = half_bought();
+    let (view, cx) = open(cx, &server, true);
+    focus(&view, cx, "Groceries", 3);
+
+    cx.simulate_keystrokes("cmd-enter");
+    assert_eq!(
+        cx.pending_prompt(),
+        Some((
+            "Mark \u{201c}Groceries\u{201d} as done?".into(),
+            "1 item under it isn\u{2019}t done yet. It\u{2019}ll be marked as done too.".into()
+        ))
+    );
+    cx.simulate_prompt_answer("Cancel");
+    settle(cx);
+    assert_eq!(server.tree(), "Groceries\n  Milk [done]\n  Bread\nTrip");
+    assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
+    assert_eq!(focused(&view, cx), Some(("Groceries".into(), 3, false)));
+
+    cx.simulate_keystrokes("cmd-enter");
+    cx.simulate_prompt_answer("Mark all as done");
+    settle(cx);
+    assert_eq!(
+        server.tree(),
+        "Groceries [done]\n  Milk [done]\n  Bread [done]\nTrip"
+    );
+    assert_eq!(server.sent().len(), 1);
+}
+
+#[gpui::test]
+fn the_check_counts_every_open_todo_under_the_row_even_deeper_ones_hidden_in_a_collapsed_row_so_nothing_out_of_sight_is_completed_without_asking(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Trip").collapsed(),
+        seed("Tickets").under(1).done(),
+        seed("Packing").under(1),
+        seed("Socks").under(3),
+    ]));
+    let (view, cx) = open(cx, &server, false);
+    let trip = key_of(&view, cx, "Trip");
+
+    view.update_in(cx, |view, window, cx| view.check_row(&trip, window, cx));
+    assert_eq!(
+        cx.pending_prompt(),
+        Some((
+            "Mark \u{201c}Trip\u{201d} as done?".into(),
+            "2 items under it aren\u{2019}t done yet. They\u{2019}ll be marked as done too.".into()
+        ))
+    );
+    cx.simulate_prompt_answer("Mark all as done");
+    settle(cx);
+
+    assert_eq!(
+        server.tree(),
+        "Trip [done] [collapsed]\n  Tickets [done]\n  Packing [done]\n    Socks [done]"
+    );
+}
+
+#[gpui::test]
+fn marking_done_asks_nothing_when_everything_under_it_is_done_and_reopening_never_asks_and_keeps_the_todos_under_it_done(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Trip"),
+        seed("Tickets").under(1).done(),
+        seed("Home"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    focus(&view, cx, "Trip", 0);
+
+    cx.simulate_keystrokes("cmd-enter");
+    assert!(!cx.has_pending_prompt());
+    settle(cx);
+    assert_eq!(server.tree(), "Trip [done]\n  Tickets [done]\nHome");
+
+    cx.simulate_keystrokes("cmd-enter");
+    assert!(!cx.has_pending_prompt());
+    settle(cx);
+    assert_eq!(server.tree(), "Trip\n  Tickets [done]\nHome");
+}
+
+#[gpui::test]
+fn reopening_never_asks_even_a_todo_completed_before_completing_took_the_todos_under_it_along(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Trip").done(),
+        seed("Visa").under(1),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    focus(&view, cx, "Trip", 0);
+
+    cx.simulate_keystrokes("cmd-enter");
+    assert!(!cx.has_pending_prompt());
+    settle(cx);
+
+    assert_eq!(server.tree(), "Trip\n  Visa");
+}
+
+#[gpui::test]
+fn cmd_z_after_marking_a_todo_done_reopens_only_what_that_completed(cx: &mut TestAppContext) {
+    let server = half_bought();
+    let (view, cx) = open(cx, &server, true);
+    focus(&view, cx, "Groceries", 0);
+    cx.simulate_keystrokes("cmd-enter");
+    cx.simulate_prompt_answer("Mark all as done");
+    settle(cx);
+    assert_eq!(
+        server.tree(),
+        "Groceries [done]\n  Milk [done]\n  Bread [done]\nTrip"
+    );
+    view.update(cx, super::OutlineView::refresh);
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("cmd-z");
+    settle(cx);
+
+    assert_eq!(server.tree(), "Groceries\n  Milk [done]\n  Bread\nTrip");
+}
+
+#[gpui::test]
+fn adding_a_row_under_a_done_todo_reopens_every_done_todo_above_it_and_cmd_z_removes_the_row_and_completes_them_again(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Trip").done(),
+        seed("Packing").under(1).done(),
+        seed("Socks").under(2).done(),
+        seed("Home"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    focus(&view, cx, "Socks", END);
+
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+    assert_eq!(
+        server.tree(),
+        "Trip\n  Packing\n    Socks [done]\n    \nHome"
+    );
+    view.update(cx, super::OutlineView::refresh);
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("cmd-z");
+    settle(cx);
+    assert_eq!(
+        server.tree(),
+        "Trip [done]\n  Packing [done]\n    Socks [done]\nHome"
+    );
+}
+
+#[gpui::test]
+fn marking_done_asks_nothing_while_a_failed_save_pauses_editing_since_the_answer_could_not_be_saved(
+    cx: &mut TestAppContext,
+) {
+    let server = half_bought();
+    let (view, cx) = open(cx, &server, true);
+    focus(&view, cx, "Trip", 0);
+    server.fail_with(500);
+    cx.simulate_keystrokes("cmd-enter");
+    settle(cx);
+    assert!(view.read_with(cx, |view, _| view.sync.failed));
+
+    focus(&view, cx, "Groceries", 0);
+    cx.simulate_keystrokes("cmd-enter");
+
+    assert!(!cx.has_pending_prompt());
 }
 
 #[gpui::test]
