@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.11.3](https://github.com/yagipass/nestodo/compare/v0.11.2...v0.11.3) - 2026-11-13
+
+### Maintenance
+- build(web): go back to Void 1.5.0 so the deploy uploads again by @yagipass in https://github.com/yagipass/nestodo/pull/115
+
 ## [v0.11.2](https://github.com/yagipass/nestodo/compare/v0.11.1...v0.11.2) - 2026-11-13
 
 ### Web
