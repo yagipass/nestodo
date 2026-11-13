@@ -8,15 +8,14 @@ rustPlatform.buildRustPackage {
   inherit version;
 
   src = lib.fileset.toSource {
-    root = ../..;
+    root = ./.;
     fileset = lib.fileset.unions [
-      ../../Cargo.toml
-      ../../Cargo.lock
       ./Cargo.toml
+      ./Cargo.lock
       ./src
     ];
   };
-  cargoLock.lockFile = ../../Cargo.lock;
+  cargoLock.lockFile = ./Cargo.lock;
 
   doCheck = false;
 

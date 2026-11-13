@@ -31,7 +31,7 @@ updates:
         update-types: [minor, patch]
 
   - package-ecosystem: cargo
-    directory: /
+    directory: /apps/cli
     schedule:
       interval: weekly
     cooldown:

@@ -5,16 +5,12 @@ on:
     branches: [main]
     paths:
       - apps/cli/**
-      - Cargo.toml
-      - Cargo.lock
       - flake.nix
       - flake.lock
       - .github/workflows/cli.yml
   pull_request:
     paths:
       - apps/cli/**
-      - Cargo.toml
-      - Cargo.lock
       - flake.nix
       - flake.lock
       - .github/workflows/cli.yml
@@ -31,6 +27,9 @@ jobs:
   cli:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/cli
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -38,9 +37,9 @@ jobs:
       - uses: cachix/install-nix-action@v31.11.3
       - uses: nix-community/cache-nix-action@v7.0.2
         with:
-          primary-key: nix-cli-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock', 'Cargo.lock') }}
-      - run: nix develop .#cli --command cargo clippy --locked --all-targets -- -D warnings
-      - run: nix develop .#cli --command cargo test --locked
+          primary-key: nix-cli-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock', 'apps/cli/Cargo.lock') }}
+      - run: nix develop ../..#cli --command cargo clippy --locked --all-targets -- -D warnings
+      - run: nix develop ../..#cli --command cargo test --locked
 
   package:
     name: package (${{ matrix.target }})

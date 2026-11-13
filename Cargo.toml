@@ -1,3 +1,0 @@
-[workspace]
-members = ["apps/cli"]
-resolver = "3"
