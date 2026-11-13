@@ -315,7 +315,9 @@ class TodoViewModel(
                 }
                 backend.takeIf { saved != null && saved.host != base.host }?.let { logout(it) }
                 backend = candidate
-                _state.update { it.copy(server = base.label(), changingServer = false) }
+                _state.update {
+                    it.copy(server = base.label(), changingServer = false, settings = null)
+                }
                 when (connection) {
                     is Connection.Ready -> onReady(connection, todos)
                     Connection.SignedOut -> _state.update { it.copy(auth = AuthState.SignedOut) }
@@ -348,6 +350,7 @@ class TodoViewModel(
                 server = current.server,
                 showCompleted = current.showCompleted,
                 changingServer = true,
+                settings = current.settings?.let { SettingsState.Loading },
             )
     }
 
@@ -820,6 +823,7 @@ class TodoViewModel(
         startSync(ready.todos)
         if (todos == null) enqueue(Task.Load(force = true)) else show(todos)
         enqueue(Task.LoadProfile)
+        if (current.settings != null) openSettings()
         startAnalytics(ready.todos)
     }
 

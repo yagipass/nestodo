@@ -3,6 +3,7 @@ package io.github.yagipass.nestodo
 import android.content.ActivityNotFoundException
 import io.github.yagipass.nestodo.access.DeviceLockedException
 import io.github.yagipass.nestodo.data.ApiException
+import io.github.yagipass.nestodo.data.Screen
 import io.github.yagipass.nestodo.domain.Caret
 import io.github.yagipass.nestodo.domain.Profile
 import io.github.yagipass.nestodo.domain.Todo
@@ -1199,8 +1200,9 @@ class TodoViewModelTest {
     }
 
     @Test
-    fun `tapping Change server by mistake keeps the server and its sign-in, so Cancel goes back without signing in again`() {
+    fun `tapping Change server in Settings by mistake keeps the server and its sign-in, so Cancel goes back to Settings without signing in again`() {
         val viewModel = viewModel()
+        viewModel.openSettings()
 
         viewModel.changeServer()
         val form = viewModel.state.value
@@ -1211,9 +1213,24 @@ class TodoViewModelTest {
 
         viewModel.cancelChangeServer()
 
-        assertEquals(AuthState.SignedIn, viewModel.state.value.auth)
+        val state = viewModel.state.value
+        assertEquals(Screen.Settings, state.screen)
+        assertTrue(state.settings is SettingsState.Loaded)
         assertEquals(original, viewModel.outline())
         assertFalse(backend.loggedOut)
+    }
+
+    @Test
+    fun `another server entered from Settings opens on its todos, since the settings shown were the old server's`() {
+        val viewModel = viewModel()
+        viewModel.openSettings()
+        viewModel.changeServer()
+
+        viewModel.setServer("other.example.com")
+
+        val state = viewModel.state.value
+        assertEquals(Screen.Todos, state.screen)
+        assertNull(state.settings)
     }
 
     @Test
