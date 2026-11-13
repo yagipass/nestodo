@@ -23,6 +23,7 @@ const WEBHOOK_PATH: &str = "/api/v1/webhook";
 const ANALYTICS_PATH: &str = "/api/v1/analytics";
 const PROFILE_PATH: &str = "/api/v1/profile";
 const AVATAR_PATH: &str = "/api/v1/profile/avatar";
+const AVATARS_PATH: &str = "/api/v1/avatars/";
 
 pub struct Client {
     http: Http,
@@ -190,9 +191,17 @@ impl Client {
     }
 
     pub fn avatar(&self, url: &str) -> Result<Vec<u8>, Error> {
+        let target = self.base.join(url).ok().filter(|target| {
+            target.origin() == self.base.origin() && target.path().starts_with(AVATARS_PATH)
+        });
+        let Some(target) = target else {
+            return Err(Error::Invalid(format!(
+                "{url:?} is not an avatar on the server"
+            )));
+        };
         let response = self.respond(&Request {
             method: "GET",
-            path: url.into(),
+            path: target.into(),
             body: None,
         })?;
         if response.status.is_success() {
@@ -1336,6 +1345,41 @@ mod tests {
             client.avatar("/api/v1/avatars/gone"),
             Err(Error::Server { status: 404, .. })
         ));
+    }
+
+    #[test]
+    fn an_avatar_on_another_port_is_not_fetched_because_the_login_would_go_along_to_whoever_listens_there()
+     {
+        let server = Server::new();
+        let mut other = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        let elsewhere = other
+            .mock("GET", Matcher::Any)
+            .with_body(vec![0x89, b'P', b'N', b'G'])
+            .expect(0)
+            .create();
+        let client = signed_in(&server, &store).unwrap();
+
+        assert!(matches!(
+            client.avatar(&format!("{}/api/v1/avatars/7f1c", other.url())),
+            Err(Error::Invalid(_))
+        ));
+        elsewhere.assert();
+    }
+
+    #[test]
+    fn an_avatar_url_outside_the_avatars_is_not_fetched_so_a_profile_cannot_send_the_login_to_another_endpoint()
+     {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        let anything = server.mock("GET", Matcher::Any).expect(0).create();
+        let client = signed_in(&server, &store).unwrap();
+
+        assert!(matches!(
+            client.avatar("/api/v1/avatars/../todos"),
+            Err(Error::Invalid(_))
+        ));
+        anything.assert();
     }
 
     #[test]
