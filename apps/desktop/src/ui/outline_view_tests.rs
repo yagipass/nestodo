@@ -696,6 +696,24 @@ fn adding_a_row_under_a_done_todo_reopens_every_done_todo_above_it_and_cmd_z_rem
 }
 
 #[gpui::test]
+fn marking_done_asks_nothing_while_a_failed_save_pauses_editing_since_the_answer_could_not_be_saved(
+    cx: &mut TestAppContext,
+) {
+    let server = half_bought();
+    let (view, cx) = open(cx, &server, true);
+    focus(&view, cx, "Trip", 0);
+    server.fail_with(500);
+    cx.simulate_keystrokes("cmd-enter");
+    settle(cx);
+    assert!(view.read_with(cx, |view, _| view.sync.failed));
+
+    focus(&view, cx, "Groceries", 0);
+    cx.simulate_keystrokes("cmd-enter");
+
+    assert!(!cx.has_pending_prompt());
+}
+
+#[gpui::test]
 fn a_failed_save_pauses_editing_so_later_edits_are_not_applied_on_a_stale_outline(
     cx: &mut TestAppContext,
 ) {

@@ -645,6 +645,9 @@ impl OutlineView {
         cx: &mut Context<Self>,
         toggle: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) {
+        if self.sync.failed {
+            return;
+        }
         let open = open_under(&self.outline, key).len();
         if self.outline.item(key).done || open == 0 {
             toggle(self, window, cx);

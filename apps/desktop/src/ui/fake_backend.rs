@@ -284,26 +284,31 @@ impl FakeServer {
                     row.collapsed = collapsed;
                 }
                 let parent = row.parent;
-                match body["completed"].as_bool() {
-                    Some(true) => Self::complete(&mut state.rows, id),
-                    Some(false) => Self::reopen(&mut state.rows, Some(id)),
-                    None => {}
+                let completed = body["completed"].as_bool();
+                if completed == Some(false) {
+                    row.done = false;
                 }
+                let mut moved = false;
                 if body.get("parentId").is_some() || body.get("index").is_some() {
-                    let parent = match body.get("parentId") {
+                    let target = match body.get("parentId") {
                         Some(Value::Null) => None,
                         Some(value) => value.as_u64(),
                         None => parent,
                     };
+                    moved = target != parent;
                     let index = body["index"]
                         .as_u64()
                         .and_then(|index| usize::try_from(index).ok());
-                    Self::place(&mut state.rows, id, parent, index);
+                    Self::place(&mut state.rows, id, target, index);
+                }
+                if completed == Some(true) {
+                    Self::complete(&mut state.rows, id);
+                } else if completed == Some(false) || moved {
                     let open = Self::subtree(&state.rows, id)
                         .iter()
                         .any(|id| state.rows.iter().any(|row| row.id == *id && !row.done));
                     if open {
-                        Self::reopen(&mut state.rows, parent);
+                        Self::reopen(&mut state.rows, Some(id));
                     }
                 }
                 reply(200, json!({ "todo": { "id": id } }))
