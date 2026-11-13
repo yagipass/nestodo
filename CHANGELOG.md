@@ -1,5 +1,25 @@
 # Changelog
 
+## [v0.11.2](https://github.com/yagipass/nestodo/compare/v0.11.1...v0.11.2) - 2026-11-13
+
+### Web
+- feat(web): show the todo list on the page background, without a card by @yagipass in https://github.com/yagipass/nestodo/pull/108
+- feat(web): complete the todos under a todo with it, after asking by @yagipass in https://github.com/yagipass/nestodo/pull/110
+- build(web): bump the minor-and-patch group with 3 updates by @dependabot[bot] in https://github.com/yagipass/nestodo/pull/102
+### Android
+- feat(android): change the server in Settings, not the account menu by @yagipass in https://github.com/yagipass/nestodo/pull/105
+- feat(android): complete the todos under a todo with it, after asking by @yagipass in https://github.com/yagipass/nestodo/pull/112
+### CLI
+- feat(cli): ask for -r before completing a todo with open todos under it by @yagipass in https://github.com/yagipass/nestodo/pull/113
+### Desktop
+- feat(desktop): change the server in Settings, not the account menu by @yagipass in https://github.com/yagipass/nestodo/pull/104
+- feat(desktop): show the todo list on the page background, without a card by @yagipass in https://github.com/yagipass/nestodo/pull/107
+- feat(desktop): complete the todos under a todo with it, after asking by @yagipass in https://github.com/yagipass/nestodo/pull/111
+### Dependencies
+- build(nix): bump nixpkgs from `ea9e3ef` to `6dadaf4` in the flake-inputs group by @dependabot[bot] in https://github.com/yagipass/nestodo/pull/101
+### Maintenance
+- build(cli): give the CLI its own Cargo workspace in apps/cli by @yagipass in https://github.com/yagipass/nestodo/pull/99
+
 ## [v0.11.1](https://github.com/yagipass/nestodo/compare/v0.11.0...v0.11.1) - 2026-11-13
 
 ### Android
