@@ -25,6 +25,7 @@ pub fn icon_button(
     id: impl Into<ElementId>,
     glyph: Icon,
     glyph_size: f32,
+    hover: Hsla,
     cx: &App,
 ) -> Stateful<Div> {
     let colors = theme(cx);
@@ -38,7 +39,7 @@ pub fn icon_button(
         .rounded(px(9.))
         .text_color(colors.muted)
         .cursor_pointer()
-        .hover(move |style| style.bg(colors.hover))
+        .hover(move |style| style.bg(hover))
         .child(icon(glyph, glyph_size, colors.muted))
 }
 

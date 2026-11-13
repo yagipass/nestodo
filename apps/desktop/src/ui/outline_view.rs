@@ -30,7 +30,7 @@ use crate::ui::icons::Icon;
 use crate::ui::move_picker::{MovePicker, PickerEvent};
 use crate::ui::text_field::{FieldEvent, TextField, offset_from_utf16, offset_to_utf16};
 use crate::ui::theme::{Theme, theme};
-use crate::ui::widgets::{PAGE_WIDTH, Tooltip, icon, icon_button, kbd, modal, sheet_shadow};
+use crate::ui::widgets::{PAGE_WIDTH, Tooltip, icon, icon_button, kbd, modal};
 
 actions!(
     outline,
@@ -244,7 +244,7 @@ fn mirror_for(
             let background = if part.matched {
                 colors.matched
             } else {
-                colors.accent_soft
+                colors.accent_soft_on_bg
             };
             runs.push(TextRun {
                 len: shown.len(),
@@ -1340,7 +1340,7 @@ impl OutlineView {
                 )
                 .into_any_element()
         } else {
-            icon_button("open-filter", Icon::Filter, 19., cx)
+            icon_button("open-filter", Icon::Filter, 19., colors.hover_on_bg, cx)
                 .tooltip(Tooltip::text("Filter (/)"))
                 .on_click(cx.listener(|this, _, window, cx| this.open_filter(window, cx)))
                 .into_any_element()
@@ -1356,9 +1356,9 @@ impl OutlineView {
             .size(px(32.))
             .rounded(px(9.))
             .cursor_pointer()
-            .when(pressed, |button| button.bg(colors.accent_soft))
+            .when(pressed, |button| button.bg(colors.accent_soft_on_bg))
             .when(!pressed, move |button| {
-                button.hover(move |style| style.bg(colors.hover))
+                button.hover(move |style| style.bg(colors.hover_on_bg))
             })
             .tooltip(Tooltip::text("Show completed (Ctrl/\u{2318} O)"))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_show_done(window, cx)))
@@ -1452,7 +1452,7 @@ impl OutlineView {
                     fold.opacity(0.)
                         .group_hover(group.clone(), |style| style.opacity(1.))
                 })
-                .hover(move |style| style.bg(colors.border))
+                .hover(move |style| style.bg(colors.hover_strong_on_bg))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| this.toggle_row(&key, window, cx)))
                 .child(icon(Icon::Expand, 16., colors.muted).with_transformation(
@@ -1475,12 +1475,12 @@ impl OutlineView {
                 .size(px(22.))
                 .rounded(px(7.))
                 .when(has_children && item.collapsed, |bullet| {
-                    bullet.bg(colors.accent_soft)
+                    bullet.bg(colors.accent_soft_on_bg)
                 })
                 .when(has_children, move |bullet| {
                     bullet
                         .cursor_pointer()
-                        .hover(move |style| style.bg(colors.accent_soft))
+                        .hover(move |style| style.bg(colors.accent_soft_on_bg))
                 })
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .when(has_children, |bullet| {
@@ -1739,7 +1739,7 @@ impl OutlineView {
                         .opacity(0.)
                         .group_hover(group.clone(), |style| style.opacity(1.))
                 })
-                .hover(move |style| style.bg(colors.border))
+                .hover(move |style| style.bg(colors.hover_strong_on_bg))
                 .tooltip(Tooltip::text("Note (\u{21e7} Enter)"))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -1779,7 +1779,7 @@ impl OutlineView {
                         .opacity(0.)
                         .group_hover(group.clone(), |style| style.opacity(1.))
                 })
-                .hover(move |style| style.bg(colors.border))
+                .hover(move |style| style.bg(colors.hover_strong_on_bg))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| this.check_row(&key, window, cx)))
                 .child(if done {
@@ -1796,8 +1796,8 @@ impl OutlineView {
             .min_h(px(34.))
             .pl(px(28.))
             .rounded(px(9.))
-            .when(active, |row| row.bg(colors.hover))
-            .hover(move |style| style.bg(colors.hover))
+            .when(active, |row| row.bg(colors.hover_on_bg))
+            .hover(move |style| style.bg(colors.hover_on_bg))
             .children(guides)
             .child(marker)
             .child(title)
@@ -2005,7 +2005,7 @@ impl Render for OutlineView {
                         .flex_none()
                         .items_center()
                         .gap(px(8.))
-                        .hover(move |style| style.bg(colors.hover).text_color(colors.text))
+                        .hover(move |style| style.bg(colors.hover_on_bg).text_color(colors.text))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(cx.listener(|this, _, window, cx| this.add_item(window, cx)))
                         .child(icon(Icon::Add, 17., colors.muted))
@@ -2028,11 +2028,6 @@ impl Render for OutlineView {
                     .pr(px(10.))
                     .pb(px(10.))
                     .pl(px(6.))
-                    .border_1()
-                    .border_color(colors.border)
-                    .rounded(px(16.))
-                    .bg(colors.surface)
-                    .shadow(sheet_shadow(&colors))
                     .flex()
                     .flex_col()
                     .children(sheet),
