@@ -256,7 +256,6 @@ fun OutlineScreen(
                         server = state.server,
                         onStats = viewModel::openStats,
                         onSettings = viewModel::openSettings,
-                        onChangeServer = viewModel::changeServer,
                         onSignOut = viewModel::signOut,
                     )
                 },
@@ -526,7 +525,6 @@ private fun AccountMenu(
     server: String?,
     onStats: () -> Unit,
     onSettings: () -> Unit,
-    onChangeServer: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -566,13 +564,6 @@ private fun AccountMenu(
                 onClick = {
                     expanded = false
                     onSettings()
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("Change server") },
-                onClick = {
-                    expanded = false
-                    onChangeServer()
                 },
             )
             if (email != null) {

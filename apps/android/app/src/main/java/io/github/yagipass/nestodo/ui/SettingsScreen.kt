@@ -79,6 +79,7 @@ private val FieldShape = RoundedCornerShape(12.dp)
 @Composable
 fun SettingsScreen(
     settings: SettingsState,
+    server: String?,
     profile: Profile?,
     avatar: Avatar?,
     snackbar: SnackbarHostState,
@@ -102,32 +103,50 @@ fun SettingsScreen(
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
+        Column(
+            Modifier.padding(padding)
+                .fillMaxSize()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
             when (settings) {
-                SettingsState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                SettingsState.Loading ->
+                    Box(
+                        Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
                 is SettingsState.Failed ->
                     Column(
-                        Modifier.align(Alignment.Center).padding(24.dp),
+                        Modifier.fillMaxWidth().padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Text(settings.message, textAlign = TextAlign.Center)
                         TextButton(onClick = viewModel::openSettings) { Text("Retry") }
                     }
-                is SettingsState.Loaded ->
-                    Column(
-                        Modifier.fillMaxSize()
-                            .imePadding()
-                            .verticalScroll(rememberScrollState())
-                            .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        ProfileCard(profile, avatar, settings, viewModel)
-                        WebhookCard(settings, viewModel)
-                        if (settings.analytics.available) AnalyticsCard(settings, viewModel)
-                    }
+                is SettingsState.Loaded -> {
+                    ProfileCard(profile, avatar, settings, viewModel)
+                    WebhookCard(settings, viewModel)
+                    if (settings.analytics.available) AnalyticsCard(settings, viewModel)
+                }
             }
+            ServerCard(server, viewModel::changeServer)
         }
+    }
+}
+
+@Composable
+private fun ServerCard(server: String?, onChange: () -> Unit) {
+    SettingsCard(
+        title = "Server",
+        action = { Button(onClick = onChange, shape = ButtonShape) { Text("Change") } },
+    ) {
+        server?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
+        Note("This applies to this device only.")
     }
 }
 
