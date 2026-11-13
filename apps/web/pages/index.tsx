@@ -15,6 +15,7 @@ import {
   mergeIntoPrevious,
   moveBy,
   moveTo,
+  openUnder,
   outdent,
   remove,
   rename,
@@ -220,6 +221,65 @@ function MovePicker({
   );
 }
 
+type Confirming = { kind: "done" | "delete"; key: string; focus?: Focus };
+
+function ConfirmDialog({
+  outline,
+  confirming: { kind, key },
+  onConfirm,
+  onClose,
+}: {
+  outline: Outline;
+  confirming: Confirming;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const action = useRef<HTMLButtonElement>(null);
+  const backdrop = useBackdropClose();
+  const under = kind === "done" ? openUnder(outline, key) : subtree(outline, key).slice(1);
+  const count = under.length;
+  const items = count === 1 ? "item" : "items";
+  const name = outline[key].title || "Untitled";
+  const shown = under.slice(0, 3);
+
+  useLayoutEffect(() => {
+    dialog.current?.showModal();
+    action.current?.focus();
+  }, []);
+
+  return (
+    <dialog ref={dialog} className="confirm" aria-labelledby="confirm-title" onClose={onClose} {...backdrop}>
+      <h2 id="confirm-title">
+        {kind === "done" ? `Mark "${name}" as done?` : `Delete "${name}" and the ${count} ${items} under it?`}
+      </h2>
+      {kind === "done" && (
+        <p>
+          {count === 1
+            ? "1 item under it isn't done yet. It'll be marked as done too."
+            : `${count} items under it aren't done yet. They'll be marked as done too.`}
+        </p>
+      )}
+      <ul className="confirm-items">
+        {shown.map((item) => (
+          <li key={item} className={outline[item].done ? "done" : undefined}>
+            {outline[item].title || "Untitled"}
+          </li>
+        ))}
+        {count > shown.length && <li className="more">and {count - shown.length} more</li>}
+      </ul>
+      <div className="confirm-actions">
+        <button type="button" className="pill" onClick={() => dialog.current?.close()}>
+          Cancel
+        </button>
+        <button ref={action} type="button" className={kind === "done" ? "pill primary" : "pill danger"} onClick={onConfirm}>
+          {kind === "done" ? "Mark all as done" : "Delete all"}
+        </button>
+      </div>
+    </dialog>
+  );
+}
+
 export default function OutlinePage({ todos, showDone: startShown }: Props) {
   const [outline, setOutline] = useState(() => fromTodos(todos));
   const [showDone, setShowDone] = useState(startShown);
@@ -229,6 +289,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
   const [failed, setFailed] = useState(false);
   const [noteKey, setNoteKey] = useState<string | null>(null);
   const [moving, setMoving] = useState<Focus | null>(null);
+  const [confirming, setConfirming] = useState<Confirming | null>(null);
   const [sync] = useState(
     () => new Sync(todos.map((todo) => [keyFor(todo.id), todo.id] as [string, number]), send, () => setFailed(true)),
   );
@@ -391,19 +452,45 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     };
   });
 
-  function complete(key: string, index: number, pos: number) {
+  function needsConfirming(kind: Confirming["kind"], key: string) {
+    if (sync.failed) return false;
+    return kind === "done" ? !outline[key].done && openUnder(outline, key).length > 0 : outline[key].children.length > 0;
+  }
+
+  function complete(key: string, index: number, pos: number, confirmed = false) {
+    if (!confirmed && needsConfirming("done", key)) return setConfirming({ kind: "done", key, focus: { key, pos } });
     const change = toggleDone(outline, key);
     if (showDone || !change.outline[key].done) return apply(change, { key, pos });
     const next = rows.slice(index + 1).find((row) => row.depth <= rows[index].depth) ?? rows[index - 1];
     apply(change, next ? { key: next.key, pos: -1 } : undefined);
   }
 
-  function removeRow(key: string, index: number) {
-    const under = subtree(outline, key).length - 1;
-    const name = outline[key].title || "Untitled";
-    if (under > 0 && !window.confirm(`Delete "${name}" and the ${under} ${under === 1 ? "item" : "items"} under it?`)) return;
+  function check(key: string) {
+    if (needsConfirming("done", key)) return setConfirming({ kind: "done", key });
+    apply(toggleDone(outline, key));
+  }
+
+  function removeRow(key: string, index: number, confirmed = false) {
+    if (!confirmed && needsConfirming("delete", key)) return setConfirming({ kind: "delete", key, focus: focused() });
     const next = rows[index - 1] ?? rows.slice(index + 1).find((row) => row.depth <= rows[index].depth);
     apply(remove(outline, key), next ? { key: next.key, pos: -1 } : undefined);
+  }
+
+  function confirm() {
+    if (!confirming) return;
+    setConfirming(null);
+    const { kind, key, focus } = confirming;
+    if (!outline[key]) return;
+    const index = rows.findIndex((row) => row.key === key);
+    if (kind === "delete") removeRow(key, index, true);
+    else if (focus) complete(key, index, focus.pos, true);
+    else apply(toggleDone(outline, key));
+  }
+
+  function closeConfirm() {
+    if (!confirming) return;
+    setConfirming(null);
+    if (confirming.focus) pendingFocus.current = confirming.focus;
   }
 
   function openMove(focus: Focus) {
@@ -739,7 +826,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
                   className="check"
                   aria-label={`Mark ${name} as ${item.done ? "not done" : "done"}`}
                   aria-pressed={item.done}
-                  onClick={() => apply(toggleDone(outline, row.key))}
+                  onClick={() => check(row.key)}
                 >
                   <Icon name={item.done ? "completed" : "done"} size={18} />
                 </button>
@@ -758,6 +845,9 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
 
       {moving && outline[moving.key] && (
         <MovePicker outline={outline} moving={moving.key} showDone={showDone} onMove={moveRow} onClose={closeMove} />
+      )}
+      {confirming && outline[confirming.key] && (
+        <ConfirmDialog outline={outline} confirming={confirming} onConfirm={confirm} onClose={closeConfirm} />
       )}
     </>
   );

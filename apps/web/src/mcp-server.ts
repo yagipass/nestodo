@@ -64,7 +64,8 @@ export function nestodoMcpServer(userId: string) {
     "add_todo",
     {
       title: "Add a todo",
-      description: "Add a todo, at the top level or under another todo, optionally with a note under its title.",
+      description:
+        "Add a todo, at the top level or under another todo, optionally with a note under its title. Adding it under a completed todo reopens that todo and the completed todos above it, since a completed todo never has open todos under it.",
       inputSchema: createTodoBody.extend({
         title: createTodoBody.shape.title.describe(`Title, up to ${MAX_TITLE_LENGTH} characters`),
         note: createTodoBody.shape.note.describe(
@@ -84,12 +85,15 @@ export function nestodoMcpServer(userId: string) {
     "update_todo",
     {
       title: "Edit a todo",
-      description: "Rename, complete, reopen, collapse or move a todo, or change its note. Only the fields given change.",
+      description:
+        "Rename, complete, reopen, collapse or move a todo, or change its note. Only the fields given change. A completed todo never has open todos under it: completing a todo also completes every open todo under it and returns their ids as completedUnder, and reopening a todo, or moving one with open todos into a completed todo, reopens the completed todos above it.",
       inputSchema: patchTodoBody.extend({
         id,
         title: patchTodoBody.shape.title.describe("New title"),
         note: patchTodoBody.shape.note.describe("New note shown under the title, replacing the whole note; an empty string removes it"),
-        completed: patchTodoBody.shape.completed.describe("true to complete it, false to reopen it"),
+        completed: patchTodoBody.shape.completed.describe(
+          "true to complete it and every open todo under it, false to reopen it and the completed todos above it",
+        ),
         collapsed: patchTodoBody.shape.collapsed.describe("true to hide the todos under it in the outline"),
         parentId: patchTodoBody.shape.parentId.describe(
           `Id of the todo to move it under, so that it and the todos under it are at most ${MAX_DEPTH} levels deep; null to move it to the top level`,
@@ -102,8 +106,10 @@ export function nestodoMcpServer(userId: string) {
     },
     async ({ id, ...changes }) =>
       refusingRejections(async () => {
-        const todo = await updateTodo(userId, id, changes);
-        return todo ? reply({ todo: withUtcTimes(todo) }) : refuse(notFound);
+        const updated = await updateTodo(userId, id, changes);
+        if (!updated) return refuse(notFound);
+        const todo = withUtcTimes(updated.todo);
+        return reply(changes.completed === true ? { todo, completedUnder: updated.completedUnder } : { todo });
       }),
   );
 

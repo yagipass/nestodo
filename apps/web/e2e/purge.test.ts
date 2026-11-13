@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vite-plus/test";
-import { archiveDirectly, archivedTodos, runCron, Session, setParentDirectly, signedInUser, triggerCron } from "./helpers";
+import { archiveDirectly, archivedTodos, reopenDirectly, runCron, Session, setParentDirectly, signedInUser, triggerCron } from "./helpers";
 
 const DAILY = "0 18 * * *";
 const HOUR = 3_600_000;
@@ -49,11 +49,12 @@ describe("the daily cleanup of completed todos", () => {
     expect(await titles(client)).toEqual(["someday"]);
   });
 
-  it("keeps a completed todo while a todo under it is still open, so the open one does not vanish with it", async () => {
+  it("keeps a completed todo while a todo under it is still open, so the open one never vanishes with it even in data that breaks the rule that completing a todo completes everything under it", async () => {
     const client = await signedInUser();
     const move = await client.createTodo("move");
-    await client.createTodo("pack boxes", { parentId: move.id });
+    const pack = await client.createTodo("pack boxes", { parentId: move.id });
     await client.patch(move.id, { completed: true });
+    reopenDirectly(pack.id);
 
     await runCron(DAILY, later(30 * DAY));
 

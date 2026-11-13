@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { HTTPException } from "hono/http-exception";
-import { and, db, eq, gt, gte, inArray, isNull, ne, notInArray, sql } from "void/db";
+import { and, db, eq, gt, gte, inArray, isNotNull, isNull, ne, notInArray, sql } from "void/db";
 import { archivedTodos, todos } from "@schema";
 import { DAY, sqliteTime } from "./time";
 import { awaitingNoteWindow, clampIndex, depthOf, heightOf, isWithin, KEEP_COMPLETED_DAYS, MAX_DEPTH, outlineOrder, type Placed } from "./todos";
@@ -59,6 +59,45 @@ function closeGap(userId: string, { parentId, position }: Placed) {
     .where(and(siblingsUnder(userId, parentId), gt(todos.position, position)));
 }
 
+function subtreeOf(userId: string, id: number) {
+  return sql`(
+    WITH RECURSIVE subtree(id) AS (
+      VALUES (${id})
+      UNION
+      SELECT child.id FROM ${todos} AS child JOIN subtree ON child.parent_id = subtree.id WHERE child.user_id = ${userId}
+    )
+    SELECT id FROM subtree
+  )`;
+}
+
+function lineageOf(userId: string, id: number) {
+  return sql`(
+    WITH RECURSIVE lineage(id) AS (
+      VALUES (${id})
+      UNION
+      SELECT todo.parent_id FROM ${todos} AS todo JOIN lineage ON todo.id = lineage.id WHERE todo.user_id = ${userId} AND todo.parent_id IS NOT NULL
+    )
+    SELECT id FROM lineage
+  )`;
+}
+
+function completeUnder(userId: string, id: number) {
+  return db
+    .update(todos)
+    .set({ completedAt: now, updatedAt: now })
+    .where(and(eq(todos.userId, userId), isNull(todos.completedAt), ne(todos.id, id), inArray(todos.id, subtreeOf(userId, id))))
+    .returning({ id: todos.id });
+}
+
+function reopenAbove(userId: string, id: number, onlyIfOpenBelow: boolean) {
+  const open = sql`EXISTS (SELECT 1 FROM ${todos} AS below WHERE below.user_id = ${userId} AND below.completed_at IS NULL AND below.id IN ${subtreeOf(userId, id)})`;
+  return db
+    .update(todos)
+    .set({ completedAt: null, updatedAt: now })
+    .where(and(eq(todos.userId, userId), isNotNull(todos.completedAt), inArray(todos.id, lineageOf(userId, id)), onlyIfOpenBelow ? open : undefined))
+    .returning({ id: todos.id });
+}
+
 type TodoRow = Omit<Todo, "collapsed"> & { collapsed: number };
 
 const todosSql =
@@ -113,10 +152,12 @@ export async function createTodo(userId: string, input: { title: string; note?: 
   assertParent(rows, parentId);
   assertDepth(rows, parentId, 1);
   const position = clampIndex(input.index, rows.filter((row) => row.parentId === parentId).length);
-  const [, [created]] = await db.batch([
-    openGap(userId, parentId, position),
-    db.insert(todos).values({ userId, title: input.title, note: input.note, parentId, position }).returning(columns),
-  ]);
+  const insert = db.insert(todos).values({ userId, title: input.title, note: input.note, parentId, position }).returning(columns);
+  if (parentId === null) {
+    const [, [created]] = await db.batch([openGap(userId, parentId, position), insert]);
+    return created;
+  }
+  const [, [created]] = await db.batch([openGap(userId, parentId, position), insert, reopenAbove(userId, parentId, false)]);
   return created;
 }
 
@@ -130,9 +171,15 @@ export async function updateTodo(userId: string, id: number, changes: TodoChange
       .set({ ...fields, ...placement })
       .where(ownedBy(userId, id))
       .returning(columns);
+  const settle = (moved: boolean) =>
+    changes.completed === true ? completeUnder(userId, id) : changes.completed === false || moved ? reopenAbove(userId, id, true) : null;
+  const result = (row: Todo | undefined, completed: { id: number }[] = []) =>
+    row ? { todo: row, completedUnder: changes.completed === true ? completed.map((todo) => todo.id) : [] } : null;
   const updateInPlace = async () => {
-    const [row] = await update();
-    return row ?? null;
+    const after = settle(false);
+    if (!after) return result((await update())[0]);
+    const [[row], completed] = await db.batch([update(), after]);
+    return result(row, completed);
   };
 
   if (changes.parentId === undefined && changes.index === undefined) return updateInPlace();
@@ -146,12 +193,14 @@ export async function updateTodo(userId: string, id: number, changes: TodoChange
   if (parentId !== null && isWithin(rows, parentId, id)) throw invalidPlacement("A todo cannot be moved under itself");
   if (parentId !== current.parentId) assertDepth(rows, parentId, heightOf(rows, id));
   const position = clampIndex(changes.index, rows.filter((row) => row.parentId === parentId && row.id !== id).length);
-  const [, , [row]] = await db.batch([
-    closeGap(userId, current),
-    openGap(userId, parentId, position),
-    update({ parentId, position }),
-  ]);
-  return row ?? null;
+  const placed = [closeGap(userId, current), openGap(userId, parentId, position), update({ parentId, position })] as const;
+  const after = settle(parentId !== current.parentId);
+  if (!after) {
+    const [, , [row]] = await db.batch(placed);
+    return result(row);
+  }
+  const [, , [row], completed] = await db.batch([...placed, after]);
+  return result(row, completed);
 }
 
 export async function deleteTodo(userId: string, id: number, recursive: boolean) {
@@ -161,16 +210,8 @@ export async function deleteTodo(userId: string, id: number, recursive: boolean)
   if (!recursive && rows.some((row) => row.parentId === id)) {
     throw rejected(409, "has_children", "Todo has todos under it");
   }
-  const subtree = sql`(
-    WITH RECURSIVE subtree(id) AS (
-      VALUES (${id})
-      UNION
-      SELECT child.id FROM ${todos} AS child JOIN subtree ON child.parent_id = subtree.id WHERE child.user_id = ${userId}
-    )
-    SELECT id FROM subtree
-  )`;
   await db.batch([
-    db.delete(todos).where(and(eq(todos.userId, userId), inArray(todos.id, subtree))),
+    db.delete(todos).where(and(eq(todos.userId, userId), inArray(todos.id, subtreeOf(userId, id)))),
     closeGap(userId, target),
   ]);
   return true;

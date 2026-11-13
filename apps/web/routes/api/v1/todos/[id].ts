@@ -13,8 +13,8 @@ export const GET = defineHandler.withValidator({ params: todoIdParams })(async (
 
 export const PATCH = defineHandler.withValidator({ params: todoIdParams, body: patchTodoBody })(async (c, { params, body }) => {
   const user = requireUser(c);
-  const todo = await updateTodo(user.email, params.id, body);
-  return todo ? c.json({ todo }) : c.json(notFound, 404);
+  const updated = await updateTodo(user.email, params.id, body);
+  return updated ? c.json({ todo: updated.todo }) : c.json(notFound, 404);
 });
 
 export const DELETE = defineHandler.withValidator({ params: todoIdParams, query: deleteTodoQuery })(async (c, { params, query }) => {

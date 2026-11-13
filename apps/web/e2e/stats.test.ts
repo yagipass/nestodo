@@ -64,11 +64,25 @@ describe("the stats page", () => {
     const client = await signedInUser();
     const parent = await client.createTodo("parent");
     const child = await client.createTodo("child", { parentId: parent.id });
-    await client.patch(child.id, { completed: true });
     await client.createTodo("grandchild", { parentId: child.id });
+    const done = await client.createTodo("done", { parentId: parent.id });
+    await client.patch(done.id, { completed: true });
     await client.request(`/api/v1/todos/${parent.id}?recursive=true`, { method: "DELETE" });
 
-    expect(await today(client)).toMatchObject({ added: 3, completed: 1, open: 0 });
+    expect(await today(client)).toMatchObject({ added: 4, completed: 1, open: 0 });
+  });
+
+  it("counts every todo completed along with its parent, and takes back a completion the server undid when an open todo went under it", async () => {
+    const client = await signedInUser();
+    const trip = await client.createTodo("trip");
+    await client.createTodo("tickets", { parentId: trip.id });
+    await client.createTodo("hotel", { parentId: trip.id });
+    await client.patch(trip.id, { completed: true });
+    expect(await today(client)).toMatchObject({ completed: 3, open: 0 });
+
+    await client.createTodo("unpack", { parentId: trip.id });
+
+    expect(await today(client)).toMatchObject({ added: 4, completed: 2, open: 2 });
   });
 
   it("puts today's activity on the viewer's own date, whatever their time zone", async () => {

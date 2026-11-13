@@ -208,7 +208,8 @@ body {
 }
 
 .shortcuts,
-.move-to {
+.move-to,
+.confirm {
   width: min(640px, 100% - 32px);
   max-height: 80vh;
   margin: 10vh auto auto;
@@ -221,13 +222,15 @@ body {
 }
 
 .shortcuts::backdrop,
-.move-to::backdrop {
+.move-to::backdrop,
+.confirm::backdrop {
   background: rgb(30 26 43 / 34%);
 }
 
 @media (prefers-color-scheme: dark) {
   .shortcuts::backdrop,
-  .move-to::backdrop {
+  .move-to::backdrop,
+  .confirm::backdrop {
     background: rgb(8 6 16 / 55%);
   }
 }
@@ -399,6 +402,59 @@ body {
   text-overflow: ellipsis;
 }
 
+.confirm {
+  width: min(440px, 100% - 32px);
+  padding: 20px 20px 16px;
+}
+
+.confirm h2 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.confirm p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.confirm-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--hover);
+  font-size: 0.875rem;
+  list-style: none;
+}
+
+.confirm-items li {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.confirm-items .done {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.confirm-items .more {
+  color: var(--muted);
+}
+
+.confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
 .move-to-empty {
   margin: 0;
   padding: 0 22px 18px;
@@ -505,6 +561,22 @@ a {
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 600;
+}
+
+.pill.primary,
+.pill.danger {
+  color: var(--surface);
+  font-weight: 600;
+}
+
+.pill.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.pill.danger {
+  border-color: var(--danger);
+  background: var(--danger);
 }
 
 .sync-error {

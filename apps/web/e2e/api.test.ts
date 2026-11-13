@@ -283,6 +283,73 @@ describe("todo API for the web, CLI and Android apps", () => {
     }
   });
 
+  it("completes every open todo under a todo along with it, keeping when the others were completed, so a completed todo never hides an open one", async () => {
+    const client = await signedInUser();
+    const trip = await client.createTodo("trip");
+    const tickets = await client.createTodo("tickets", { parentId: trip.id });
+    const hotel = await client.createTodo("hotel", { parentId: trip.id });
+    await client.createTodo("check in online", { parentId: hotel.id });
+    const { todo: booked } = await json<{ todo: Todo }>(await client.patch(tickets.id, { completed: true }));
+
+    expect((await client.patch(trip.id, { completed: true })).status).toBe(200);
+
+    const todos = await client.todos();
+    expect(todos.every((todo) => todo.completedAt !== null)).toBe(true);
+    expect(todos.find((todo) => todo.id === tickets.id)!.completedAt).toBe(booked.completedAt);
+  });
+
+  it("reopens only the todo itself when it is reopened, leaving the todos under it completed", async () => {
+    const client = await signedInUser();
+    const trip = await client.createTodo("trip");
+    await client.createTodo("tickets", { parentId: trip.id });
+    await client.patch(trip.id, { completed: true });
+
+    await client.patch(trip.id, { completed: false });
+
+    expect((await client.todos()).map(({ title, completedAt }) => [title, completedAt !== null])).toEqual([
+      ["trip", false],
+      ["tickets", true],
+    ]);
+  });
+
+  it("reopens every completed todo above a todo that is reopened, added or moved in with open todos, so it never ends up hidden under a completed one", async () => {
+    const client = await signedInUser();
+    const trip = await client.createTodo("trip");
+    const hotel = await client.createTodo("hotel", { parentId: trip.id });
+    const checkIn = await client.createTodo("check in online", { parentId: hotel.id });
+    const unpack = await client.createTodo("unpack");
+    const done = async () => (await client.todos()).filter((todo) => todo.completedAt !== null).map((todo) => todo.title);
+
+    await client.patch(trip.id, { completed: true });
+    await client.patch(checkIn.id, { completed: false });
+    expect(await done()).toEqual([]);
+
+    await client.patch(trip.id, { completed: true });
+    await client.createTodo("print the map", { parentId: hotel.id });
+    expect(await done()).toEqual(["check in online"]);
+
+    await client.request(`/api/v1/todos/${trip.id}?recursive=true`, { method: "DELETE" });
+    const home = await client.createTodo("home");
+    await client.patch(home.id, { completed: true });
+    await client.patch(unpack.id, { parentId: home.id });
+    expect(await done()).toEqual([]);
+  });
+
+  it("keeps a completed todo completed when a completed todo is moved under it, since nothing open ends up there", async () => {
+    const client = await signedInUser();
+    const trip = await client.createTodo("trip");
+    const unpack = await client.createTodo("unpack");
+    await client.patch(trip.id, { completed: true });
+    await client.patch(unpack.id, { completed: true });
+
+    await client.patch(unpack.id, { parentId: trip.id });
+
+    expect((await client.todos()).map(({ title, completedAt }) => [title, completedAt !== null])).toEqual([
+      ["trip", true],
+      ["unpack", true],
+    ]);
+  });
+
   it("refuses to delete a todo with todos under it unless asked to, so a client that never saw them cannot remove them", async () => {
     const client = await signedInUser();
     const parent = await client.createTodo("parent");
