@@ -169,6 +169,17 @@ describe("MCP endpoint that Claude reaches through its own Access app", () => {
     expect(await web.todos()).toEqual([]);
   });
 
+  it("tells Claude which open todos were completed along with the one it completed, so it can report them to the member", async () => {
+    const { web, claude } = await member();
+    const parent = await web.createTodo("errands");
+    const letter = await web.createTodo("post letter", { parentId: parent.id });
+    const stamps = await web.createTodo("buy stamps", { parentId: letter.id });
+
+    const { completedUnder } = await value<{ completedUnder: number[] }>(claude, "update_todo", { id: parent.id, completed: true });
+
+    expect(new Set(completedUnder)).toEqual(new Set([letter.id, stamps.id]));
+  });
+
   it("lets Claude reopen a todo and move it back to the top level", async () => {
     const { web, claude } = await member();
     const parent = await web.createTodo("errands");

@@ -11,10 +11,12 @@ import {
   mergeIntoPrevious,
   moveBy,
   moveTo,
+  openUnder,
   outdent,
   remove,
   setCollapsed,
   split,
+  subtree,
   toggleDone,
   undoFor,
   visibleRows,
@@ -55,6 +57,27 @@ const sample = fromTodos([
   todo(4, "expenses", 1),
   todo(5, "home"),
 ]);
+
+const errands = fromTodos([
+  todo(1, "errands"),
+  todo(2, "post office", 1, { done: true }),
+  todo(3, "bank", 1, { collapsed: true }),
+  todo(4, "pay rent", 3),
+  todo(5, "home"),
+]);
+
+const trip = fromTodos([
+  todo(1, "trip", null, { done: true }),
+  todo(2, "tickets", 1, { done: true }),
+  todo(3, "hotel", 1, { done: true }),
+  todo(4, "unpack"),
+]);
+
+function doneTitles(outline: Outline) {
+  return subtree(outline, ROOT)
+    .filter((key) => outline[key].done)
+    .map((key) => outline[key].title);
+}
 
 describe("caretIn", () => {
   it("never puts the caret inside an emoji, so Enter cannot split it into two broken halves", () => {
@@ -322,6 +345,46 @@ describe("remove", () => {
   });
 });
 
+describe("completing", () => {
+  it("counts the open todos at every depth under a todo, even inside a collapsed one, so the confirmation names everything it will complete", () => {
+    expect(openUnder(errands, "t1")).toEqual(["t3", "t4"]);
+    expect(openUnder(trip, "t1")).toEqual([]);
+  });
+
+  it("completes every open todo under a todo along with it, in one request the server repeats, so a completed todo never hides an open one", () => {
+    const change = toggleDone(errands, "t1");
+    expect(doneTitles(change.outline)).toEqual(["errands", "post office", "bank", "pay rent"]);
+    expect(change.ops).toEqual([{ type: "update", key: "t1", fields: { completed: true } }]);
+  });
+
+  it("reopens only the todo itself, leaving the todos under it completed, since reopening a parent says nothing about its children", () => {
+    expect(doneTitles(toggleDone(trip, "t1").outline)).toEqual(["tickets", "hotel"]);
+  });
+
+  it("reopens the completed todos above a reopened todo, so it does not stay hidden under them", () => {
+    expect(doneTitles(toggleDone(trip, "t3").outline)).toEqual(["tickets"]);
+  });
+
+  it("reopens a completed todo when Enter adds an empty row under it, as the server does", () => {
+    const change = split(trip, "t1", "trip".length, "n1", shown(trip));
+    expect(change.outline.t1.children[0]).toBe("n1");
+    expect(doneTitles(change.outline)).toEqual(["tickets", "hotel"]);
+  });
+
+  it("reopens a completed todo when an open row is indented into it", () => {
+    expect(doneTitles(indent(trip, "t4", shown(trip))!.outline)).toEqual(["tickets", "hotel"]);
+  });
+
+  it("reopens every completed todo above the spot an open row is moved to", () => {
+    expect(doneTitles(moveTo(trip, "t4", "t3").outline)).toEqual(["tickets"]);
+  });
+
+  it("keeps a completed todo completed when a completed row is moved into it, since nothing open ends up under it", () => {
+    const moved = moveTo(toggleDone(trip, "t4").outline, "t4", "t1");
+    expect(doneTitles(moved.outline)).toEqual(["trip", "tickets", "hotel", "unpack"]);
+  });
+});
+
 describe("undoFor", () => {
   const folded = fromTodos([todo(1, "trip"), todo(2, "packing", null, { collapsed: true }), todo(3, "socks", 2), todo(4, "passport")]);
   const pair = fromTodos([todo(1, "buy "), todo(2, "milk")]);
@@ -339,6 +402,13 @@ describe("undoFor", () => {
     ["collapse", sample, setCollapsed(sample, "t1", true)!],
     ["delete a subtree", sample, remove(sample, "t1")],
     ["merge", pair, mergeIntoPrevious(pair, visibleRows(pair, true), "t2")!],
+    ["complete a todo with open todos under it", errands, toggleDone(errands, "t1")],
+    ["reopen a completed parent", trip, toggleDone(trip, "t1")],
+    ["reopen under a completed parent", trip, toggleDone(trip, "t2")],
+    ["add under a completed parent", trip, split(trip, "t2", "tickets".length, "n1", shown(trip))],
+    ["indent into a completed row", trip, indent(trip, "t4", shown(trip))!],
+    ["move into a completed branch", trip, moveTo(trip, "t4", "t2")],
+    ["delete inside a completed subtree", trip, remove(trip, "t3")],
   ];
 
   it("replays each edit's changes into the outline the editor shows, so undo starts from what is on screen", () => {
@@ -351,6 +421,22 @@ describe("undoFor", () => {
     for (const [name, before, change] of edits) {
       expect(applyOps(change.outline, undoFor(before, change.ops)), name).toEqual(before);
     }
+  });
+
+  it("reopens exactly the todos a completion took along, leaving the ones completed before it as they were", () => {
+    expect(undoFor(errands, toggleDone(errands, "t1").ops)).toEqual([
+      { type: "update", key: "t1", fields: { completed: false } },
+      { type: "update", key: "t3", fields: { completed: false } },
+      { type: "update", key: "t4", fields: { completed: false } },
+    ]);
+  });
+
+  it("removes a row added under a completed todo before completing that todo again, so the server's cascade never completes the row on its way out", () => {
+    const added = split(trip, "t3", "hotel".length, "n1", shown(trip));
+    expect(undoFor(trip, added.ops)).toEqual([
+      { type: "delete", key: "n1", removed: ["n1"] },
+      { type: "update", key: "t1", fields: { completed: true } },
+    ]);
   });
 
   it("recreates a deleted subtree parents first under the same keys, with every note, completion and fold it had", () => {

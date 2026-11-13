@@ -68,6 +68,33 @@ export function subtree(outline: Outline, key: string): string[] {
   return [key, ...outline[key].children.flatMap((child) => subtree(outline, child))];
 }
 
+export function openUnder(outline: Outline, key: string): string[] {
+  return subtree(outline, key)
+    .slice(1)
+    .filter((under) => !outline[under].done);
+}
+
+function settle(outline: Outline): Outline {
+  const reopened: string[] = [];
+  const hasOpen = (key: string): boolean => {
+    const below = outline[key].children.map(hasOpen).some(Boolean);
+    if (below && outline[key].done) reopened.push(key);
+    return below || !outline[key].done;
+  };
+  outline[ROOT].children.forEach(hasOpen);
+  if (reopened.length === 0) return outline;
+  const next: Record<string, Item> = { ...outline };
+  for (const key of reopened) next[key] = { ...outline[key], done: false };
+  return next;
+}
+
+function setDone(outline: Outline, key: string, done: boolean): Outline {
+  if (!done) return settle({ ...outline, [key]: { ...outline[key], done: false } });
+  const next: Record<string, Item> = { ...outline };
+  for (const under of subtree(outline, key)) if (!outline[under].done) next[under] = { ...outline[under], done: true };
+  return next;
+}
+
 function depthOf(outline: Outline, key: string) {
   let depth = 0;
   for (let current = key; current !== ROOT; current = parentOf(outline, current)!) depth += 1;
@@ -151,7 +178,7 @@ export function split(outline: Outline, key: string, pos: number, fresh: string,
     const index = next[parent].children.indexOf(key);
     next[fresh] = { key: fresh, title: "", note: "", done: false, collapsed: false, children: [] };
     next[parent].children.splice(index, 0, fresh);
-    return { outline: next, ops: [{ type: "create", key: fresh, parent, index, title: "" }], focus: { key, pos: 0 } };
+    return { outline: settle(next), ops: [{ type: "create", key: fresh, parent, index, title: "" }], focus: { key, pos: 0 } };
   }
   const before = item.title.slice(0, pos);
   const after = item.title.slice(pos);
@@ -164,7 +191,7 @@ export function split(outline: Outline, key: string, pos: number, fresh: string,
   next[target].children.splice(index, 0, fresh);
   const ops: Op[] = [{ type: "create", key: fresh, parent: target, index, title: after }];
   if (after !== "") ops.push({ type: "title", key, title: before });
-  return { outline: next, ops, focus: { key: fresh, pos: 0 } };
+  return { outline: settle(next), ops, focus: { key: fresh, pos: 0 } };
 }
 
 export function indent(outline: Outline, key: string, shown: ReadonlySet<string>): Change | null {
@@ -184,7 +211,7 @@ export function indent(outline: Outline, key: string, shown: ReadonlySet<string>
     next[target].collapsed = false;
     ops.push({ type: "update", key: target, fields: { collapsed: false } });
   }
-  return { outline: next, ops };
+  return { outline: settle(next), ops };
 }
 
 export function outdent(outline: Outline, key: string): Change | null {
@@ -232,13 +259,13 @@ export function moveTo(outline: Outline, key: string, target: string): Change {
   next[parent].children.splice(next[parent].children.indexOf(key), 1);
   const index = next[target].children.length;
   next[target].children.push(key);
-  return { outline: next, ops: [{ type: "move", key, parent: target, index }] };
+  return { outline: settle(next), ops: [{ type: "move", key, parent: target, index }] };
 }
 
 export function toggleDone(outline: Outline, key: string): Change {
   const done = !outline[key].done;
   return {
-    outline: { ...outline, [key]: { ...outline[key], done } },
+    outline: setDone(outline, key, done),
     ops: [{ type: "update", key, fields: { completed: done } }],
   };
 }
@@ -290,7 +317,7 @@ function applyOp(outline: Outline, op: Op): Outline {
       const next = edit(outline, [op.parent]);
       next[op.key] = { key: op.key, title: op.title, note: op.note ?? "", done: false, collapsed: false, children: [] };
       next[op.parent].children.splice(op.index, 0, op.key);
-      return next;
+      return settle(next);
     }
     case "title":
       return rename(outline, op.key, op.title);
@@ -298,8 +325,9 @@ function applyOp(outline: Outline, op: Op): Outline {
       return setNote(outline, op.key, op.note);
     case "update": {
       const item = outline[op.key];
-      const { completed = item.done, collapsed = item.collapsed } = op.fields;
-      return { ...outline, [op.key]: { ...item, done: completed, collapsed } };
+      const { completed, collapsed = item.collapsed } = op.fields;
+      const next = { ...outline, [op.key]: { ...item, collapsed } };
+      return completed === undefined ? next : setDone(next, op.key, completed);
     }
     case "move": {
       const parent = parentOf(outline, op.key)!;
@@ -307,7 +335,7 @@ function applyOp(outline: Outline, op: Op): Outline {
       next[parent].children.splice(next[parent].children.indexOf(op.key), 1);
       next[op.parent] = { ...next[op.parent], children: [...next[op.parent].children] };
       next[op.parent].children.splice(op.index, 0, op.key);
-      return next;
+      return settle(next);
     }
     case "delete":
       return remove(outline, op.key).outline;
@@ -320,9 +348,9 @@ export function applyOps(outline: Outline, ops: readonly Op[]): Outline {
 
 function recreate(outline: Outline, key: string): Op[] {
   const parent = parentOf(outline, key)!;
-  const { title, note, done, collapsed } = outline[key];
+  const { title, note, collapsed } = outline[key];
   const ops: Op[] = [{ type: "create", key, parent, index: outline[parent].children.indexOf(key), title, note }];
-  if (done || collapsed) ops.push({ type: "update", key, fields: { ...(done && { completed: true }), ...(collapsed && { collapsed: true }) } });
+  if (collapsed) ops.push({ type: "update", key, fields: { collapsed: true } });
   return ops;
 }
 
@@ -334,14 +362,8 @@ function inverse(outline: Outline, op: Op): Op[] {
       return [{ type: "title", key: op.key, title: outline[op.key].title }];
     case "note":
       return [{ type: "note", key: op.key, note: outline[op.key].note }];
-    case "update": {
-      const item = outline[op.key];
-      const fields = {
-        ...(op.fields.completed !== undefined && { completed: item.done }),
-        ...(op.fields.collapsed !== undefined && { collapsed: item.collapsed }),
-      };
-      return [{ type: "update", key: op.key, fields }];
-    }
+    case "update":
+      return op.fields.collapsed === undefined ? [] : [{ type: "update", key: op.key, fields: { collapsed: outline[op.key].collapsed } }];
     case "move": {
       const parent = parentOf(outline, op.key)!;
       return [{ type: "move", key: op.key, parent, index: outline[parent].children.indexOf(op.key) }];
@@ -351,6 +373,19 @@ function inverse(outline: Outline, op: Op): Op[] {
   }
 }
 
+function restoreDone(current: Outline, target: Outline): Op[] {
+  const keys = subtree(target, ROOT).slice(1);
+  const reopen: Op[] = keys
+    .filter((key) => current[key].done && !target[key].done)
+    .map((key) => ({ type: "update", key, fields: { completed: false } }));
+  const reopened = applyOps(current, reopen);
+  const missing = new Set(keys.filter((key) => target[key].done && !reopened[key].done));
+  const complete: Op[] = keys
+    .filter((key) => missing.has(key) && !missing.has(parentOf(target, key)!))
+    .map((key) => ({ type: "update", key, fields: { completed: true } }));
+  return [...reopen, ...complete];
+}
+
 export function undoFor(outline: Outline, ops: readonly Op[]): Op[] {
   const steps: Op[][] = [];
   let current = outline;
@@ -358,7 +393,8 @@ export function undoFor(outline: Outline, ops: readonly Op[]): Op[] {
     steps.unshift(inverse(current, op));
     current = applyOp(current, op);
   }
-  return steps.flat();
+  const structural = steps.flat();
+  return [...structural, ...restoreDone(applyOps(current, structural), outline)];
 }
 
 export function sameOutline(a: Outline, b: Outline) {

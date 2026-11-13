@@ -84,6 +84,15 @@ export function setParentDirectly(id: number, parentId: number) {
   }
 }
 
+export function reopenDirectly(id: number) {
+  const database = localDatabase({ readOnly: false });
+  try {
+    database.prepare("UPDATE todos SET completed_at = NULL WHERE id = ?").run(id);
+  } finally {
+    database.close();
+  }
+}
+
 export function archiveDirectly(id: number, email: string) {
   const database = localDatabase({ readOnly: false });
   try {
