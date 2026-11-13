@@ -90,6 +90,9 @@ enum Command {
     Done {
         #[arg(required = true, value_name = "ID")]
         ids: Vec<Id>,
+        /// Also mark the open todos under them as done
+        #[arg(short, long)]
+        recursive: bool,
     },
     /// Mark todos as not done
     Undo {
@@ -260,7 +263,7 @@ fn todos(command: Command, api: &mut Api, style: Style) -> Result<(), Error> {
         Command::Edit { id, title } => {
             change(api, &[id], style, |api, id| api.edit(id, title.trim()))?
         }
-        Command::Done { ids } => change(api, &ids, style, |api, id| api.set_completed(id, true))?,
+        Command::Done { ids, recursive } => complete(api, &ids, recursive, style)?,
         Command::Undo { ids } => change(api, &ids, style, |api, id| api.set_completed(id, false))?,
         Command::Rm { ids, recursive } => {
             let mut outline = Outline::new(api.list()?);
@@ -289,6 +292,17 @@ fn change(
     }
     for &id in ids {
         outline.update(apply(api, id)?);
+        println!("{}", todo::row(&outline, outline.get(id)?, style));
+    }
+    Ok(())
+}
+
+fn complete(api: &mut Api, ids: &[Id], recursive: bool, style: Style) -> Result<(), Error> {
+    let mut outline = Outline::new(api.list()?);
+    outline.check_completions(ids, recursive)?;
+    for &id in ids {
+        outline.update(api.set_completed(id, true)?);
+        outline.complete_under(id);
         println!("{}", todo::row(&outline, outline.get(id)?, style));
     }
     Ok(())

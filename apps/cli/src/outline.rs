@@ -152,21 +152,73 @@ impl Outline {
         Ok(removals)
     }
 
+    pub fn check_completions(&self, ids: &[u64], recursive: bool) -> Result<(), Error> {
+        for &id in ids {
+            self.get(id)?;
+        }
+        if recursive {
+            return Ok(());
+        }
+        for &id in ids {
+            let open = self
+                .under(id)
+                .into_iter()
+                .filter(|under| !ids.contains(under) && !self.todos[under].is_completed())
+                .count();
+            if open > 0 {
+                let (todos, them) = if open == 1 {
+                    ("todo", "it")
+                } else {
+                    ("todos", "them")
+                };
+                return Err(Error::Invalid(format!(
+                    "{id} has {open} open {todos} under it; pass -r to mark {them} done too"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn complete_under(&mut self, id: u64) {
+        let Some(completed_at) = self
+            .todos
+            .get(&id)
+            .and_then(|todo| todo.completed_at.clone())
+        else {
+            return;
+        };
+        for under in self.under(id) {
+            let todo = self
+                .todos
+                .get_mut(&under)
+                .expect("listed under a known todo");
+            if !todo.is_completed() {
+                todo.completed_at = Some(completed_at.clone());
+            }
+        }
+    }
+
     fn ids(&self, parent: Option<u64>) -> &[u64] {
         self.children.get(&parent).map_or(&[], Vec::as_slice)
     }
 
-    fn count_under(&self, id: u64) -> usize {
+    fn under(&self, id: u64) -> Vec<u64> {
         let mut seen = HashSet::from([id]);
         let mut pending = vec![id];
+        let mut under = Vec::new();
         while let Some(parent) = pending.pop() {
             for &child in self.ids(Some(parent)) {
                 if seen.insert(child) {
                     pending.push(child);
+                    under.push(child);
                 }
             }
         }
-        seen.len() - 1
+        under
+    }
+
+    fn count_under(&self, id: u64) -> usize {
+        self.under(id).len()
     }
 
     fn is_within(&self, id: u64, ancestor: u64) -> bool {
@@ -406,6 +458,54 @@ mod tests {
             sample().plan_removals(&[1], true).unwrap(),
             [Removal { id: 1, under: 6 }]
         );
+    }
+
+    #[test]
+    fn refuses_to_complete_a_todo_with_open_todos_under_it_unless_recursive_since_the_server_completes_them_too()
+     {
+        assert_eq!(
+            sample()
+                .check_completions(&[4], false)
+                .unwrap_err()
+                .to_string(),
+            "4 has 4 open todos under it; pass -r to mark them done too"
+        );
+        assert_eq!(
+            sample()
+                .check_completions(&[18, 2], false)
+                .unwrap_err()
+                .to_string(),
+            "2 has 1 open todo under it; pass -r to mark it done too"
+        );
+        assert!(sample().check_completions(&[4], true).is_ok());
+        assert!(matches!(
+            sample().check_completions(&[4, 42], true),
+            Err(Error::NotFound { id: 42 })
+        ));
+    }
+
+    #[test]
+    fn completes_without_r_when_every_open_todo_under_it_is_named_too() {
+        assert!(sample().check_completions(&[2, 11], false).is_ok());
+        assert!(sample().check_completions(&[11, 18], false).is_ok());
+    }
+
+    #[test]
+    fn marks_the_open_todos_under_a_completed_todo_done_as_the_server_does_so_the_progress_shown_is_right()
+     {
+        let mut outline = sample();
+        let mut work = outline.get(4).unwrap().clone();
+        work.completed_at = Some("2026-11-13 09:00:00".into());
+        outline.update(work);
+
+        outline.complete_under(4);
+
+        assert!(
+            [7, 8, 9, 10]
+                .iter()
+                .all(|&id| outline.get(id).unwrap().is_completed())
+        );
+        assert!(!outline.get(5).unwrap().is_completed());
     }
 
     #[test]

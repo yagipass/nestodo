@@ -471,7 +471,23 @@ fn marks_done_and_undone_through_completed_so_the_server_keeps_the_first_complet
 }
 
 #[test]
-fn marks_only_the_named_todo_done_so_the_todos_under_it_keep_their_own_state() {
+fn refuses_to_complete_open_todos_under_a_todo_unless_told_to_with_r() {
+    let mut server = server();
+    outline(&mut server);
+    let none = untouched(&mut server, "PATCH");
+
+    let output = nestodo(&server, &["done", "18", "4"]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        stderr(&output),
+        "error: 4 has 3 open todos under it; pass -r to mark them done too\n"
+    );
+    none.assert();
+}
+
+#[test]
+fn completes_a_whole_branch_with_one_request_because_the_server_completes_what_is_under_it() {
     let mut server = server();
     outline(&mut server);
     let parent = patch(
@@ -488,10 +504,10 @@ fn marks_only_the_named_todo_done_so_the_todos_under_it_keep_their_own_state() {
     .expect(0)
     .create();
 
-    let output = nestodo(&server, &["done", "4"]);
+    let output = nestodo(&server, &["done", "-r", "4"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(stdout(&output), "4 [x] v2 release  1/4\n");
+    assert_eq!(stdout(&output), "4 [x] v2 release  4/4\n");
     parent.assert();
     children.assert();
 }
