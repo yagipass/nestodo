@@ -478,4 +478,31 @@ class TodoApiTest {
             assertEquals("/api/v1/avatars/abc", request.url.encodedPath)
             assertEquals("app-token", request.headers["cf-access-token"])
         }
+
+    @Test
+    fun `a picture on another port is not downloaded, because the Access token would go along to whoever listens there`() =
+        runTest {
+            MockWebServer().use { other ->
+                other.enqueue(
+                    MockResponse.Builder().code(200).body(Buffer().write(byteArrayOf(1))).build()
+                )
+                other.start()
+                val credentials = FakeCredentials(server.hostName, "app-token", null)
+                failsWith<IllegalArgumentException> {
+                    api(credentials).avatar(other.url("/api/v1/avatars/abc").toString())
+                }
+                assertEquals(0, other.requestCount)
+            }
+        }
+
+    @Test
+    fun `a picture address outside the avatars is not requested, so a profile cannot send the token to another endpoint`() =
+        runTest {
+            respond(200, """{"todos":[]}""")
+            val credentials = FakeCredentials(server.hostName, "app-token", null)
+            failsWith<IllegalArgumentException> {
+                api(credentials).avatar("/api/v1/avatars/../todos")
+            }
+            assertEquals(0, server.requestCount)
+        }
 }
