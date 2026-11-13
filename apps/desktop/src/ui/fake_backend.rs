@@ -209,6 +209,35 @@ impl FakeServer {
         }
     }
 
+    fn subtree(rows: &[Row], id: u64) -> Vec<u64> {
+        let mut ids = vec![id];
+        let mut index = 0;
+        while index < ids.len() {
+            let parent = ids[index];
+            ids.extend(
+                rows.iter()
+                    .filter(|row| row.parent == Some(parent))
+                    .map(|row| row.id),
+            );
+            index += 1;
+        }
+        ids
+    }
+
+    fn reopen(rows: &mut [Row], mut id: Option<u64>) {
+        while let Some(row) = id.and_then(|id| rows.iter_mut().find(|row| row.id == id)) {
+            row.done = false;
+            id = row.parent;
+        }
+    }
+
+    fn complete(rows: &mut [Row], id: u64) {
+        let ids = Self::subtree(rows, id);
+        for row in rows.iter_mut().filter(|row| ids.contains(&row.id)) {
+            row.done = true;
+        }
+    }
+
     fn handle(state: &mut State, request: &Request) -> Reply {
         let body = request.body.clone().unwrap_or(Value::Null);
         let path = request.path.split('?').next().unwrap_or_default();
@@ -238,6 +267,7 @@ impl FakeServer {
                     .as_u64()
                     .and_then(|index| usize::try_from(index).ok());
                 Self::place(&mut state.rows, id, parent, index);
+                Self::reopen(&mut state.rows, parent);
                 reply(201, json!({ "todo": { "id": id } }))
             }
             ("PATCH", Some(id)) => {
@@ -250,22 +280,31 @@ impl FakeServer {
                 if let Some(note) = body["note"].as_str() {
                     row.note = note.to_string();
                 }
-                if let Some(done) = body["completed"].as_bool() {
-                    row.done = done;
-                }
                 if let Some(collapsed) = body["collapsed"].as_bool() {
                     row.collapsed = collapsed;
+                }
+                let parent = row.parent;
+                match body["completed"].as_bool() {
+                    Some(true) => Self::complete(&mut state.rows, id),
+                    Some(false) => Self::reopen(&mut state.rows, Some(id)),
+                    None => {}
                 }
                 if body.get("parentId").is_some() || body.get("index").is_some() {
                     let parent = match body.get("parentId") {
                         Some(Value::Null) => None,
                         Some(value) => value.as_u64(),
-                        None => row.parent,
+                        None => parent,
                     };
                     let index = body["index"]
                         .as_u64()
                         .and_then(|index| usize::try_from(index).ok());
                     Self::place(&mut state.rows, id, parent, index);
+                    let open = Self::subtree(&state.rows, id)
+                        .iter()
+                        .any(|id| state.rows.iter().any(|row| row.id == *id && !row.done));
+                    if open {
+                        Self::reopen(&mut state.rows, parent);
+                    }
                 }
                 reply(200, json!({ "todo": { "id": id } }))
             }
@@ -276,19 +315,7 @@ impl FakeServer {
                 if !recursive && state.rows.iter().any(|row| row.parent == Some(id)) {
                     return reply(409, json!({ "error": "has_children" }));
                 }
-                let mut gone = vec![id];
-                let mut index = 0;
-                while index < gone.len() {
-                    let parent = gone[index];
-                    gone.extend(
-                        state
-                            .rows
-                            .iter()
-                            .filter(|row| row.parent == Some(parent))
-                            .map(|row| row.id),
-                    );
-                    index += 1;
-                }
+                let gone = Self::subtree(&state.rows, id);
                 state.rows.retain(|row| !gone.contains(&row.id));
                 Self::reorder(&mut state.rows, target.parent);
                 Reply {

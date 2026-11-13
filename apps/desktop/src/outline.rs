@@ -245,6 +245,38 @@ fn height_of(outline: &Outline, key: &str) -> usize {
         + 1
 }
 
+fn reopen_up(outline: &mut Outline, key: &str) {
+    let mut current = Some(key.to_owned());
+    while let Some(key) = current.filter(|key| key != ROOT) {
+        outline.item_mut(&key).done = false;
+        current = parent_of(outline, &key);
+    }
+}
+
+fn complete_all(outline: &mut Outline, key: &str) {
+    for key in subtree(outline, key) {
+        outline.item_mut(&key).done = true;
+    }
+}
+
+fn settle_move(outline: &mut Outline, key: &str, parent: &str) {
+    if subtree(outline, key)
+        .iter()
+        .any(|key| !outline.item(key).done)
+    {
+        reopen_up(outline, parent);
+    }
+}
+
+#[must_use]
+pub fn open_under(outline: &Outline, key: &str) -> Vec<Key> {
+    subtree(outline, key)
+        .into_iter()
+        .skip(1)
+        .filter(|key| !outline.item(key).done)
+        .collect()
+}
+
 fn mark(
     outline: &Outline,
     key: &str,
@@ -400,6 +432,7 @@ pub fn split(
         next.items
             .insert(fresh.to_owned(), Item::new(fresh, "", ""));
         next.insert_child(&parent, index, fresh);
+        reopen_up(&mut next, &parent);
         return Change {
             outline: next,
             ops: vec![Op::Create {
@@ -426,6 +459,7 @@ pub fn split(
         next.index_in(&parent, key) + 1
     };
     next.insert_child(target, index, fresh);
+    reopen_up(&mut next, target);
     let mut ops = vec![Op::Create {
         key: fresh.to_owned(),
         parent: target.to_owned(),
@@ -459,6 +493,7 @@ pub fn indent(outline: &Outline, key: &str, shown: &HashSet<Key>) -> Option<Chan
     next.item_mut(&parent).children.remove(i);
     let index = next.item(&target).children.len();
     next.item_mut(&target).children.push(key.to_owned());
+    settle_move(&mut next, key, &target);
     let mut ops = vec![Op::Move {
         key: key.to_owned(),
         parent: target.clone(),
@@ -490,6 +525,7 @@ pub fn outdent(outline: &Outline, key: &str) -> Option<Change> {
     next.detach(&parent, key);
     let index = next.index_in(&grandparent, &parent) + 1;
     next.insert_child(&grandparent, index, key);
+    settle_move(&mut next, key, &grandparent);
     Some(Change {
         outline: next,
         ops: vec![Op::Move {
@@ -510,6 +546,7 @@ pub fn move_by(outline: &Outline, key: &str, step: isize, shown: &HashSet<Key>) 
     let children = &mut next.item_mut(&parent).children;
     children.remove(from);
     children.insert(index, key.to_owned());
+    settle_move(&mut next, key, &parent);
     Some(Change {
         outline: next,
         ops: vec![Op::Move {
@@ -581,6 +618,7 @@ pub fn move_to(outline: &Outline, key: &str, target: &str) -> Change {
     next.detach(&parent, key);
     let index = next.item(target).children.len();
     next.item_mut(target).children.push(key.to_owned());
+    settle_move(&mut next, key, target);
     Change {
         outline: next,
         ops: vec![Op::Move {
@@ -595,9 +633,12 @@ pub fn move_to(outline: &Outline, key: &str, target: &str) -> Change {
 #[must_use]
 pub fn toggle_done(outline: &Outline, key: &str) -> Change {
     let mut next = outline.clone();
-    let item = next.item_mut(key);
-    item.done = !item.done;
-    let done = item.done;
+    let done = !next.item(key).done;
+    if done {
+        complete_all(&mut next, key);
+    } else {
+        reopen_up(&mut next, key);
+    }
     Change {
         outline: next,
         ops: vec![Op::Update {
@@ -685,6 +726,7 @@ pub fn append(outline: &Outline, parent: &str, fresh: &str) -> Change {
     next.items
         .insert(fresh.to_owned(), Item::new(fresh, "", ""));
     next.item_mut(parent).children.push(fresh.to_owned());
+    reopen_up(&mut next, parent);
     Change {
         outline: next,
         ops: vec![Op::Create {
@@ -712,6 +754,7 @@ fn apply_op(outline: &mut Outline, op: &Op) {
                 .items
                 .insert(key.clone(), Item::new(key, title, note));
             outline.insert_child(parent, *index, key);
+            reopen_up(outline, parent);
         }
         Op::Title { key, title } => outline.item_mut(key).title.clone_from(title),
         Op::Note { key, note } => outline.item_mut(key).note.clone_from(note),
@@ -720,14 +763,19 @@ fn apply_op(outline: &mut Outline, op: &Op) {
             completed,
             collapsed,
         } => {
+            match completed {
+                Some(true) => complete_all(outline, key),
+                Some(false) => reopen_up(outline, key),
+                None => {}
+            }
             let item = outline.item_mut(key);
-            item.done = completed.unwrap_or(item.done);
             item.collapsed = collapsed.unwrap_or(item.collapsed);
         }
         Op::Move { key, parent, index } => {
             let from = parent_of(outline, key).unwrap_or_else(|| panic!("{key} has no parent"));
             outline.detach(&from, key);
             outline.insert_child(parent, *index, key);
+            settle_move(outline, key, parent);
         }
         Op::Delete { key, .. } => {
             delete_subtree(outline, key);
@@ -754,11 +802,11 @@ fn recreate(outline: &Outline, key: &str) -> Vec<Op> {
         title: item.title.clone(),
         note: Some(item.note.clone()),
     }];
-    if item.done || item.collapsed {
+    if item.collapsed {
         ops.push(Op::Update {
             key: key.to_owned(),
-            completed: item.done.then_some(true),
-            collapsed: item.collapsed.then_some(true),
+            completed: None,
+            collapsed: Some(true),
         });
     }
     ops
@@ -778,18 +826,14 @@ fn inverse(outline: &Outline, op: &Op) -> Vec<Op> {
             key: key.clone(),
             note: outline.item(key).note.clone(),
         }],
-        Op::Update {
-            key,
-            completed,
-            collapsed,
-        } => {
-            let item = outline.item(key);
-            vec![Op::Update {
+        Op::Update { key, collapsed, .. } => collapsed
+            .map(|_| Op::Update {
                 key: key.clone(),
-                completed: completed.map(|_| item.done),
-                collapsed: collapsed.map(|_| item.collapsed),
-            }]
-        }
+                completed: None,
+                collapsed: Some(outline.item(key).collapsed),
+            })
+            .into_iter()
+            .collect(),
         Op::Move { key, .. } => {
             let parent = parent_of(outline, key).unwrap_or_else(|| panic!("{key} has no parent"));
             vec![Op::Move {
@@ -813,7 +857,46 @@ pub fn undo_for(outline: &Outline, ops: &[Op]) -> Vec<Op> {
         steps.push(inverse(&current, op));
         apply_op(&mut current, op);
     }
-    steps.into_iter().rev().flatten().collect()
+    let mut undo: Vec<Op> = steps.into_iter().rev().flatten().collect();
+    let restored = apply_ops(&current, &undo);
+    undo.extend(restore_done(&restored, outline));
+    undo
+}
+
+fn set_done(key: Key, done: bool) -> Op {
+    Op::Update {
+        key,
+        completed: Some(done),
+        collapsed: None,
+    }
+}
+
+fn topmost(outline: &Outline, key: &str, keys: &HashSet<Key>, found: &mut Vec<Key>) {
+    for child in &outline.item(key).children {
+        if keys.contains(child) {
+            found.push(child.clone());
+        } else {
+            topmost(outline, child, keys, found);
+        }
+    }
+}
+
+fn restore_done(restored: &Outline, before: &Outline) -> Vec<Op> {
+    let was_done = |key: &Key| before.get(key).is_some_and(|item| item.done);
+    let mut ops: Vec<Op> = subtree(restored, ROOT)
+        .into_iter()
+        .filter(|key| restored.item(key).done && !was_done(key))
+        .map(|key| set_done(key, false))
+        .collect();
+    let reopened = apply_ops(restored, &ops);
+    let missing: HashSet<Key> = subtree(&reopened, ROOT)
+        .into_iter()
+        .filter(|key| was_done(key) && !reopened.item(key).done)
+        .collect();
+    let mut found = Vec::new();
+    topmost(&reopened, ROOT, &missing, &mut found);
+    ops.extend(found.into_iter().map(|key| set_done(key, true)));
+    ops
 }
 
 #[cfg(test)]
@@ -972,6 +1055,33 @@ mod tests {
 
     fn all(outline: &Outline) -> HashSet<Key> {
         shown(outline, true, "")
+    }
+
+    fn moving() -> Outline {
+        outline_of(&[
+            todo(1, "move house", None),
+            todo(2, "boxes", Some(1)),
+            todo(3, "tape", Some(2)),
+            todo(4, "quotes", Some(1)).done(),
+            todo(5, "bank", None),
+        ])
+    }
+
+    fn trip() -> Outline {
+        outline_of(&[
+            todo(1, "trip", None).done(),
+            todo(2, "packing", Some(1)).done(),
+            todo(3, "socks", Some(2)).done(),
+            todo(4, "tickets", Some(1)).done(),
+            todo(5, "passport", None),
+        ])
+    }
+
+    fn done_keys(outline: &Outline) -> Vec<Key> {
+        subtree(outline, ROOT)
+            .into_iter()
+            .filter(|key| outline.item(key).done)
+            .collect()
     }
 
     fn keys(destinations: Vec<Destination>) -> Vec<Key> {
@@ -1547,6 +1657,61 @@ mod tests {
         }
     }
 
+    mod completion {
+        use super::*;
+
+        #[test]
+        fn completing_a_todo_completes_every_open_todo_under_it_at_any_depth_in_the_single_request_the_server_cascades()
+         {
+            let change = toggle_done(&moving(), "t1");
+            assert_eq!(done_keys(&change.outline), ["t1", "t2", "t3", "t4"]);
+            assert_eq!(change.ops, [update_op("t1", Some(true), None)]);
+        }
+
+        #[test]
+        fn reopening_a_todo_reopens_every_done_todo_above_it_but_leaves_the_todos_under_it_done_so_no_done_todo_has_open_work_under_it()
+         {
+            let change = toggle_done(&trip(), "t2");
+            assert_eq!(done_keys(&change.outline), ["t3", "t4"]);
+            assert_eq!(change.ops, [update_op("t2", Some(false), None)]);
+        }
+
+        #[test]
+        fn adding_a_todo_under_a_done_one_reopens_it_and_every_done_todo_above_it_as_the_server_does()
+         {
+            let trip = trip();
+            let change = split(&trip, "t3", END, "n1", &all(&trip));
+            assert_eq!(change.ops, [create_op("n1", "t2", 1, "")]);
+            assert_eq!(done_keys(&change.outline), ["t3", "t4"]);
+        }
+
+        #[test]
+        fn nesting_an_open_todo_under_a_done_one_reopens_it_as_the_server_does() {
+            let trip = trip();
+            let change = indent(&trip, "t5", &all(&trip)).unwrap();
+            assert_eq!(change.ops, [move_op("t5", "t1", 2)]);
+            assert_eq!(done_keys(&change.outline), ["t2", "t3", "t4"]);
+        }
+
+        #[test]
+        fn moving_an_open_todo_deep_into_a_done_one_reopens_the_destination_and_every_done_todo_above_it()
+         {
+            let change = move_to(&trip(), "t5", "t3");
+            assert_eq!(done_keys(&change.outline), ["t4"]);
+        }
+
+        #[test]
+        fn moving_a_todo_with_nothing_open_under_it_into_a_done_one_leaves_the_destination_done() {
+            let outline = outline_of(&[
+                todo(1, "archive", None).done(),
+                todo(2, "receipts", None).done(),
+                todo(3, "2025", Some(2)).done(),
+            ]);
+            let change = move_to(&outline, "t2", "t1");
+            assert_eq!(done_keys(&change.outline), ["t1", "t2", "t3"]);
+        }
+    }
+
     mod undo_for {
         use super::*;
 
@@ -1560,6 +1725,8 @@ mod tests {
             ]);
             let pair = outline_of(&[todo(1, "buy ", None), todo(2, "milk", None)]);
             let shown = all(&sample);
+            let moving = moving();
+            let trip = trip();
             vec![
                 (
                     "split",
@@ -1605,6 +1772,41 @@ mod tests {
                     set_collapsed(&sample, "t1", true).unwrap(),
                 ),
                 ("delete a subtree", sample.clone(), remove(&sample, "t1")),
+                (
+                    "complete a todo with open and done todos under it",
+                    moving.clone(),
+                    toggle_done(&moving, "t1"),
+                ),
+                (
+                    "reopen a todo inside a done one",
+                    trip.clone(),
+                    toggle_done(&trip, "t3"),
+                ),
+                (
+                    "add under a done todo",
+                    trip.clone(),
+                    split(&trip, "t1", END, "n1", &all(&trip)),
+                ),
+                (
+                    "delete inside a done todo",
+                    trip.clone(),
+                    remove(&trip, "t3"),
+                ),
+                (
+                    "delete a done todo with everything under it",
+                    trip.clone(),
+                    remove(&trip, "t2"),
+                ),
+                (
+                    "indent under a done sibling",
+                    trip.clone(),
+                    indent(&trip, "t5", &all(&trip)).unwrap(),
+                ),
+                (
+                    "move deep into a done todo",
+                    trip.clone(),
+                    move_to(&trip, "t5", "t3"),
+                ),
                 (
                     "merge",
                     pair.clone(),
@@ -1658,6 +1860,77 @@ mod tests {
                     recreate("t3", "t2", "socks", ""),
                     update_op("t3", Some(true), None),
                 ]
+            );
+        }
+    }
+
+    mod undo_completion {
+        use super::*;
+
+        #[test]
+        fn undoing_a_completion_reopens_only_the_todos_it_completed_so_one_that_was_done_before_stays_done()
+         {
+            let moving = moving();
+            let change = toggle_done(&moving, "t1");
+            assert_eq!(
+                undo_for(&moving, &change.ops),
+                [
+                    update_op("t1", Some(false), None),
+                    update_op("t2", Some(false), None),
+                    update_op("t3", Some(false), None),
+                ]
+            );
+        }
+
+        #[test]
+        fn undoing_a_reopen_completes_the_topmost_todo_it_reopened_again_and_lets_the_cascade_restore_the_rest()
+         {
+            let trip = trip();
+            let change = toggle_done(&trip, "t3");
+            assert_eq!(
+                undo_for(&trip, &change.ops),
+                [update_op("t1", Some(true), None)]
+            );
+        }
+
+        #[test]
+        fn undoing_an_add_under_a_done_todo_deletes_the_new_todo_before_completing_the_parent_again_so_the_servers_cascade_never_completes_it_first()
+         {
+            let trip = trip();
+            let change = split(&trip, "t1", END, "n1", &all(&trip));
+            assert_eq!(
+                undo_for(&trip, &change.ops),
+                [delete_op("n1", &["n1"]), update_op("t1", Some(true), None)]
+            );
+        }
+
+        #[test]
+        fn undoing_a_delete_inside_a_done_todo_recreates_the_todo_open_and_then_completes_only_the_topmost_todo_its_creation_reopened()
+         {
+            let trip = trip();
+            assert_eq!(
+                undo_for(&trip, &remove(&trip, "t3").ops),
+                [
+                    Op::Create {
+                        key: "t3".to_owned(),
+                        parent: "t2".to_owned(),
+                        index: 0,
+                        title: "socks".to_owned(),
+                        note: Some(String::new()),
+                    },
+                    update_op("t1", Some(true), None),
+                ]
+            );
+        }
+
+        #[test]
+        fn undoing_an_indent_under_a_done_sibling_moves_the_row_back_before_completing_the_sibling_again()
+         {
+            let trip = trip();
+            let change = indent(&trip, "t5", &all(&trip)).unwrap();
+            assert_eq!(
+                undo_for(&trip, &change.ops),
+                [move_op("t5", ROOT, 1), update_op("t1", Some(true), None)]
             );
         }
     }

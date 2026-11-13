@@ -181,8 +181,8 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::outline::fixtures::{outline_of, shown, todo};
-    use crate::outline::{Outline, ROOT, indent, rename, set_note, split};
+    use crate::outline::fixtures::{Mark, outline_of, shown, todo, update_op};
+    use crate::outline::{Outline, ROOT, indent, rename, set_note, split, toggle_done};
     use crate::wire::Todo;
 
     fn row(id: u64, title: &str) -> Todo {
@@ -265,6 +265,38 @@ mod tests {
         assert_eq!(removed.focus, Some(at("t2", 4, false)));
 
         assert_eq!(history.undo(&removed.outline), None);
+    }
+
+    #[test]
+    fn takes_back_a_completion_with_every_todo_it_completed_under_it_while_a_later_reopen_from_the_check_leaves_those_done()
+     {
+        let start = outline_of(&[
+            row(1, "groceries"),
+            todo(2, "milk", Some(1)).done(),
+            todo(3, "bread", Some(1)),
+            row(4, "trip"),
+        ]);
+        let mut history = UndoHistory::with_clock(|| Duration::ZERO);
+        let completed = toggle_done(&start, "t1");
+        history.record(&start, &completed, None);
+        let reopened = toggle_done(&completed.outline, "t1");
+        history.record(&completed.outline, &reopened, None);
+        assert!(!reopened.outline.item("t1").done);
+        assert!(reopened.outline.item("t3").done);
+
+        let completed_again = history.undo(&reopened.outline).unwrap();
+        assert_eq!(completed_again.outline, completed.outline);
+        assert_eq!(completed_again.ops, [update_op("t1", Some(true), None)]);
+
+        let undone = history.undo(&completed_again.outline).unwrap();
+        assert_eq!(undone.outline, start);
+        assert_eq!(
+            undone.ops,
+            [
+                update_op("t1", Some(false), None),
+                update_op("t3", Some(false), None)
+            ]
+        );
     }
 
     #[test]

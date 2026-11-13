@@ -15,8 +15,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use nestodo_desktop::error::Error;
 use nestodo_desktop::outline::{
     END, Focus, Guide, Key, Outline, ROOT, Row, append, caret_in, destinations, guides, indent,
-    key_for, merge_into_previous, move_by, move_to, outdent, remove, rename, set_collapsed,
-    set_note, split, subtree, toggle_done, visible_rows,
+    key_for, merge_into_previous, move_by, move_to, open_under, outdent, remove, rename,
+    set_collapsed, set_note, split, subtree, toggle_done, visible_rows,
 };
 use nestodo_desktop::sync::Sync;
 use nestodo_desktop::title::{link_label, link_target, tokens};
@@ -631,12 +631,78 @@ impl OutlineView {
         cx.notify();
     }
 
+    fn name_of(&self, key: &str) -> String {
+        match self.outline.item(key).title.as_str() {
+            "" => "Untitled".to_string(),
+            title => title.to_string(),
+        }
+    }
+
+    fn confirm_done(
+        &mut self,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        toggle: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        let open = open_under(&self.outline, key).len();
+        if self.outline.item(key).done || open == 0 {
+            toggle(self, window, cx);
+            return;
+        }
+        let name = self.name_of(key);
+        let message = format!("Mark \u{201c}{name}\u{201d} as done?");
+        let detail = if open == 1 {
+            "1 item under it isn\u{2019}t done yet. It\u{2019}ll be marked as done too.".to_string()
+        } else {
+            format!(
+                "{open} items under it aren\u{2019}t done yet. They\u{2019}ll be marked as done too."
+            )
+        };
+        let answer = window.prompt(
+            PromptLevel::Info,
+            &message,
+            Some(&detail),
+            &["Mark all as done", "Cancel"],
+            cx,
+        );
+        let key = key.to_string();
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await.ok() == Some(0) {
+                this.update_in(cx, |this, window, cx| {
+                    if this.outline.get(&key).is_some_and(|item| !item.done) {
+                        toggle(this, window, cx);
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     fn complete(&mut self, key: &str, pos: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_shown(key) {
+            return;
+        }
+        let before = self.focused(cx);
+        let target = key.to_string();
+        self.confirm_done(key, window, cx, move |this, window, cx| {
+            this.complete_confirmed(&target, pos, before, window, cx);
+        });
+    }
+
+    fn complete_confirmed(
+        &mut self,
+        key: &str,
+        pos: usize,
+        before: Option<Focus>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let rows = self.rows();
         if !rows.iter().any(|row| row.key == key) {
             return;
         }
-        let before = self.focused(cx);
         let change = toggle_done(&self.outline, key);
         if self.show_done || !change.outline.item(key).done {
             let focus = Focus {
@@ -657,10 +723,7 @@ impl OutlineView {
             self.remove_confirmed(key, self.focused(cx), window, cx);
             return;
         }
-        let name = match self.outline.item(key).title.as_str() {
-            "" => "Untitled".to_string(),
-            title => title.to_string(),
-        };
+        let name = self.name_of(key);
         let noun = if under == 1 { "item" } else { "items" };
         let message = format!("Delete \u{201c}{name}\u{201d} and the {under} {noun} under it?");
         let before = self.focused(cx);
@@ -668,7 +731,7 @@ impl OutlineView {
             PromptLevel::Warning,
             &message,
             None,
-            &["Delete", "Cancel"],
+            &["Delete all", "Cancel"],
             cx,
         );
         let key = key.to_string();
@@ -1281,10 +1344,13 @@ impl OutlineView {
         if !self.outline.contains(key) {
             return;
         }
-        let before = self.focused(cx);
-        self.blur_editor(window, cx);
-        let change = toggle_done(&self.outline, key);
-        self.apply(Some(change), None, before, window, cx);
+        let target = key.to_string();
+        self.confirm_done(key, window, cx, move |this, window, cx| {
+            let before = this.focused(cx);
+            this.blur_editor(window, cx);
+            let change = toggle_done(&this.outline, &target);
+            this.apply(Some(change), None, before, window, cx);
+        });
     }
 
     fn add_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
