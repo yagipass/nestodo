@@ -1060,9 +1060,10 @@ impl SettingsView {
                             })),
                     )
                     .child(
-                        icon_button(("remove-header", index), Icon::Close, 16., cx).on_click(
-                            cx.listener(move |this, _, _, cx| this.remove_header(index, cx)),
-                        ),
+                        icon_button(("remove-header", index), Icon::Close, 16., colors.hover, cx)
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.remove_header(index, cx)),
+                            ),
                     )
             })
             .collect::<Vec<_>>();
@@ -1115,7 +1116,7 @@ impl SettingsView {
                             .child(field_box(&editor.token, token_error.is_some(), &colors))
                             .when(form.token_kept(), |row| {
                                 row.child(
-                                    icon_button("remove-token", Icon::Close, 16., cx).on_click(
+                                    icon_button("remove-token", Icon::Close, 16., colors.hover, cx).on_click(
                                         cx.listener(|this, _, _, cx| this.remove_token(cx)),
                                     ),
                                 )

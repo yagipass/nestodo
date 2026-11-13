@@ -1172,11 +1172,11 @@ impl Root {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
                     match &avatar {
-                        Some(avatar) => avatar_button("account", avatar, cx),
-                        None => icon_button("account", Icon::Account, 19., cx),
+                        Some(avatar) => avatar_button("account", avatar, colors.hover_on_bg, cx),
+                        None => icon_button("account", Icon::Account, 19., colors.hover_on_bg, cx),
                     }
                     .debug_selector(|| "account".into())
-                    .when(open, |button| button.bg(colors.hover))
+                    .when(open, |button| button.bg(colors.hover_on_bg))
                     .child(
                         canvas(
                             move |bounds_now, _, _| bounds.set(bounds_now),

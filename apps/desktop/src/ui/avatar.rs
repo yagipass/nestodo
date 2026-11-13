@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, Div, ElementId, Image, ImageFormat, Stateful, div, img, prelude::*, px,
+    AnyElement, App, Div, ElementId, Hsla, Image, ImageFormat, Stateful, div, img, prelude::*, px,
 };
 
 use nestodo_desktop::profile::Profile;
@@ -65,7 +65,12 @@ pub fn avatar_circle(avatar: Option<&Avatar>, size: f32, colors: &Theme) -> AnyE
     }
 }
 
-pub fn avatar_button(id: impl Into<ElementId>, avatar: &Avatar, cx: &App) -> Stateful<Div> {
+pub fn avatar_button(
+    id: impl Into<ElementId>,
+    avatar: &Avatar,
+    hover: Hsla,
+    cx: &App,
+) -> Stateful<Div> {
     let colors = theme(cx);
     div()
         .id(id)
@@ -76,6 +81,6 @@ pub fn avatar_button(id: impl Into<ElementId>, avatar: &Avatar, cx: &App) -> Sta
         .size(px(32.))
         .rounded(px(9.))
         .cursor_pointer()
-        .hover(move |style| style.bg(colors.hover))
+        .hover(move |style| style.bg(hover))
         .child(avatar_circle(Some(avatar), 22., &colors))
 }

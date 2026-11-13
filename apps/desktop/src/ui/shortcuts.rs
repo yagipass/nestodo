@@ -136,7 +136,7 @@ pub fn shortcuts_dialog(
                         .child("Keyboard shortcuts"),
                 )
                 .child(
-                    icon_button("close-shortcuts", Icon::Close, 16., cx)
+                    icon_button("close-shortcuts", Icon::Close, 16., colors.hover, cx)
                         .on_click(move |_, window, cx| on_close(window, cx)),
                 ),
         )

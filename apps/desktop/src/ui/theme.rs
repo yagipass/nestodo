@@ -13,6 +13,8 @@ pub struct Theme {
     pub muted: Hsla,
     pub border: Hsla,
     pub hover: Hsla,
+    pub hover_on_bg: Hsla,
+    pub hover_strong_on_bg: Hsla,
     pub guide: Hsla,
     pub accent: Hsla,
     pub on_accent: Hsla,
@@ -21,6 +23,7 @@ pub struct Theme {
     pub grid: Hsla,
     pub accent_strong: Hsla,
     pub accent_soft: Hsla,
+    pub accent_soft_on_bg: Hsla,
     pub added: Hsla,
     pub added_strong: Hsla,
     pub heat: [Hsla; 5],
@@ -48,6 +51,8 @@ impl Theme {
             muted: hsla(0x665f78),
             border: hsla(0xe2dbf1),
             hover: hsla(0xf4f0fc),
+            hover_on_bg: hsla(0xe6dff5),
+            hover_strong_on_bg: hsla(0xd4cbea),
             guide: hsla(0xcdbcfa),
             accent: hsla(0x53419b),
             on_accent: hsla(0xffffff),
@@ -56,6 +61,7 @@ impl Theme {
             grid: hsla(0xefebf7),
             accent_strong: hsla(0x3b2c7a),
             accent_soft: hsla(0xece5fd),
+            accent_soft_on_bg: hsla(0xdcd2f8),
             added: hsla(0xe07a2e),
             added_strong: hsla(0xb05a1c),
             heat: [
@@ -80,6 +86,8 @@ impl Theme {
             muted: hsla(0xa69ec0),
             border: hsla(0x382f55),
             hover: hsla(0x2b2345),
+            hover_on_bg: hsla(0x2b2345),
+            hover_strong_on_bg: hsla(0x382f55),
             guide: hsla(0x54469a),
             accent: hsla(0xcdbdff),
             on_accent: hsla(0x2a2150),
@@ -88,6 +96,7 @@ impl Theme {
             grid: hsla(0x2e2648),
             accent_strong: hsla(0xece5ff),
             accent_soft: hsla(0x33295a),
+            accent_soft_on_bg: hsla(0x33295a),
             added: hsla(0xe8894a),
             added_strong: hsla(0xf6b585),
             heat: [
@@ -135,5 +144,53 @@ pub fn sync_theme(window: &Window, cx: &mut App) {
     if !cx.has_global::<Theme>() || *cx.global::<Theme>() != next {
         cx.set_global(next);
         cx.refresh_windows();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn luminance(color: Hsla) -> f32 {
+        let Rgba { r, g, b, .. } = color.to_rgb();
+        let linear = |channel: f32| {
+            if channel <= 0.040_45 {
+                channel / 12.92
+            } else {
+                ((channel + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+    }
+
+    fn contrast(a: Hsla, b: Hsla) -> f32 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn the_outline_without_a_card_highlights_rows_as_visibly_as_the_card_did() {
+        for theme in [Theme::light(), Theme::dark()] {
+            let mode = if theme.dark { "dark" } else { "light" };
+            assert!(
+                contrast(theme.bg, theme.hover_on_bg) >= contrast(theme.surface, theme.hover),
+                "the row being edited fades into the page in {mode}"
+            );
+            assert!(
+                contrast(theme.hover_on_bg, theme.hover_strong_on_bg)
+                    >= contrast(theme.hover, theme.border),
+                "a row's buttons lose their hover in {mode}"
+            );
+            assert!(
+                contrast(theme.bg, theme.accent_soft_on_bg)
+                    >= contrast(theme.surface, theme.accent_soft),
+                "a collapsed parent's bullet fades into the page in {mode}"
+            );
+            assert!(
+                contrast(theme.hover_on_bg, theme.accent_soft_on_bg)
+                    >= contrast(theme.hover, theme.accent_soft),
+                "a collapsed parent's bullet fades into its highlighted row in {mode}"
+            );
+        }
     }
 }
