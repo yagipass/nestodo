@@ -7,7 +7,7 @@ reviews:
     files:
       - CHANGELOG.md
       - flake.lock
-      - Cargo.lock
+      - apps/cli/Cargo.lock
       - pnpm-lock.yaml
       - .github/workflows/actions.lock
       - apps/web/AGENTS.md

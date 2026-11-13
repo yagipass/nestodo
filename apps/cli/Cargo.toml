@@ -26,3 +26,5 @@ webbrowser = "1.2.4"
 
 [dev-dependencies]
 mockito = "1.7.2"
+
+[workspace]
