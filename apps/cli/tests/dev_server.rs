@@ -76,17 +76,26 @@ fn an_outline_can_be_built_rearranged_completed_and_pruned_against_the_real_serv
         ["[ ] └── a  0/2", "[ ]     ├── b", "[ ]     └── c"]
     );
 
-    ok(&["done", &a]);
+    assert_eq!(
+        failure(&["done", &a]),
+        format!("error: {a} has 2 open todos under it; pass -r to mark them done too\n")
+    );
+    ok(&["done", "-r", &a]);
     assert_eq!(
         tree_under(&root),
-        ["[x] └── a  0/2", "[ ]     ├── b", "[ ]     └── c"],
-        "finishing a todo leaves the todos under it as they were"
+        ["[x] └── a  2/2", "[x]     ├── b", "[x]     └── c"],
+        "finishing a todo finishes the todos under it"
     );
     assert_eq!(
         ok(&["list", &root, "--active"]),
         format!("Home › {title}  (#{root})\nNo todos here yet.\n")
     );
     ok(&["undo", &a]);
+    assert_eq!(
+        tree_under(&root),
+        ["[ ] └── a  2/2", "[x]     ├── b", "[x]     └── c"],
+        "reopening a todo leaves the todos under it finished"
+    );
 
     ok(&["edit", &b, "--title", "b renamed"]);
     let shown = ok(&["show", &b]);

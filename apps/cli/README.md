@@ -22,7 +22,7 @@ nestodo indent 7                      # nest under the todo above
 nestodo outdent 7                     # move out to right after its parent
 nestodo show 7
 nestodo edit 7 --title "Buy oat milk"
-nestodo done 7 8
+nestodo done 7 8 [-r]                 # -r also marks the open todos under it as done
 nestodo undo 7
 nestodo rm 7 [-r]                     # -r also deletes the todos under it
 nestodo logout
