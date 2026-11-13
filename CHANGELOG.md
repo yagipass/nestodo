@@ -1,5 +1,18 @@
 # Changelog
 
+## [v0.11.1](https://github.com/yagipass/nestodo/compare/v0.11.0...v0.11.1) - 2026-11-13
+
+### Android
+- feat(android): hide the top bar and add button while scrolling down by @yagipass in https://github.com/yagipass/nestodo/pull/89
+- feat(android): close the keyboard when the todo list is scrolled by @yagipass in https://github.com/yagipass/nestodo/pull/90
+- feat(android): scroll the todo list behind the navigation bar by @yagipass in https://github.com/yagipass/nestodo/pull/91
+- feat(android): scroll the todo list behind the status bar by @yagipass in https://github.com/yagipass/nestodo/pull/92
+- fix(android): load the profile picture only from your own server by @yagipass in https://github.com/yagipass/nestodo/pull/95
+### Desktop
+- fix(desktop): load the profile picture only from your own server by @yagipass in https://github.com/yagipass/nestodo/pull/96
+### Bug Fixes
+- fix: stop trusting the TLS roots that Mozilla removed by @yagipass in https://github.com/yagipass/nestodo/pull/98
+
 ## [v0.11.0](https://github.com/yagipass/nestodo/compare/v0.10.0...v0.11.0) - 2026-11-12
 
 ### Web
