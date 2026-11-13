@@ -183,7 +183,16 @@ class TodoApi(
         call("DELETE", url(AVATAR))
     }
 
-    override suspend fun avatar(url: String): ByteArray = call("GET", url(url)).body
+    override suspend fun avatar(url: String): ByteArray {
+        val target =
+            base.resolve(url)?.takeIf {
+                it.scheme == base.scheme &&
+                    it.host == base.host &&
+                    it.port == base.port &&
+                    it.encodedPath.startsWith(AVATARS)
+            } ?: throw IllegalArgumentException("$url is not an avatar on the server")
+        return call("GET", target).body
+    }
 
     private suspend fun patch(id: Long, body: JsonObject): Todo =
         parse<One>(call("PATCH", url(item(id)), body, id)).todo
@@ -263,6 +272,7 @@ class TodoApi(
         const val ANALYTICS = "/api/v1/analytics"
         const val PROFILE = "/api/v1/profile"
         const val AVATAR = "/api/v1/profile/avatar"
+        const val AVATARS = "/api/v1/avatars/"
         const val LOGIN_PATH = "/cdn-cgi/access/login"
         val JSON = "application/json".toMediaType()
         val json = Json { ignoreUnknownKeys = true }
