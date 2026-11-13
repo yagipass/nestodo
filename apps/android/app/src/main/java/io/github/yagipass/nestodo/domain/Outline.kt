@@ -135,16 +135,20 @@ data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long
         when (change) {
             is Change.Create ->
                 attach(
-                    Node(change.key, change.parent, change.title, note = change.note),
-                    change.index,
-                )
+                        Node(change.key, change.parent, change.title, note = change.note),
+                        change.index,
+                    )
+                    .reopenAbove(change.key)
             is Change.Rename -> update(change.key) { it.copy(title = change.title) }
             is Change.Annotate -> update(change.key) { it.copy(note = change.note) }
-            is Change.Complete -> update(change.key) { it.copy(completed = change.completed) }
+            is Change.Complete ->
+                if (change.completed) complete(change.key)
+                else update(change.key) { it.copy(completed = false) }.reopenAbove(change.key)
             is Change.Collapse -> update(change.key) { it.copy(collapsed = change.collapsed) }
             is Change.Move -> {
                 val node = nodes.getValue(change.key)
-                detach(node).attach(node.copy(parent = change.parent), change.index)
+                val moved = detach(node).attach(node.copy(parent = change.parent), change.index)
+                if (isOpen(change.key)) moved.reopenAbove(change.key) else moved
             }
             is Change.Delete -> {
                 val node = nodes.getValue(change.key)
@@ -160,8 +164,30 @@ data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long
             steps += outline.inverse(change) ?: return null
             outline = outline.apply(change)
         }
-        return steps.asReversed().flatten()
+        val structural = steps.asReversed().flatten()
+        return structural + structural.fold(outline, Outline::apply).completionOf(this)
     }
+
+    fun openUnder(key: Long): Int = subtree(key).drop(1).count { nodes[it]?.completed == false }
+
+    private fun isOpen(key: Long): Boolean = subtree(key).any { nodes[it]?.completed == false }
+
+    private fun completionOf(before: Outline): List<Change> {
+        val reopen =
+            keys().filter { nodes.getValue(it).completed && before[it]?.completed == false }
+        val reopened =
+            reopen.fold(this) { outline, key -> outline.apply(Change.Complete(key, false)) }
+        val complete =
+            keys().filter {
+                !reopened.nodes.getValue(it).completed && before[it]?.completed == true
+            }
+        return reopen.map { Change.Complete(it, false) } +
+            complete
+                .filter { nodes.getValue(it).parent !in complete }
+                .map { Change.Complete(it, true) }
+    }
+
+    private fun keys(): List<Long> = roots.flatMap(::subtree)
 
     private fun inverse(change: Change): List<Change>? {
         val node = nodes[change.key]
@@ -169,7 +195,7 @@ data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long
             is Change.Create -> listOf(Change.Delete(change.key))
             is Change.Rename -> node?.let { listOf(Change.Rename(it.key, it.title)) }
             is Change.Annotate -> node?.let { listOf(Change.Annotate(it.key, it.note)) }
-            is Change.Complete -> node?.let { listOf(Change.Complete(it.key, it.completed)) }
+            is Change.Complete -> node?.let { emptyList() }
             is Change.Collapse -> node?.let { listOf(Change.Collapse(it.key, it.collapsed)) }
             is Change.Move -> node?.let { listOf(Change.Move(it.key, it.parent, indexOf(it.key))) }
             is Change.Delete -> node?.let { subtree(it.key).flatMap(::recreate) }
@@ -180,10 +206,18 @@ data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long
         val node = nodes.getValue(key)
         return listOfNotNull(
             Change.Create(key, node.parent, indexOf(key), node.title, node.note),
-            Change.Complete(key, true).takeIf { node.completed },
             Change.Collapse(key, true).takeIf { node.collapsed },
         )
     }
+
+    private fun complete(key: Long): Outline =
+        subtree(key).fold(this) { outline, under ->
+            outline.update(under) { it.copy(completed = true) }
+        }
+
+    private fun reopenAbove(key: Long): Outline =
+        generateSequence(nodes[key]?.parent) { nodes[it]?.parent }
+            .fold(this) { outline, above -> outline.update(above) { it.copy(completed = false) } }
 
     private fun update(key: Long, transform: (Node) -> Node): Outline {
         val node = nodes[key] ?: return this
