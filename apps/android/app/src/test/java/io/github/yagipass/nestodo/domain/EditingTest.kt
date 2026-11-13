@@ -384,6 +384,7 @@ class EditingTest {
                 dentist,
             )
         val edit = done.enter(all, 2, 4, newKey = -1)!!
+        assertEquals(Edit(listOf(Change.Create(-1, 1, 1, "")), Caret(-1, 0)), edit)
         assertEquals(setOf(2L, 3L), edit.changes.fold(done, Outline::apply).done())
     }
 
