@@ -221,7 +221,7 @@ function MovePicker({
   );
 }
 
-type Confirming = { kind: "done" | "delete"; key: string; focus?: Focus };
+type Confirming = { kind: "done" | "delete"; key: string; focus?: Focus; before?: Focus };
 
 function ConfirmDialog({
   outline,
@@ -457,34 +457,40 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     return kind === "done" ? !outline[key].done && openUnder(outline, key).length > 0 : outline[key].children.length > 0;
   }
 
-  function complete(key: string, index: number, pos: number, confirmed = false) {
-    if (!confirmed && needsConfirming("done", key)) return setConfirming({ kind: "done", key, focus: { key, pos } });
+  function complete(key: string, index: number, pos: number, confirmed = false, before = focused()) {
+    if (!confirmed && needsConfirming("done", key)) return setConfirming({ kind: "done", key, focus: { key, pos }, before });
     const change = toggleDone(outline, key);
-    if (showDone || !change.outline[key].done) return apply(change, { key, pos });
+    if (showDone || !change.outline[key].done) return apply(change, { key, pos }, before);
     const next = rows.slice(index + 1).find((row) => row.depth <= rows[index].depth) ?? rows[index - 1];
-    apply(change, next ? { key: next.key, pos: -1 } : undefined);
+    apply(change, next ? { key: next.key, pos: -1 } : undefined, before);
   }
 
   function check(key: string) {
-    if (needsConfirming("done", key)) return setConfirming({ kind: "done", key });
+    if (needsConfirming("done", key)) return setConfirming({ kind: "done", key, before: focused() });
     apply(toggleDone(outline, key));
   }
 
-  function removeRow(key: string, index: number, confirmed = false) {
-    if (!confirmed && needsConfirming("delete", key)) return setConfirming({ kind: "delete", key, focus: focused() });
+  function removeRow(key: string, index: number, confirmed = false, before = focused()) {
+    if (!confirmed && needsConfirming("delete", key)) return setConfirming({ kind: "delete", key, focus: before, before });
     const next = rows[index - 1] ?? rows.slice(index + 1).find((row) => row.depth <= rows[index].depth);
-    apply(remove(outline, key), next ? { key: next.key, pos: -1 } : undefined);
+    apply(remove(outline, key), next ? { key: next.key, pos: -1 } : undefined, before);
   }
 
   function confirm() {
     if (!confirming) return;
     setConfirming(null);
-    const { kind, key, focus } = confirming;
-    if (!outline[key]) return;
+    const { kind, key, focus, before } = confirming;
+    const item = outline[key];
+    if (!item) return;
+    if (kind === "done" && item.done) {
+      if (focus) pendingFocus.current = focus;
+      return;
+    }
     const index = rows.findIndex((row) => row.key === key);
-    if (kind === "delete") removeRow(key, index, true);
-    else if (focus) complete(key, index, focus.pos, true);
-    else apply(toggleDone(outline, key));
+    if (index < 0) apply(kind === "done" ? toggleDone(outline, key) : remove(outline, key), undefined, before);
+    else if (kind === "delete") removeRow(key, index, true, before);
+    else if (focus) complete(key, index, focus.pos, true, before);
+    else apply(toggleDone(outline, key), undefined, before);
   }
 
   function closeConfirm() {

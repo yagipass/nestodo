@@ -86,7 +86,7 @@ export function nestodoMcpServer(userId: string) {
     {
       title: "Edit a todo",
       description:
-        "Rename, complete, reopen, collapse or move a todo, or change its note. Only the fields given change. A completed todo never has open todos under it: completing a todo also completes every open todo under it and returns their ids as completedUnder, and reopening a todo, or moving one with open todos into a completed todo, reopens the completed todos above it.",
+        "Rename, complete, reopen, collapse or move a todo, or change its note. Only the fields given change. A completed todo never has open todos under it: completing a todo also completes every open todo under it and returns their ids as completedUnder, and reopening a todo, or moving an open todo into a completed todo, reopens the completed todos above it.",
       inputSchema: patchTodoBody.extend({
         id,
         title: patchTodoBody.shape.title.describe("New title"),
