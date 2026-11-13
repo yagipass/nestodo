@@ -362,15 +362,129 @@ class TodoViewModelTest {
         repository.gate = CompletableDeferred()
         viewModel.select(1, 0)
         viewModel.toggleCompleted()
+        viewModel.confirmComplete()
         assertEquals(listOf("PATCH 1 completed true"), repository.calls)
         val rows = viewModel.state.value.rows
-        assertTrue(rows[0].completed)
-        assertTrue(rows[1].dimmed && !rows[1].completed)
+        assertEquals(listOf(true, true, true, false), rows.map { it.completed })
         repository.gate!!.complete(Unit)
 
         viewModel.toggleShowCompleted()
 
         assertEquals(listOf("Dentist"), viewModel.outline())
+    }
+
+    @Test
+    fun `marking a todo done while todos under it are open asks first and changes nothing until confirmed`() {
+        val viewModel = viewModel()
+        viewModel.select(1, 3)
+        viewModel.toggleCompleted()
+        viewModel.blur(1)
+        assertEquals(Caret(1, 3), viewModel.state.value.completing)
+        assertEquals(emptyList<String>(), repository.calls)
+        assertTrue(viewModel.state.value.rows.none { it.completed })
+
+        viewModel.confirmComplete()
+
+        assertEquals(listOf("PATCH 1 completed true"), repository.calls)
+        assertEquals(
+            listOf(true, true, true, false),
+            viewModel.state.value.rows.map { it.completed },
+        )
+        assertEquals(Caret(1, 3), viewModel.state.value.caret)
+        assertNull(viewModel.state.value.completing)
+    }
+
+    @Test
+    fun `the todos completed here along with their parent are what the server completes, so returning to the app keeps Undo`() {
+        val viewModel = viewModel()
+        viewModel.select(1, 3)
+        viewModel.toggleCompleted()
+        viewModel.confirmComplete()
+
+        viewModel.onForeground()
+
+        assertEquals(listOf("PATCH 1 completed true", "GET"), repository.calls)
+        assertEquals(
+            listOf(true, true, true, false),
+            viewModel.state.value.rows.map { it.completed },
+        )
+        assertTrue(viewModel.state.value.canUndo)
+    }
+
+    @Test
+    fun `todos folded away under a todo still count, so completing it never finishes work out of sight without asking`() {
+        repository.todos = listOf(groceries.copy(collapsed = true), milk, eggs, dentist)
+        val viewModel = viewModel()
+        viewModel.select(1, 0)
+
+        viewModel.toggleCompleted()
+
+        assertEquals(Caret(1, 0), viewModel.state.value.completing)
+        assertEquals(emptyList<String>(), repository.calls)
+    }
+
+    @Test
+    fun `a todo with nothing open under it is marked done at once, and reopening one never asks`() {
+        val done = "2026-11-13 09:00:00"
+        repository.todos =
+            listOf(groceries, milk.copy(completedAt = done), eggs.copy(completedAt = done), dentist)
+        val viewModel = viewModel()
+        viewModel.select(1, 0)
+        viewModel.toggleCompleted()
+        assertNull(viewModel.state.value.completing)
+        viewModel.toggleCompleted()
+        assertNull(viewModel.state.value.completing)
+        viewModel.select(4, 0)
+        viewModel.toggleCompleted()
+        assertNull(viewModel.state.value.completing)
+
+        assertEquals(
+            listOf("PATCH 1 completed true", "PATCH 1 completed false", "PATCH 4 completed true"),
+            repository.calls,
+        )
+        assertEquals(
+            listOf(false, true, true, true),
+            viewModel.state.value.rows.map { it.completed },
+        )
+    }
+
+    @Test
+    fun `cancelling the question leaves every todo open and returns the cursor to where it was in the row`() {
+        val viewModel = viewModel()
+        viewModel.select(1, 3)
+        viewModel.toggleCompleted()
+        viewModel.blur(1)
+
+        viewModel.cancelComplete()
+
+        assertEquals(emptyList<String>(), repository.calls)
+        assertTrue(viewModel.state.value.rows.none { it.completed })
+        assertEquals(Caret(1, 3), viewModel.state.value.caret)
+        assertNull(viewModel.state.value.completing)
+        assertFalse(viewModel.state.value.canUndo)
+    }
+
+    @Test
+    fun `undoing a confirmed completion reopens only the todos it completed, here and on the server`() {
+        repository.todos =
+            listOf(groceries, milk, eggs.copy(completedAt = "2026-11-12 18:00:00"), dentist)
+        val viewModel = viewModel()
+        viewModel.select(1, 3)
+        viewModel.toggleCompleted()
+        viewModel.confirmComplete()
+
+        viewModel.undo()
+
+        assertEquals(
+            listOf("PATCH 1 completed true", "PATCH 1 completed false", "PATCH 2 completed false"),
+            repository.calls,
+        )
+        assertEquals(
+            listOf(false, false, true, false),
+            viewModel.state.value.rows.map { it.completed },
+        )
+        assertEquals(listOf(3L), repository.todos.filter { it.completed }.map { it.id })
+        assertEquals(Caret(1, 3), viewModel.state.value.caret)
     }
 
     @Test

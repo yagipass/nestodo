@@ -375,6 +375,38 @@ class EditingTest {
     }
 
     @Test
+    fun `Enter in a done list adds an open row and reopens the todos above it, as the server does`() {
+        val done =
+            with(
+                todo(1, "Groceries", done = true),
+                todo(2, "Milk", parent = 1, done = true),
+                todo(3, "Eggs", parent = 1, position = 1, done = true),
+                dentist,
+            )
+        val edit = done.enter(all, 2, 4, newKey = -1)!!
+        assertEquals(Edit(listOf(Change.Create(-1, 1, 1, "")), Caret(-1, 0)), edit)
+        assertEquals(setOf(2L, 3L), edit.changes.fold(done, Outline::apply).done())
+    }
+
+    @Test
+    fun `indenting an open row under a done todo reopens it, and Undo moves the row back and completes that todo again`() {
+        val done =
+            with(
+                todo(1, "Groceries", done = true),
+                todo(2, "Milk", parent = 1, done = true),
+                todo(4, "Dentist", position = 1),
+            )
+        val indent = done.indent(all, 4, 0)!!.changes
+        val indented = indent.fold(done, Outline::apply)
+        assertEquals(setOf(2L), indented.done())
+
+        val undo = done.undoFor(indent)!!
+
+        assertEquals(listOf(Change.Move(4, null, 1), Change.Complete(1, true)), undo)
+        assertEquals(done, undo.fold(indented, Outline::apply))
+    }
+
+    @Test
     fun `collapsing is refused on a row without children because there is nothing to hide`() {
         assertNull(outline.toggleCollapsed(2, 0))
         assertEquals(

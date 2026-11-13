@@ -78,8 +78,20 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
 
     override suspend fun setCompleted(id: Long, completed: Boolean): Todo {
         answer("PATCH $id completed $completed")
+        val changed = if (completed) subtree(id) else generateSequence(id) { find(it).parentId }
+        val ids = changed.toSet()
+        todos = todos.map {
+            when {
+                it.id !in ids -> it
+                completed -> it.copy(completedAt = it.completedAt ?: "2026-11-13 09:00:00")
+                else -> it.copy(completedAt = null)
+            }
+        }
         return find(id)
     }
+
+    private fun subtree(id: Long): Sequence<Long> =
+        sequenceOf(id) + todos.asSequence().filter { it.parentId == id }.flatMap { subtree(it.id) }
 
     override suspend fun setCollapsed(id: Long, collapsed: Boolean): Todo {
         answer("PATCH $id collapsed $collapsed")

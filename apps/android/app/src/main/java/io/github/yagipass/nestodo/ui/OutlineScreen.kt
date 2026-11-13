@@ -345,6 +345,7 @@ fun OutlineScreen(
 
     state.moving?.let { MovePicker(state, it.key, viewModel) }
     state.deleting?.let { DeleteDialog(state, it.key, viewModel) }
+    state.completing?.let { CompleteDialog(state, it.key, viewModel) }
 }
 
 @Composable
@@ -376,6 +377,36 @@ private fun DeleteDialog(state: TodoUiState, deleting: Long, viewModel: TodoView
             }
         },
         dismissButton = { TextButton(onClick = viewModel::cancelDelete) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun CompleteDialog(state: TodoUiState, completing: Long, viewModel: TodoViewModel) {
+    val colors = MaterialTheme.colorScheme
+    val name = state.outline[completing]?.title?.ifEmpty { null } ?: "empty item"
+    val open = state.outline.openUnder(completing)
+
+    AlertDialog(
+        onDismissRequest = viewModel::cancelComplete,
+        title = { Text("Mark this todo as done?") },
+        text = {
+            Column {
+                Text(
+                    remember(name, colors.primary) { shownText(name, colors.primary) },
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    inlineContent = LinkIcon,
+                )
+                Text(
+                    if (open == 1) "1 item under it isn't done yet. It'll be marked as done too."
+                    else "$open items under it aren't done yet. They'll be marked as done too."
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = viewModel::confirmComplete) { Text("Mark all as done") }
+        },
+        dismissButton = { TextButton(onClick = viewModel::cancelComplete) { Text("Cancel") } },
     )
 }
 

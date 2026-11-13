@@ -141,6 +141,7 @@ data class TodoUiState(
     val caret: Caret? = null,
     val moving: Caret? = null,
     val deleting: Caret? = null,
+    val completing: Caret? = null,
     val revision: Long = 0,
     val canUndo: Boolean = false,
     val notice: Notice? = null,
@@ -567,8 +568,33 @@ class TodoViewModel(
         _state.update { it.copy(deleting = null, caret = deleting) }
     }
 
-    fun toggleCompleted() = act { state, key ->
-        state.outline.toggleCompleted(state.viewport, key, cursor)
+    fun toggleCompleted() {
+        val state = current
+        val key = state.editing ?: return
+        if (state.outline[key]?.completed == false && state.outline.openUnder(key) > 0) {
+            _state.update { it.copy(completing = Caret(key, cursor, it.inNote)) }
+            return
+        }
+        act(
+            Caret(key, cursor, state.inNote),
+            state.outline.toggleCompleted(state.viewport, key, cursor),
+        )
+    }
+
+    fun confirmComplete() {
+        val state = current
+        val completing = state.completing ?: return
+        if (state.outline[completing.key]?.completed != false) return cancelComplete()
+        _state.update { it.copy(completing = null) }
+        act(
+            completing,
+            state.outline.toggleCompleted(state.viewport, completing.key, completing.position),
+        )
+    }
+
+    fun cancelComplete() {
+        val completing = current.completing ?: return
+        _state.update { it.copy(completing = null, caret = completing) }
     }
 
     fun toggleCollapsed() = act { state, key -> state.outline.toggleCollapsed(key, cursor) }
@@ -693,16 +719,19 @@ class TodoViewModel(
     private fun act(edit: (TodoUiState, Long) -> Edit?) {
         val state = current
         val key = state.editing ?: return
-        val done =
-            edit(state, key)?.let { done ->
-                done.copy(
-                    caret =
-                        done.caret?.let {
-                            if (it.key == key) it.copy(inNote = state.inNote) else it
-                        }
-                )
-            }
-        perform(done, Caret(key, cursor, state.inNote))
+        act(Caret(key, cursor, state.inNote), edit(state, key))
+    }
+
+    private fun act(before: Caret, edit: Edit?) {
+        val done = edit?.let { done ->
+            done.copy(
+                caret =
+                    done.caret?.let {
+                        if (it.key == before.key) it.copy(inNote = before.inNote) else it
+                    }
+            )
+        }
+        perform(done, before)
     }
 
     private fun perform(edit: Edit?, before: Caret?) {

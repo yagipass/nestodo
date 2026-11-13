@@ -17,6 +17,8 @@ fun todo(
 fun Outline.render(viewport: Viewport = Viewport()): List<String> =
     rows(viewport).map { "  ".repeat(it.depth) + it.title }
 
+fun Outline.done(): Set<Long> = nodes.values.filter { it.completed }.map { it.key }.toSet()
+
 class OutlineTest {
     private val outline =
         outlineOf(
@@ -64,12 +66,99 @@ class OutlineTest {
         assertEquals(listOf("Dentist"), done.render(Viewport(showCompleted = false)))
     }
 
+    private val project =
+        outlineOf(
+            listOf(
+                todo(1, "Moving"),
+                todo(2, "Boxes", parent = 1),
+                todo(3, "Quotes", parent = 2),
+                todo(4, "Address", parent = 1, position = 1, done = true),
+                todo(5, "Tax", position = 1),
+            )
+        )
+
+    private val finished =
+        outlineOf(
+            listOf(
+                todo(1, "Moving", done = true),
+                todo(2, "Boxes", parent = 1, done = true),
+                todo(3, "Quotes", parent = 2, done = true),
+                todo(4, "Address", parent = 1, position = 1, done = true),
+                todo(5, "Tax", position = 1, done = true),
+            )
+        )
+
     @Test
-    fun `rows under a completed row are dimmed but stay open because completion does not cascade`() {
-        val done = outline.apply(Change.Complete(1, true))
-        val milk = done.rows(Viewport()).single { it.key == 2L }
-        assertTrue(milk.dimmed)
-        assertFalse(milk.completed)
+    fun `completing a todo completes every open todo under it at any depth, as the server does, so a done todo never hides open work`() {
+        assertEquals(setOf(1L, 2L, 3L, 4L), project.apply(Change.Complete(1, true)).done())
+    }
+
+    @Test
+    fun `reopening a todo reopens the done todos above it, which are no longer finished, but leaves the ones under it done`() {
+        assertEquals(setOf(3L, 4L, 5L), finished.apply(Change.Complete(2, false)).done())
+    }
+
+    @Test
+    fun `adding a todo under a done todo reopens it and every todo above it, as the server does, since they now have open work under them`() {
+        assertEquals(setOf(4L, 5L), finished.apply(Change.Create(-1, 3, 0, "Tape")).done())
+    }
+
+    @Test
+    fun `moving an open todo under a done one reopens it and the todos above it, while moving a done one keeps them done`() {
+        val mixed =
+            outlineOf(
+                listOf(
+                    todo(1, "Moving", done = true),
+                    todo(2, "Boxes", parent = 1, done = true),
+                    todo(5, "Tax", position = 1),
+                    todo(6, "Receipts", parent = 5, done = true),
+                    todo(7, "Bank", position = 2, done = true),
+                )
+            )
+        assertEquals(setOf(6L, 7L), mixed.apply(Change.Move(5, 2, 0)).done())
+        assertEquals(setOf(1L, 2L, 6L, 7L), mixed.apply(Change.Move(7, 2, 0)).done())
+    }
+
+    @Test
+    fun `undoing a completion reopens exactly the todos it completed, so a todo done before stays done`() {
+        val complete = listOf(Change.Complete(1, true))
+        val undo = project.undoFor(complete)!!
+        assertEquals(
+            listOf(Change.Complete(1, false), Change.Complete(2, false), Change.Complete(3, false)),
+            undo,
+        )
+        assertEquals(project, undo.fold(complete.fold(project, Outline::apply), Outline::apply))
+    }
+
+    @Test
+    fun `undoing a reopen completes again the todos above it that the reopen took along`() {
+        val reopen = listOf(Change.Complete(3, false))
+        val undo = finished.undoFor(reopen)!!
+        assertEquals(listOf(Change.Complete(1, true)), undo)
+        assertEquals(finished, undo.fold(reopen.fold(finished, Outline::apply), Outline::apply))
+    }
+
+    @Test
+    fun `undoing an add under a done todo deletes the new todo before completing the todos above it again, so the server never completes it on its way out`() {
+        val add = listOf(Change.Create(-1, 3, 0, "Tape"))
+        val undo = finished.undoFor(add)!!
+        assertEquals(listOf(Change.Delete(-1), Change.Complete(1, true)), undo)
+        assertEquals(finished, undo.fold(add.fold(finished, Outline::apply), Outline::apply))
+    }
+
+    @Test
+    fun `undoing a delete inside a done todo brings the todos back done, along with the todos above that recreating them reopened`() {
+        val delete = listOf(Change.Delete(2, recursive = true))
+        val undo = finished.undoFor(delete)!!
+        assertEquals(
+            listOf(
+                Change.Create(2, 1, 0, "Boxes"),
+                Change.Create(3, 2, 0, "Quotes"),
+                Change.Complete(1, true),
+            ),
+            undo,
+        )
+        assertEquals(finished, undo.fold(delete.fold(finished, Outline::apply), Outline::apply))
     }
 
     @Test
