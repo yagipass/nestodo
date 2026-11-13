@@ -20,10 +20,13 @@
   --muted: #665f78;
   --border: #e2dbf1;
   --hover: #f4f0fc;
+  --hover-on-bg: #e6dff5;
+  --hover-strong-on-bg: #d4cbea;
   --guide: #cdbcfa;
   --accent: #53419b;
   --accent-strong: #3b2c7a;
   --accent-soft: #ece5fd;
+  --accent-soft-on-bg: #dcd2f8;
   --on-accent: #ffffff;
   --danger: #c4372b;
   --match: #fbe3a1;
@@ -52,10 +55,13 @@
     --muted: #a69ec0;
     --border: #382f55;
     --hover: #2b2345;
+    --hover-on-bg: #2b2345;
+    --hover-strong-on-bg: #382f55;
     --guide: #54469a;
     --accent: #cdbdff;
     --accent-strong: #ece5ff;
     --accent-soft: #33295a;
+    --accent-soft-on-bg: #33295a;
     --on-accent: #2a2150;
     --danger: #f07468;
     --match: #6b5310;
@@ -263,6 +269,16 @@ body {
 .icon-button[aria-pressed="true"] {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+.outline-tools > .icon-button:hover,
+.account > .icon-button:hover,
+.account > .icon-button[aria-expanded="true"] {
+  background: var(--hover-on-bg);
+}
+
+.outline-tools > .icon-button[aria-pressed="true"] {
+  background: var(--accent-soft-on-bg);
 }
 
 [data-tip]::after {
@@ -520,10 +536,6 @@ a {
 
 .outline-page {
   padding: 12px 10px 10px 6px;
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  background: var(--surface);
-  box-shadow: var(--sheet-shadow);
 }
 
 .outline {
@@ -542,7 +554,7 @@ a {
 
 .row:hover,
 .row:focus-within {
-  background: var(--hover);
+  background: var(--hover-on-bg);
 }
 
 .guide,
@@ -617,7 +629,7 @@ a {
 }
 
 .fold:hover {
-  background: var(--border);
+  background: var(--hover-strong-on-bg);
 }
 
 .bullet {
@@ -657,7 +669,7 @@ a {
 
 .bullet.halo,
 .bullet:enabled:hover {
-  background: var(--accent-soft);
+  background: var(--accent-soft-on-bg);
 }
 
 .title {
@@ -731,7 +743,7 @@ a {
   gap: 3px;
   padding: 2px 8px;
   border-radius: 7px;
-  background: var(--accent-soft);
+  background: var(--accent-soft-on-bg);
   color: var(--accent);
   font-size: 0.875rem;
   font-weight: 400;
@@ -845,7 +857,7 @@ a {
 
 .note-button:hover,
 .check:hover {
-  background: var(--border);
+  background: var(--hover-strong-on-bg);
   color: var(--text);
 }
 
@@ -867,7 +879,7 @@ a {
 }
 
 .add-item:hover {
-  background: var(--hover);
+  background: var(--hover-on-bg);
   color: var(--text);
 }
 
