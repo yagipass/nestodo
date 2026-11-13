@@ -12,7 +12,6 @@ pub enum Icon {
     Settings,
     Help,
     SignOut,
-    Server,
     Expand,
     Note,
     Done,
@@ -32,7 +31,6 @@ impl Icon {
             Icon::Settings => "icons/settings.svg",
             Icon::Help => "icons/help.svg",
             Icon::SignOut => "icons/sign-out.svg",
-            Icon::Server => "icons/server.svg",
             Icon::Expand => "icons/expand.svg",
             Icon::Note => "icons/note.svg",
             Icon::Done => "icons/done.svg",
@@ -76,10 +74,6 @@ fn svg_for(path: &str) -> Option<String> {
         "icons/sign-out.svg" => line(
             "2",
             r#"<path d="M10 4H7.5A3.5 3.5 0 0 0 4 7.5v9A3.5 3.5 0 0 0 7.5 20H10M15 8l4 4-4 4M19 12h-9"/>"#,
-        ),
-        "icons/server.svg" => line(
-            "2",
-            r#"<rect x="3.5" y="4" width="17" height="6.5" rx="2.5"/><rect x="3.5" y="13.5" width="17" height="6.5" rx="2.5"/><circle cx="7.5" cy="7.25" r=".5" fill="black"/><circle cx="7.5" cy="16.75" r=".5" fill="black"/>"#,
         ),
         "icons/expand.svg" => line("2.2", r#"<path d="M9.5 6.5 15 12l-5.5 5.5"/>"#),
         "icons/note.svg" => line(

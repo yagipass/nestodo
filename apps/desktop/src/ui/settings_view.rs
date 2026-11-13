@@ -34,6 +34,7 @@ const UNREADABLE_IMAGE: &str = "The image could not be read.";
 
 pub enum SettingsEvent {
     SignedOut,
+    ChangeServer,
     UsageData(Analytics),
     Profile(Profile, Option<Avatar>),
 }
@@ -142,6 +143,7 @@ impl Editor {
 
 pub struct SettingsView {
     backend: Arc<dyn Backend>,
+    server: String,
     load: Load,
     editor: Option<Editor>,
     profile: ProfileForm,
@@ -170,9 +172,10 @@ fn watch(field: &Entity<TextField>, cx: &mut Context<SettingsView>) -> Subscript
 }
 
 impl SettingsView {
-    pub fn new(backend: Arc<dyn Backend>, cx: &mut Context<Self>) -> Self {
+    pub fn new(backend: Arc<dyn Backend>, server: String, cx: &mut Context<Self>) -> Self {
         let mut view = Self {
             backend,
+            server,
             load: Load::Loading,
             editor: None,
             profile: ProfileForm {
@@ -1361,6 +1364,28 @@ impl SettingsView {
             )
             .into_any_element()
     }
+
+    fn render_server(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = theme(cx);
+        card(&colors)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(heading("Server"))
+                    .child(
+                        pill("change-server", "Change", true, &colors)
+                            .debug_selector(|| "change-server".into())
+                            .on_click(
+                                cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::ChangeServer)),
+                            ),
+                    ),
+            )
+            .child(div().text_size(px(14.)).child(self.server.clone()))
+            .child(note("This applies to this Mac only.", &colors))
+            .into_any_element()
+    }
 }
 
 impl Render for SettingsView {
@@ -1423,7 +1448,8 @@ impl Render for SettingsView {
                             .line_height(px(36.))
                             .child("Settings"),
                     )
-                    .child(body),
+                    .child(body)
+                    .child(self.render_server(cx)),
             )
     }
 }
@@ -1661,7 +1687,8 @@ mod tests {
             cx.bind_keys(crate::ui::text_field::bindings());
             cx.bind_keys(bindings());
         });
-        let (view, cx) = cx.add_window_view(|_, cx| SettingsView::new(server, cx));
+        let (view, cx) =
+            cx.add_window_view(|_, cx| SettingsView::new(server, "nestodo.example.com".into(), cx));
         cx.run_until_parked();
         (view, cx)
     }

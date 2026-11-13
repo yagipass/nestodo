@@ -125,6 +125,7 @@ pub struct Root {
     dialog_focus: FocusHandle,
     menu_open: bool,
     shortcuts_open: bool,
+    return_page: Option<Page>,
     account_bounds: Rc<Cell<Bounds<Pixels>>>,
     moving_window: bool,
     _subscriptions: Vec<Subscription>,
@@ -296,6 +297,7 @@ impl Root {
             dialog_focus: cx.focus_handle(),
             menu_open: false,
             shortcuts_open: false,
+            return_page: None,
             account_bounds: Rc::new(Cell::new(Bounds::default())),
             moving_window: false,
             _subscriptions: subscriptions,
@@ -392,6 +394,7 @@ impl Root {
             .take()
             .filter(|old| old.host_str() != base.host_str());
         self.base = Some(base);
+        self.return_page = None;
         match left {
             Some(old) => {
                 form.checking = true;
@@ -457,6 +460,9 @@ impl Root {
             return;
         };
         let address = api::label(base);
+        if let Screen::Ready(workspace) = &self.screen {
+            self.return_page = Some(workspace.page);
+        }
         self.ask_for_server(&address, window, cx);
     }
 
@@ -525,6 +531,9 @@ impl Root {
         });
         self.check_usage(cx);
         self.load_profile(cx);
+        if let Some(page) = self.return_page.take() {
+            self.show_page(page, window, cx);
+        }
         cx.notify();
     }
 
@@ -795,12 +804,14 @@ impl Root {
                     settings.update(cx, SettingsView::reload);
                 } else {
                     let backend: Arc<dyn Backend> = workspace.client.clone();
-                    let settings = cx.new(|cx| SettingsView::new(backend, cx));
+                    let server = self.base.as_ref().map(api::label).unwrap_or_default();
+                    let settings = cx.new(|cx| SettingsView::new(backend, server, cx));
                     let subscription = cx.subscribe_in(
                         &settings,
                         window,
                         |this, _, event: &SettingsEvent, window, cx| match event {
                             SettingsEvent::SignedOut => this.connect(window, cx),
+                            SettingsEvent::ChangeServer => this.change_server(window, cx),
                             SettingsEvent::UsageData(analytics) => this.follow_usage(analytics),
                             SettingsEvent::Profile(profile, avatar) => {
                                 this.follow_profile(profile.clone(), avatar.clone(), cx);
@@ -1058,14 +1069,8 @@ impl Root {
                         cx.listener(|this, _, window, cx| this.open_shortcuts(window, cx)),
                     ),
                 )
-                .child(separator())
-                .child(
-                    item("menu-change-server", Icon::Server, "Change server", false).on_click(
-                        cx.listener(|this, _, window, cx| this.change_server(window, cx)),
-                    ),
-                )
                 .when(protected, |menu| {
-                    menu.child(
+                    menu.child(separator()).child(
                         item("menu-sign-out", Icon::SignOut, "Sign out", false)
                             .on_click(cx.listener(|this, _, window, cx| this.sign_out(window, cx))),
                     )
@@ -2428,19 +2433,43 @@ mod tests {
         );
     }
 
+    fn page_of(root: &Entity<Root>, cx: &mut VisualTestContext) -> Option<Page> {
+        root.read_with(cx, |root, _| match &root.screen {
+            Screen::Ready(workspace) => Some(workspace.page),
+            _ => None,
+        })
+    }
+
+    fn click_change_server_in_settings(cx: &mut VisualTestContext) {
+        cx.dispatch_action(ShowSettings);
+        cx.run_until_parked();
+        let at = cx
+            .debug_bounds("change-server")
+            .expect("Settings show the Change button")
+            .center();
+        cx.simulate_click(at, gpui::Modifiers::none());
+        cx.run_until_parked();
+    }
+
     #[gpui::test]
-    fn clicking_change_server_by_mistake_keeps_the_server_and_its_sign_in_so_escape_goes_back_without_signing_in_again(
+    fn clicking_change_server_in_settings_by_mistake_keeps_the_server_and_its_sign_in_so_escape_goes_back_to_settings_without_signing_in_again(
         cx: &mut TestAppContext,
     ) {
-        let server = site(200);
+        let mut server = site(200);
+        server
+            .mock("GET", "/api/v1/webhook")
+            .with_body(r#"{"available":true,"webhook":null}"#)
+            .create();
+        server
+            .mock("GET", "/api/v1/analytics")
+            .with_body(r#"{"available":true,"enabled":false}"#)
+            .create();
         let prefs = TempDir::new();
         remember(&server, &prefs);
         let store = Arc::new(NoTokens::default());
         let (root, cx) = launch(cx, prefs.settings(), store.clone());
-        root.update_in(cx, Root::toggle_menu);
 
-        root.update_in(cx, Root::change_server);
-        cx.run_until_parked();
+        click_change_server_in_settings(cx);
         assert_eq!(
             form(&root, cx).map(|form| form.text),
             Some(server.url()),
@@ -2451,10 +2480,40 @@ mod tests {
         cx.simulate_keystrokes("escape");
         cx.run_until_parked();
 
-        root.read_with(cx, |root, _| {
-            assert!(matches!(root.screen, Screen::Ready(_)));
-        });
+        assert!(page_of(&root, cx) == Some(Page::Settings));
         assert!(store.deleted.lock().unwrap().is_empty());
+    }
+
+    #[gpui::test]
+    fn the_server_can_be_changed_from_settings_that_fail_to_load_so_a_broken_server_is_not_a_dead_end(
+        cx: &mut TestAppContext,
+    ) {
+        let server = site(200);
+        let prefs = TempDir::new();
+        remember(&server, &prefs);
+        let (root, cx) = launch(cx, prefs.settings(), Arc::default());
+
+        click_change_server_in_settings(cx);
+
+        assert!(form(&root, cx).is_some());
+    }
+
+    #[gpui::test]
+    fn another_server_entered_from_settings_opens_on_its_todos_since_the_settings_shown_were_the_old_servers(
+        cx: &mut TestAppContext,
+    ) {
+        let old = site(200);
+        let new = site(200);
+        let prefs = TempDir::new();
+        remember(&old, &prefs);
+        let (root, cx) = launch(cx, prefs.settings(), Arc::default());
+
+        click_change_server_in_settings(cx);
+        cx.simulate_keystrokes("cmd-a");
+        enter_server(&new.url(), cx);
+
+        assert!(page_of(&root, cx) == Some(Page::Todos));
+        assert_eq!(prefs.saved_server(), Some(format!("{}/", new.url())));
     }
 
     #[gpui::test]
