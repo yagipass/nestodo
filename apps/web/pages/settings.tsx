@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { action, Form, useForm, useRouter, useShared } from "@void/react";
 import { analyticsAvailable, applyAnalyticsConsent } from "../src/analytics";
+import { APPEARANCE_COOKIE, APPEARANCES, type Appearance } from "../src/appearance";
 import { avatarImageFrom, base64Of } from "../src/avatar-image";
 import { Icon } from "../src/icons";
 import { MAX_NAME_LENGTH, type Profile } from "../src/profiles";
@@ -383,7 +384,39 @@ function AnalyticsCard({ consented }: { consented: boolean }) {
   );
 }
 
-export default function SettingsPage({ available, webhook, analytics }: Props) {
+const APPEARANCE_LABELS: Record<Appearance, string> = { system: "System", light: "Light", dark: "Dark" };
+
+function applyAppearance(appearance: Appearance) {
+  const maxAge = appearance === "system" ? 0 : 400 * 24 * 60 * 60;
+  document.cookie = `${APPEARANCE_COOKIE}=${appearance}; Path=/; Max-Age=${maxAge}; SameSite=Lax`;
+  if (appearance === "system") delete document.documentElement.dataset.appearance;
+  else document.documentElement.dataset.appearance = appearance;
+}
+
+function AppearanceCard({ saved }: { saved: Appearance }) {
+  const [appearance, setAppearance] = useState(saved);
+
+  const choose = (next: Appearance) => {
+    applyAppearance(next);
+    setAppearance(next);
+  };
+
+  return (
+    <section className="card" aria-labelledby="appearance-title">
+      <h2 id="appearance-title">Appearance</h2>
+      <p className="card-note">This applies to this browser only.</p>
+      <div className="choices" role="group" aria-labelledby="appearance-title">
+        {APPEARANCES.map((value) => (
+          <button key={value} type="button" className="pill" aria-pressed={value === appearance} onClick={() => choose(value)}>
+            {APPEARANCE_LABELS[value]}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export default function SettingsPage({ available, webhook, analytics, appearance }: Props) {
   const profile = useShared()?.auth.profile ?? null;
   const [editing, setEditing] = useState(false);
   const stopEditing = () => setEditing(false);
@@ -417,6 +450,7 @@ export default function SettingsPage({ available, webhook, analytics }: Props) {
           )}
         </section>
         {analyticsAvailable() && <AnalyticsCard consented={analytics} />}
+        <AppearanceCard saved={appearance} />
       </main>
     </>
   );
