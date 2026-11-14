@@ -555,6 +555,25 @@ class TodoViewModelTest {
     }
 
     @Test
+    fun `the chosen appearance stays chosen after signing out, an expired sign-in or changing the server, since signing in again does not read it back`() {
+        val viewModel = viewModel()
+        viewModel.setAppearance(Appearance.Dark)
+
+        viewModel.signOut()
+        assertEquals(Appearance.Dark, viewModel.state.value.appearance)
+
+        viewModel.connect()
+        repository.failure = ApiException.NotSignedIn()
+        viewModel.select(2, 0)
+        viewModel.toggleCompleted()
+        assertEquals(AuthState.SignedOut, viewModel.state.value.auth)
+        assertEquals(Appearance.Dark, viewModel.state.value.appearance)
+
+        viewModel.changeServer()
+        assertEquals(Appearance.Dark, viewModel.state.value.appearance)
+    }
+
+    @Test
     fun `opening the app leaves the saved appearance to Android, so the screen is not rebuilt on every launch`() {
         settings.appearance = Appearance.Dark
         val applied = mutableListOf<Appearance>()

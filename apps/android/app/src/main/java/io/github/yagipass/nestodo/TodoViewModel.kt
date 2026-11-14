@@ -355,6 +355,7 @@ class TodoViewModel(
                 auth = AuthState.NoServer,
                 server = current.server,
                 showCompleted = current.showCompleted,
+                appearance = current.appearance,
                 changingServer = true,
                 settings = current.settings?.let { SettingsState.Loading },
             )
@@ -402,6 +403,7 @@ class TodoViewModel(
                 auth = AuthState.SignedOut,
                 server = current.server,
                 showCompleted = current.showCompleted,
+                appearance = current.appearance,
             )
         val backend = backend ?: return
         viewModelScope.launch { logout(backend) }
@@ -1171,6 +1173,7 @@ class TodoViewModel(
                         loginError = "Your sign-in has expired. Sign in again.",
                         server = current.server,
                         showCompleted = current.showCompleted,
+                        appearance = current.appearance,
                     )
             }
             is ApiException.NotFound -> notify("This todo has been deleted.")
