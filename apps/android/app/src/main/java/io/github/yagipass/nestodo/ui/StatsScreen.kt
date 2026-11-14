@@ -3,7 +3,6 @@ package io.github.yagipass.nestodo.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -11,7 +10,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -22,8 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,7 +35,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -61,7 +56,6 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -150,48 +144,9 @@ private fun StatsContent(days: List<Day>) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Calendar(days, dates)
-        RangePicker(range) { range = it }
+        Choices(RANGES, range, { "$it days" }) { range = it }
         Tiles(summarize(days, range), range)
         AddedCompleted(days.takeLast(range), dates.takeLast(range))
-    }
-}
-
-@Composable
-private fun RangePicker(range: Int, onPick: (Int) -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(10.dp)
-    FlowRow(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        RANGES.forEach { value ->
-            val selected = value == range
-            Row(
-                Modifier.minimumInteractiveComponentSize()
-                    .height(36.dp)
-                    .clip(shape)
-                    .border(1.dp, if (selected) colors.primary else colors.outlineVariant, shape)
-                    .background(
-                        if (selected) colors.secondaryContainer else colors.surfaceContainer
-                    )
-                    .selectable(selected, role = Role.RadioButton, onClick = { onPick(value) })
-                    .padding(start = if (selected) 10.dp else 14.dp, end = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                if (selected) {
-                    Icon(
-                        NestodoIcons.Selected,
-                        contentDescription = null,
-                        tint = colors.primary,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-                Text(
-                    "$value days",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (selected) colors.primary else colors.onSurfaceVariant,
-                    fontWeight = if (selected) FontWeight.Medium else null,
-                )
-            }
-        }
     }
 }
 

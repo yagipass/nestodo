@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
 import io.github.yagipass.nestodo.MemoryPreferences
+import io.github.yagipass.nestodo.domain.Appearance
 import io.github.yagipass.nestodo.preferenceStore
 import java.io.IOException
 import kotlinx.coroutines.flow.flowOf
@@ -83,6 +84,29 @@ class PreferenceSettingsTest {
 
             settings.setAnalyticsId(null)
             assertNull(settings.analyticsId())
+        }
+
+    @Test
+    fun `a fresh install follows the system appearance, so the app matches the rest of the phone until the member chooses otherwise`() =
+        runTest {
+            val settings = PreferenceSettings(preferenceStore(folder))
+
+            assertEquals(Appearance.System, settings.appearance())
+        }
+
+    @Test
+    fun `the chosen appearance is kept until the system is chosen again, so the settings show what the app looks like`() =
+        runTest {
+            val settings = PreferenceSettings(preferenceStore(folder))
+
+            settings.setAppearance(Appearance.Dark)
+            assertEquals(Appearance.Dark, settings.appearance())
+
+            settings.setAppearance(Appearance.Light)
+            assertEquals(Appearance.Light, settings.appearance())
+
+            settings.setAppearance(Appearance.System)
+            assertEquals(Appearance.System, settings.appearance())
         }
 
     @Test

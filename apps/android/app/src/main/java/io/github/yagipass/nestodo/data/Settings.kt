@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import io.github.yagipass.nestodo.domain.Appearance
 import java.io.IOException
 import kotlinx.coroutines.flow.first
 import okhttp3.HttpUrl
@@ -33,6 +34,10 @@ interface Settings {
     suspend fun analyticsId(): String?
 
     suspend fun setAnalyticsId(value: String?)
+
+    suspend fun appearance(): Appearance
+
+    suspend fun setAppearance(value: Appearance)
 }
 
 private val Context.settingsStore by
@@ -68,6 +73,13 @@ class PreferenceSettings internal constructor(private val store: DataStore<Prefe
         if (value == null) it.remove(ANALYTICS_ID) else it[ANALYTICS_ID] = value
     }
 
+    override suspend fun appearance() =
+        Appearance.entries.find { it.name == read()[APPEARANCE] } ?: Appearance.System
+
+    override suspend fun setAppearance(value: Appearance) = write {
+        if (value == Appearance.System) it.remove(APPEARANCE) else it[APPEARANCE] = value.name
+    }
+
     private suspend fun read() =
         try {
             store.data.first()
@@ -86,5 +98,6 @@ class PreferenceSettings internal constructor(private val store: DataStore<Prefe
         val SHOW_COMPLETED = booleanPreferencesKey("show_completed")
         val SHARE_PARENT = longPreferencesKey("share_parent")
         val ANALYTICS_ID = stringPreferencesKey("analytics_id")
+        val APPEARANCE = stringPreferencesKey("appearance")
     }
 }

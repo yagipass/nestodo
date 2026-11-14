@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import io.github.yagipass.nestodo.access.DeviceLockedException
 import io.github.yagipass.nestodo.data.ApiException
 import io.github.yagipass.nestodo.data.Screen
+import io.github.yagipass.nestodo.domain.Appearance
 import io.github.yagipass.nestodo.domain.Caret
 import io.github.yagipass.nestodo.domain.Profile
 import io.github.yagipass.nestodo.domain.Todo
@@ -539,6 +540,49 @@ class TodoViewModelTest {
         viewModel.connect()
 
         assertEquals(listOf("Groceries", "  Milk", "  Eggs"), viewModel.outline())
+    }
+
+    @Test
+    fun `choosing an appearance switches the app to it at once and is still chosen when the app is opened again`() {
+        val applied = mutableListOf<Appearance>()
+        val viewModel = TodoViewModel(::backendAt, settings, applyAppearance = { applied += it })
+
+        viewModel.setAppearance(Appearance.Dark)
+
+        assertEquals(listOf(Appearance.Dark), applied)
+        assertEquals(Appearance.Dark, viewModel.state.value.appearance)
+        assertEquals(Appearance.Dark, viewModel().state.value.appearance)
+    }
+
+    @Test
+    fun `the chosen appearance stays chosen after signing out, an expired sign-in or changing the server, since signing in again does not read it back`() {
+        val viewModel = viewModel()
+        viewModel.setAppearance(Appearance.Dark)
+
+        viewModel.signOut()
+        assertEquals(Appearance.Dark, viewModel.state.value.appearance)
+
+        viewModel.connect()
+        repository.failure = ApiException.NotSignedIn()
+        viewModel.select(2, 0)
+        viewModel.toggleCompleted()
+        assertEquals(AuthState.SignedOut, viewModel.state.value.auth)
+        assertEquals(Appearance.Dark, viewModel.state.value.appearance)
+
+        viewModel.changeServer()
+        assertEquals(Appearance.Dark, viewModel.state.value.appearance)
+    }
+
+    @Test
+    fun `opening the app leaves the saved appearance to Android, so the screen is not rebuilt on every launch`() {
+        settings.appearance = Appearance.Dark
+        val applied = mutableListOf<Appearance>()
+
+        val state =
+            TodoViewModel(::backendAt, settings, applyAppearance = { applied += it }).state.value
+
+        assertEquals(Appearance.Dark, state.appearance)
+        assertEquals(emptyList<Appearance>(), applied)
     }
 
     @Test
