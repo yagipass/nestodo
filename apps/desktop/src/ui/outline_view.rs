@@ -1586,7 +1586,9 @@ impl OutlineView {
             .child(bullet);
 
         let line: AnyElement = if editing_title {
+            let selector_key = key.clone();
             div()
+                .debug_selector(move || format!("title-{selector_key}"))
                 .relative()
                 .h(px(34.))
                 .text_size(px(15.))
@@ -2082,25 +2084,16 @@ impl Render for OutlineView {
                 )
                 .into_any_element(),
         );
-        let page = div()
-            .w_full()
-            .flex()
-            .justify_center()
-            .px(px(16.))
-            .pt(px(4.))
-            .pb(px(16.))
-            .child(
-                div()
-                    .w_full()
-                    .max_w(px(PAGE_WIDTH))
-                    .pt(px(12.))
-                    .pr(px(10.))
-                    .pb(px(10.))
-                    .pl(px(6.))
-                    .flex()
-                    .flex_col()
-                    .children(sheet),
-            );
+        let page = sheet.into_iter().map(|part| {
+            div()
+                .w_full()
+                .max_w(px(PAGE_WIDTH))
+                .pr(px(10.))
+                .pl(px(6.))
+                .flex()
+                .flex_col()
+                .child(part)
+        });
 
         let picker = self.picker.clone().map(|picker| {
             let backdrop = cx.entity().downgrade();
@@ -2159,7 +2152,11 @@ impl Render for OutlineView {
                     )
                     .flex()
                     .flex_col()
-                    .child(page),
+                    .items_center()
+                    .px(px(16.))
+                    .pt(px(16.))
+                    .pb(px(26.))
+                    .children(page),
             )
             .children(picker)
     }
