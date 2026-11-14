@@ -14,6 +14,7 @@ import io.github.yagipass.nestodo.data.Screen
 import io.github.yagipass.nestodo.data.Settings
 import io.github.yagipass.nestodo.data.TodoRepository
 import io.github.yagipass.nestodo.domain.Analytics
+import io.github.yagipass.nestodo.domain.Appearance
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.Profile
 import io.github.yagipass.nestodo.domain.Todo
@@ -206,6 +207,7 @@ class FakeSettings : Settings {
     var showCompleted = true
     var shareParent: Long? = null
     var analyticsId: String? = null
+    var appearance = Appearance.System
 
     override suspend fun baseUrl() = baseUrl
 
@@ -230,6 +232,12 @@ class FakeSettings : Settings {
 
     override suspend fun setAnalyticsId(value: String?) {
         analyticsId = value
+    }
+
+    override suspend fun appearance() = appearance
+
+    override suspend fun setAppearance(value: Appearance) {
+        appearance = value
     }
 }
 

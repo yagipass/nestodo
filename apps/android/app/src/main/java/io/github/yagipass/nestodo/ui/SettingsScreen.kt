@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import io.github.yagipass.nestodo.SettingsState
 import io.github.yagipass.nestodo.TodoViewModel
 import io.github.yagipass.nestodo.data.avatarImage
+import io.github.yagipass.nestodo.domain.Appearance
 import io.github.yagipass.nestodo.domain.Avatar
 import io.github.yagipass.nestodo.domain.Profile
 import io.github.yagipass.nestodo.domain.Webhook
@@ -79,6 +80,7 @@ private val FieldShape = RoundedCornerShape(12.dp)
 @Composable
 fun SettingsScreen(
     settings: SettingsState,
+    appearance: Appearance,
     server: String?,
     profile: Profile?,
     avatar: Avatar?,
@@ -134,8 +136,17 @@ fun SettingsScreen(
                     if (settings.analytics.available) AnalyticsCard(settings, viewModel)
                 }
             }
+            AppearanceCard(appearance, viewModel::setAppearance)
             ServerCard(server, viewModel::changeServer)
         }
+    }
+}
+
+@Composable
+private fun AppearanceCard(appearance: Appearance, onPick: (Appearance) -> Unit) {
+    SettingsCard(title = "Appearance") {
+        Choices(Appearance.entries, appearance, Appearance::label, onPick)
+        Note("This applies to this device only.")
     }
 }
 

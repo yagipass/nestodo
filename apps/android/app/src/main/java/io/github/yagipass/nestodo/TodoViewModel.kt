@@ -1,5 +1,6 @@
 package io.github.yagipass.nestodo
 
+import android.app.UiModeManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.security.NetworkSecurityPolicy
@@ -23,6 +24,7 @@ import io.github.yagipass.nestodo.data.UsageAnalytics
 import io.github.yagipass.nestodo.data.baseUrlOf
 import io.github.yagipass.nestodo.data.label
 import io.github.yagipass.nestodo.domain.Analytics
+import io.github.yagipass.nestodo.domain.Appearance
 import io.github.yagipass.nestodo.domain.Avatar
 import io.github.yagipass.nestodo.domain.Caret
 import io.github.yagipass.nestodo.domain.Change
@@ -135,6 +137,7 @@ data class TodoUiState(
     val outline: Outline = Outline(),
     val loaded: Boolean = false,
     val showCompleted: Boolean = true,
+    val appearance: Appearance = Appearance.System,
     val editing: Long? = null,
     val inNote: Boolean = false,
     val noteOpen: Long? = null,
@@ -171,6 +174,7 @@ class TodoViewModel(
     private val timeZone: () -> String = { ZoneId.systemDefault().id },
     private val timeSource: TimeSource = TimeSource.Monotonic,
     private val usage: UsageAnalytics? = null,
+    private val applyAppearance: (Appearance) -> Unit = {},
 ) : ViewModel() {
     private sealed interface Task {
         data class Send(val change: Change) : Task
@@ -259,7 +263,8 @@ class TodoViewModel(
         _state.update { it.copy(auth = AuthState.Checking, loginError = null) }
         viewModelScope.launch {
             val shown = settings.showCompleted()
-            _state.update { it.copy(showCompleted = shown) }
+            val appearance = settings.appearance()
+            _state.update { it.copy(showCompleted = shown, appearance = appearance) }
             val backend = backend ?: settings.baseUrl()?.let(::open)
             if (backend == null) {
                 _state.update { it.copy(auth = AuthState.NoServer) }
@@ -613,6 +618,12 @@ class TodoViewModel(
         val shown = !current.showCompleted
         viewModelScope.launch { settings.setShowCompleted(shown) }
         _state.update { it.copy(showCompleted = shown) }
+    }
+
+    fun setAppearance(appearance: Appearance) {
+        _state.update { it.copy(appearance = appearance) }
+        viewModelScope.launch { settings.setAppearance(appearance) }
+        applyAppearance(appearance)
     }
 
     fun openStats() {
@@ -1183,17 +1194,26 @@ class TodoViewModel(
             return viewModelFactory {
                 initializer {
                     val settings = PreferenceSettings(appContext)
+                    val uiModes = appContext.getSystemService(UiModeManager::class.java)
                     TodoViewModel(
                         accessBackends(appContext),
                         settings,
                         NetworkSecurityPolicy.getInstance()::isCleartextTrafficPermitted,
                         usage = usageAnalytics(settings),
+                        applyAppearance = { uiModes.setApplicationNightMode(nightModeOf(it)) },
                     )
                 }
             }
         }
     }
 }
+
+private fun nightModeOf(appearance: Appearance) =
+    when (appearance) {
+        Appearance.System -> UiModeManager.MODE_NIGHT_AUTO
+        Appearance.Light -> UiModeManager.MODE_NIGHT_NO
+        Appearance.Dark -> UiModeManager.MODE_NIGHT_YES
+    }
 
 internal fun accessBackends(context: Context): (HttpUrl) -> Backend {
     val http =
