@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use gpui::{App, Global, Hsla, Rgba, Window, WindowAppearance, rgb};
+use nestodo_desktop::prefs::Appearance;
 
 pub const FIGTREE: &str = "Figtree";
 
@@ -139,12 +140,25 @@ pub fn theme(cx: &App) -> Theme {
     *cx.global::<Theme>()
 }
 
-pub fn sync_theme(window: &Window, cx: &mut App) {
-    let next = Theme::for_appearance(window.appearance());
+pub fn sync_theme(appearance: Appearance, window: &Window, cx: &mut App) {
+    let next = match appearance {
+        Appearance::System => Theme::for_appearance(window.appearance()),
+        Appearance::Light => Theme::light(),
+        Appearance::Dark => Theme::dark(),
+    };
     if !cx.has_global::<Theme>() || *cx.global::<Theme>() != next {
         cx.set_global(next);
         cx.refresh_windows();
     }
+}
+
+pub fn apply_appearance(appearance: Appearance, window: &Window, cx: &mut App) {
+    cx.set_window_appearance(match appearance {
+        Appearance::System => None,
+        Appearance::Light => Some(WindowAppearance::Light),
+        Appearance::Dark => Some(WindowAppearance::Dark),
+    });
+    sync_theme(appearance, window, cx);
 }
 
 #[cfg(test)]

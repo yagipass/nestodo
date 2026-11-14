@@ -1,7 +1,7 @@
 use gpui::{
-    AnyElement, AnyView, App, BoxShadow, Div, ElementId, Hsla, IntoElement, MouseButton,
-    MouseDownEvent, ParentElement, Pixels, Point, Render, SharedString, Stateful, Styled, Svg,
-    Window, anchored, deferred, div, point, prelude::*, px, svg,
+    AnyElement, AnyView, App, BoxShadow, Div, ElementId, FontWeight, Hsla, IntoElement,
+    MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, SharedString, Stateful,
+    Styled, Svg, Window, anchored, deferred, div, point, prelude::*, px, svg,
 };
 
 use crate::ui::icons::Icon;
@@ -41,6 +41,33 @@ pub fn icon_button(
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .child(icon(glyph, glyph_size, colors.muted))
+}
+
+pub fn choice(
+    id: impl Into<ElementId>,
+    text: impl Into<SharedString>,
+    chosen: bool,
+    colors: &Theme,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(34.))
+        .px(px(14.))
+        .flex()
+        .items_center()
+        .border_1()
+        .border_color(if chosen { colors.accent } else { colors.border })
+        .rounded(px(10.))
+        .bg(if chosen {
+            colors.accent_soft
+        } else {
+            colors.surface
+        })
+        .when(chosen, |pill| pill.font_weight(FontWeight::SEMIBOLD))
+        .text_size(px(14.))
+        .text_color(if chosen { colors.accent } else { colors.muted })
+        .cursor_pointer()
+        .child(text.into())
 }
 
 pub fn kbd(text: impl Into<SharedString>, cx: &App) -> Div {

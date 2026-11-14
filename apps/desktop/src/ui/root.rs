@@ -17,7 +17,7 @@ use nestodo_desktop::access::{self, AccessApp};
 use nestodo_desktop::api::{self, Client, Connection};
 use nestodo_desktop::error::Error;
 use nestodo_desktop::http::Http;
-use nestodo_desktop::prefs::Prefs;
+use nestodo_desktop::prefs::{Appearance, Prefs};
 use nestodo_desktop::profile::Profile;
 use nestodo_desktop::store::TokenStore;
 use nestodo_desktop::usage;
@@ -32,7 +32,7 @@ use crate::ui::settings_view::{SettingsEvent, SettingsView};
 use crate::ui::shortcuts::shortcuts_dialog;
 use crate::ui::stats_view::StatsView;
 use crate::ui::text_field::{FieldEvent, TextField};
-use crate::ui::theme::{FIGTREE, sync_theme, theme};
+use crate::ui::theme::{FIGTREE, apply_appearance, sync_theme, theme};
 use crate::ui::widgets::{
     NAMED_TITLE_BAR_WIDTH, TITLE_BAR_HEIGHT, TRAFFIC_LIGHTS_WIDTH, icon, icon_button, modal, shadow,
 };
@@ -273,11 +273,11 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        sync_theme(window, cx);
         let prefs = Prefs::load(prefs_path.as_deref());
+        apply_appearance(prefs.appearance, window, cx);
         let subscriptions = vec![
-            cx.observe_window_appearance(window, |_, window, cx| {
-                sync_theme(window, cx);
+            cx.observe_window_appearance(window, |this, window, cx| {
+                sync_theme(this.prefs.appearance, window, cx);
             }),
             cx.on_focus_lost(window, Self::restore_focus),
         ];
@@ -612,6 +612,17 @@ impl Root {
         .detach();
     }
 
+    fn set_appearance(
+        &mut self,
+        appearance: Appearance,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.prefs.appearance = appearance;
+        let _ = self.prefs.save(self.prefs_path.as_deref());
+        apply_appearance(appearance, window, cx);
+    }
+
     fn follow_usage(&mut self, analytics: &Analytics) {
         if self.capture.is_none() {
             return;
@@ -805,7 +816,8 @@ impl Root {
                 } else {
                     let backend: Arc<dyn Backend> = workspace.client.clone();
                     let server = self.base.as_ref().map(api::label).unwrap_or_default();
-                    let settings = cx.new(|cx| SettingsView::new(backend, server, cx));
+                    let appearance = self.prefs.appearance;
+                    let settings = cx.new(|cx| SettingsView::new(backend, server, appearance, cx));
                     let subscription = cx.subscribe_in(
                         &settings,
                         window,
@@ -815,6 +827,9 @@ impl Root {
                             SettingsEvent::UsageData(analytics) => this.follow_usage(analytics),
                             SettingsEvent::Profile(profile, avatar) => {
                                 this.follow_profile(profile.clone(), avatar.clone(), cx);
+                            }
+                            SettingsEvent::Appearance(appearance) => {
+                                this.set_appearance(*appearance, window, cx);
                             }
                         },
                     );
@@ -1699,6 +1714,7 @@ mod tests {
             show_completed: true,
             base_url: Some(address.to_string()),
             usage_id: None,
+            ..Prefs::default()
         }
         .save(Some(&prefs.settings()))
         .unwrap();
@@ -1848,6 +1864,62 @@ mod tests {
         root.update_in(cx, |root, window, _| {
             assert!(root.focus_handle.is_focused(window));
         });
+    }
+
+    fn click_appearance(selector: &'static str, cx: &mut VisualTestContext) {
+        let at = cx
+            .debug_bounds(selector)
+            .expect("Settings show every appearance")
+            .center();
+        cx.simulate_click(at, gpui::Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    fn dark(cx: &mut VisualTestContext) -> bool {
+        cx.update(|_, cx| theme(cx).dark)
+    }
+
+    #[gpui::test]
+    fn choosing_dark_in_settings_turns_the_window_dark_at_once_while_the_mac_stays_light(
+        cx: &mut TestAppContext,
+    ) {
+        let server = refusing_saves();
+        let prefs = TempDir::new();
+        let (_, _, cx) = open(cx, &server, &prefs);
+        cx.dispatch_action(ShowSettings);
+        cx.run_until_parked();
+        assert!(!dark(cx));
+
+        click_appearance("appearance-Dark", cx);
+
+        assert!(dark(cx));
+        assert_eq!(
+            Prefs::load(Some(&prefs.settings())).appearance,
+            Appearance::Dark
+        );
+
+        click_appearance("appearance-System", cx);
+
+        assert!(!dark(cx));
+        assert_eq!(
+            Prefs::load(Some(&prefs.settings())).appearance,
+            Appearance::System
+        );
+    }
+
+    #[gpui::test]
+    fn a_mac_that_chose_dark_opens_dark_even_before_it_has_a_server(cx: &mut TestAppContext) {
+        let prefs = TempDir::new();
+        Prefs {
+            appearance: Appearance::Dark,
+            ..Prefs::default()
+        }
+        .save(Some(&prefs.settings()))
+        .unwrap();
+
+        let (_, cx) = launch(cx, prefs.settings(), Arc::default());
+
+        assert!(dark(cx));
     }
 
     #[gpui::test]
@@ -2067,6 +2139,7 @@ mod tests {
             show_completed: true,
             base_url: Some(server.url()),
             usage_id: Some("0f8fad5b-d9cb-469f-a165-70867728950e".into()),
+            ..Prefs::default()
         }
         .save(Some(&prefs.settings()))
         .unwrap();

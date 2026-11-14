@@ -4,6 +4,28 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Appearance {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Appearance {
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Prefs {
@@ -12,6 +34,7 @@ pub struct Prefs {
     pub base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_id: Option<String>,
+    pub appearance: Appearance,
 }
 
 impl Default for Prefs {
@@ -20,6 +43,7 @@ impl Default for Prefs {
             show_completed: true,
             base_url: None,
             usage_id: None,
+            appearance: Appearance::System,
         }
     }
 }
@@ -90,6 +114,7 @@ mod tests {
             show_completed: false,
             base_url: None,
             usage_id: None,
+            ..Prefs::default()
         }
         .save(Some(&path))
         .unwrap();
@@ -109,6 +134,18 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_chosen_appearance_across_launches_so_the_window_opens_in_it() {
+        let dir = TempDir::new("appearance");
+        let path = dir.0.join("settings.json");
+        let prefs = Prefs {
+            appearance: Appearance::Dark,
+            ..Prefs::default()
+        };
+        prefs.save(Some(&path)).unwrap();
+        assert_eq!(Prefs::load(Some(&path)).appearance, Appearance::Dark);
+    }
+
+    #[test]
     fn falls_back_to_the_defaults_when_the_file_is_damaged() {
         let dir = TempDir::new("bad");
         fs::create_dir_all(&dir.0).unwrap();
@@ -125,6 +162,7 @@ mod tests {
             show_completed: true,
             base_url: Some("https://nestodo.example.com/".into()),
             usage_id: None,
+            ..Prefs::default()
         };
         prefs.save(Some(&path)).unwrap();
         assert_eq!(Prefs::load(Some(&path)), prefs);
@@ -142,6 +180,7 @@ mod tests {
                 show_completed: false,
                 base_url: None,
                 usage_id: None,
+                ..Prefs::default()
             }
         );
     }
@@ -168,6 +207,7 @@ mod tests {
             show_completed: true,
             base_url: Some("https://nestodo.example.com/".into()),
             usage_id: None,
+            ..Prefs::default()
         };
         saved.save(Some(&path)).unwrap();
         fs::create_dir(path.with_extension("json.tmp")).unwrap();
@@ -176,6 +216,7 @@ mod tests {
             show_completed: false,
             base_url: None,
             usage_id: None,
+            ..Prefs::default()
         }
         .save(Some(&path));
 

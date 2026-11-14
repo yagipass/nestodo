@@ -12,7 +12,7 @@ use nestodo_desktop::stats::{
 
 use crate::ui::backend::Backend;
 use crate::ui::theme::{FIGTREE, Theme, theme};
-use crate::ui::widgets::{PAGE_WIDTH, sheet_shadow};
+use crate::ui::widgets::{PAGE_WIDTH, choice, sheet_shadow};
 
 const WEEKDAY_LABELS: [&str; 7] = ["", "Mon", "", "Wed", "", "Fri", ""];
 const TICK_GUTTER: f32 = 28.;
@@ -835,35 +835,19 @@ impl Render for StatsView {
                         .child(div().flex().flex_wrap().gap(px(8.)).pt(px(8.)).children(
                             RANGES.iter().map(|value| {
                                 let value = *value;
-                                let pressed = value == self.range;
-                                div()
-                                    .id(("range", value))
-                                    .h(px(34.))
-                                    .px(px(14.))
-                                    .flex()
-                                    .items_center()
-                                    .border_1()
-                                    .border_color(if pressed {
-                                        colors.accent
-                                    } else {
-                                        colors.border
-                                    })
-                                    .rounded(px(10.))
-                                    .bg(if pressed {
-                                        colors.accent_soft
-                                    } else {
-                                        colors.surface
-                                    })
-                                    .when(pressed, |pill| pill.font_weight(FontWeight::SEMIBOLD))
-                                    .text_size(px(14.))
-                                    .text_color(if pressed { colors.accent } else { colors.muted })
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                choice(
+                                    ("range", value),
+                                    format!("{value} days"),
+                                    value == self.range,
+                                    &colors,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
                                         this.range = value;
                                         this.chart_hover = None;
                                         cx.notify();
-                                    }))
-                                    .child(format!("{value} days"))
+                                    },
+                                ))
                             }),
                         ))
                         .child(div().flex().flex_wrap().gap(px(12.)).children(
