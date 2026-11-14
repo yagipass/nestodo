@@ -355,6 +355,63 @@ fn up_and_down_keep_the_caret_column_in_characters_across_japanese_and_ascii(
     assert_eq!(focused(&view, cx), Some(("buy milk".into(), 2, false)));
 }
 
+fn long_list() -> Arc<FakeServer> {
+    let titles: Vec<String> = (1..=40).map(|n| format!("Row {n}")).collect();
+    Arc::new(FakeServer::with(
+        titles.iter().map(|title| seed(title)).collect(),
+    ))
+}
+
+fn on_screen(
+    view: &Entity<OutlineView>,
+    cx: &mut VisualTestContext,
+    selector: &'static str,
+) -> bool {
+    let viewport = view.read_with(cx, |view, _| view.scroll.bounds());
+    cx.debug_bounds(selector)
+        .is_some_and(|title| viewport.top() <= title.top() && title.bottom() <= viewport.bottom())
+}
+
+fn press(cx: &mut VisualTestContext, keystroke: &str, times: usize) {
+    cx.simulate_keystrokes(&vec![keystroke; times].join(" "));
+}
+
+#[gpui::test]
+fn moving_the_caret_past_the_window_edge_scrolls_its_row_into_view_so_typing_is_never_blind(
+    cx: &mut TestAppContext,
+) {
+    let server = long_list();
+    let (view, cx) = open(cx, &server, true);
+    cx.simulate_resize(gpui::size(px(600.), px(400.)));
+    focus(&view, cx, "Row 1", 0);
+    assert!(!on_screen(&view, cx, "title-t30"));
+
+    press(cx, "ctrl-n", 29);
+    assert_eq!(focused(&view, cx), Some(("Row 30".into(), 0, false)));
+    assert!(on_screen(&view, cx, "title-t30"));
+
+    press(cx, "ctrl-p", 27);
+    assert_eq!(focused(&view, cx), Some(("Row 3".into(), 0, false)));
+    assert!(on_screen(&view, cx, "title-t3"));
+}
+
+#[gpui::test]
+fn the_filter_banner_above_the_rows_does_not_shift_which_row_is_scrolled_into_view(
+    cx: &mut TestAppContext,
+) {
+    let server = long_list();
+    let (view, cx) = open(cx, &server, true);
+    cx.simulate_resize(gpui::size(px(600.), px(400.)));
+    view.update_in(cx, OutlineView::open_filter);
+    cx.simulate_input("Row");
+    focus(&view, cx, "Row 1", 0);
+
+    press(cx, "ctrl-n", 29);
+
+    assert_eq!(focused(&view, cx), Some(("Row 30".into(), 0, false)));
+    assert!(on_screen(&view, cx, "title-t30"));
+}
+
 #[gpui::test]
 fn shift_enter_writes_a_note_where_enter_adds_a_line_and_escape_returns_to_the_title(
     cx: &mut TestAppContext,
