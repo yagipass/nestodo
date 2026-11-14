@@ -281,7 +281,7 @@ export default function StatsPage({ timeZone, days }: Props) {
       <main className="stats">
         <h1>Stats</h1>
         <Calendar days={days} />
-        <div className="ranges">
+        <div className="choices">
           {RANGES.map((value) => (
             <button key={value} type="button" className="pill" aria-pressed={value === range} onClick={() => setRange(value)}>
               {value} days

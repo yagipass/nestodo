@@ -209,10 +209,10 @@ export class Session {
     return (await json<{ props: { timeZone: string; days: Day[] } }>(res)).props;
   }
 
-  async settings() {
-    const res = await this.request("/settings", { page: true });
+  async settings(cookie?: string) {
+    const res = await this.request("/settings", { page: true, cookie });
     expect(res.status).toBe(200);
-    return (await json<{ props: { available: boolean; webhook: WebhookSettings | null; analytics: boolean } }>(res)).props;
+    return (await json<{ props: { available: boolean; webhook: WebhookSettings | null; analytics: boolean; appearance: string } }>(res)).props;
   }
 
   async analytics() {
