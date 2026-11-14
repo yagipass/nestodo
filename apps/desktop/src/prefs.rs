@@ -7,10 +7,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Appearance {
-    #[default]
-    System,
     Light,
     Dark,
+    #[default]
+    #[serde(other)]
+    System,
 }
 
 impl Appearance {
@@ -143,6 +144,27 @@ mod tests {
         };
         prefs.save(Some(&path)).unwrap();
         assert_eq!(Prefs::load(Some(&path)).appearance, Appearance::Dark);
+    }
+
+    #[test]
+    fn an_appearance_this_version_does_not_know_follows_the_system_and_keeps_the_server() {
+        let dir = TempDir::new("unknown-appearance");
+        fs::create_dir_all(&dir.0).unwrap();
+        let path = dir.0.join("settings.json");
+        fs::write(
+            &path,
+            r#"{"showCompleted": false, "baseUrl": "https://nestodo.example.com/", "appearance": "sepia"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            Prefs::load(Some(&path)),
+            Prefs {
+                show_completed: false,
+                base_url: Some("https://nestodo.example.com/".into()),
+                usage_id: None,
+                appearance: Appearance::System,
+            }
+        );
     }
 
     #[test]
