@@ -7,6 +7,7 @@ use gpui::{
 };
 
 use nestodo_desktop::error::Error;
+use nestodo_desktop::prefs::Appearance;
 use nestodo_desktop::profile::{Profile, avatar_png};
 use nestodo_desktop::webhook::{Analytics, Webhook, WebhookForm, WebhookHeader, Webhooks};
 
@@ -15,7 +16,7 @@ use crate::ui::backend::Backend;
 use crate::ui::icons::Icon;
 use crate::ui::text_field::{FieldEvent, TextField};
 use crate::ui::theme::{Theme, theme};
-use crate::ui::widgets::{PAGE_WIDTH, icon, icon_button, sheet_shadow};
+use crate::ui::widgets::{PAGE_WIDTH, choice, icon, icon_button, sheet_shadow};
 
 actions!(settings, [SaveWebhook, CancelWebhook, SaveProfile]);
 
@@ -37,6 +38,7 @@ pub enum SettingsEvent {
     ChangeServer,
     UsageData(Analytics),
     Profile(Profile, Option<Avatar>),
+    Appearance(Appearance),
 }
 
 struct Loaded {
@@ -144,6 +146,7 @@ impl Editor {
 pub struct SettingsView {
     backend: Arc<dyn Backend>,
     server: String,
+    appearance: Appearance,
     load: Load,
     editor: Option<Editor>,
     profile: ProfileForm,
@@ -172,10 +175,16 @@ fn watch(field: &Entity<TextField>, cx: &mut Context<SettingsView>) -> Subscript
 }
 
 impl SettingsView {
-    pub fn new(backend: Arc<dyn Backend>, server: String, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        backend: Arc<dyn Backend>,
+        server: String,
+        appearance: Appearance,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut view = Self {
             backend,
             server,
+            appearance,
             load: Load::Loading,
             editor: None,
             profile: ProfileForm {
@@ -1366,6 +1375,38 @@ impl SettingsView {
             .into_any_element()
     }
 
+    fn choose_appearance(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
+        self.appearance = appearance;
+        cx.emit(SettingsEvent::Appearance(appearance));
+        cx.notify();
+    }
+
+    fn render_appearance(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = theme(cx);
+        card(&colors)
+            .child(div().flex().child(heading("Appearance")))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(8.))
+                    .children(Appearance::ALL.map(|appearance| {
+                        choice(
+                            ("appearance", appearance as usize),
+                            appearance.label(),
+                            appearance == self.appearance,
+                            &colors,
+                        )
+                        .debug_selector(move || format!("appearance-{}", appearance.label()))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.choose_appearance(appearance, cx);
+                        }))
+                    })),
+            )
+            .child(note("This applies to this Mac only.", &colors))
+            .into_any_element()
+    }
+
     fn render_server(&self, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme(cx);
         card(&colors)
@@ -1450,6 +1491,7 @@ impl Render for SettingsView {
                             .child("Settings"),
                     )
                     .child(body)
+                    .child(self.render_appearance(cx))
                     .child(self.render_server(cx)),
             )
     }
@@ -1688,8 +1730,9 @@ mod tests {
             cx.bind_keys(crate::ui::text_field::bindings());
             cx.bind_keys(bindings());
         });
-        let (view, cx) =
-            cx.add_window_view(|_, cx| SettingsView::new(server, "nestodo.example.com".into(), cx));
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            SettingsView::new(server, "nestodo.example.com".into(), Appearance::System, cx)
+        });
         cx.run_until_parked();
         (view, cx)
     }
