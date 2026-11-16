@@ -379,7 +379,7 @@ private fun EventLine(event: TimelineItem.Event, line: LogLine.Item) {
                 withStyle(SpanStyle(color = colors.onSurface, fontWeight = FontWeight.SemiBold)) {
                     append(label)
                 }
-                append(" · ${line.stamped.time}")
+                append(" at ${line.stamped.time}")
             },
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
             color = colors.onSurfaceVariant,
@@ -434,7 +434,7 @@ private fun CommentLine(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (comment.via == Via.Mcp) Tag("via MCP")
-                Meta(line.stamped.time + if (comment.editedAt != null) " · edited" else "")
+                Meta(line.stamped.time + if (comment.editedAt != null) " (edited)" else "")
                 Spacer(Modifier.weight(1f))
                 if (!editing) {
                     IconButton(
