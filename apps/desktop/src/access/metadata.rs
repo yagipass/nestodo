@@ -102,7 +102,7 @@ fn validate(claims: &Claims, request_host: &str, now: i64) -> Result<(), String>
     }
     if claims.iat > now + ALLOWED_SKEW_SECS {
         return Err(
-            "the metadata is more than 5 minutes in the future; check the system clock".into(),
+            "the metadata is more than 5 minutes in the future, so check the system clock".into(),
         );
     }
     Ok(())

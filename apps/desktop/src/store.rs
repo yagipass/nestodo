@@ -84,7 +84,7 @@ impl TokenStore for SystemStore {
         }
         match self.keychain.get(&Self::account(host, kind)) {
             Ok(secret) => String::from_utf8(secret).map(Some).map_err(|_| {
-                Error::Storage("the saved login is corrupted; sign out and sign in again".into())
+                Error::Storage("the saved login is corrupted, so sign out and sign in again".into())
             }),
             Err(_) => file,
         }

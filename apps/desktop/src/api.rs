@@ -422,7 +422,7 @@ fn message(body: &Value) -> Option<String> {
         .filter_map(|issue| issue.get("message").and_then(Value::as_str))
         .collect();
     if !issues.is_empty() {
-        return Some(issues.join("; "));
+        return Some(issues.join(". "));
     }
     body.get("error")
         .and_then(Value::as_str)
