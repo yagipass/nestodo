@@ -114,8 +114,8 @@ function Calendar({ days }: { days: Day[] }) {
       <div className="calendar-foot">
         <span aria-live="polite">
           {hovered
-            ? `${hovered.added} added · ${hovered.completed} completed · ${format(longDate, hovered.date)}`
-            : `${added} added · ${completed} completed in the past 26 weeks`}
+            ? `${hovered.added} added and ${hovered.completed} completed on ${format(longDate, hovered.date)}`
+            : `${added} added and ${completed} completed in the past 26 weeks`}
         </span>
         <span className="legend" aria-hidden="true">
           Less
@@ -193,7 +193,7 @@ function AddedCompletedChart({ days }: { days: Day[] }) {
           <Tip
             left={at(hover)}
             bottom={50 + height(hovered.added) / 2}
-            value={`${hovered.added} added · ${hovered.completed} completed`}
+            value={`${hovered.added} added and ${hovered.completed} completed`}
             detail={format(longDate, hovered.date)}
           />
         )}

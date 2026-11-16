@@ -40,7 +40,7 @@ export function nestodoMcpServer(userId: string) {
     "list_todos",
     {
       title: "List todos",
-      description: `List every todo of the signed-in user in outline order. parentId is the todo it is nested under, commentCount is how many comments the member's work log on it has, which get_timeline shows, createdAt is when it was added, and completedAt is when it was completed, or null while the todo is open. Both times are in UTC as ISO 8601. Completed todos are removed from this list ${KEEP_COMPLETED_DAYS} days after they were completed, or later while a todo under them is kept, so this is not a full history of finished work; get_stats still counts them on the days they were completed.`,
+      description: `List every todo of the signed-in user in outline order. parentId is the todo it is nested under, commentCount is how many comments the member's work log on it has, which get_timeline shows, createdAt is when it was added, and completedAt is when it was completed, or null while the todo is open. Both times are in UTC as ISO 8601. Completed todos are removed from this list ${KEEP_COMPLETED_DAYS} days after they were completed, or later while a todo under them is kept, so this is not a full history of finished work. get_stats still counts them on the days they were completed.`,
       annotations: { readOnlyHint: true },
     },
     async () => reply({ todos: (await listTodos(userId)).map(withUtcTimes) }),
@@ -69,12 +69,12 @@ export function nestodoMcpServer(userId: string) {
       inputSchema: createTodoBody.extend({
         title: createTodoBody.shape.title.describe(`Title, up to ${MAX_TITLE_LENGTH} characters`),
         comment: createTodoBody.shape.comment.describe(
-          `First comment in the todo's work log, for details that do not fit in the title, such as links, up to ${MAX_COMMENT_LENGTH} characters; omit for none`,
+          `Optional first comment in the todo's work log, for details that do not fit in the title, such as links, up to ${MAX_COMMENT_LENGTH} characters`,
         ),
         parentId: createTodoBody.shape.parentId.describe(
-          `Id of the todo to nest it under, so that it is at most ${MAX_DEPTH} levels deep; omit for the top level`,
+          `Id of the todo to nest it under, so that it is at most ${MAX_DEPTH} levels deep, or omit it for the top level`,
         ),
-        index: createTodoBody.shape.index.describe("Position among the todos beside it, from 0; omit to add it last"),
+        index: createTodoBody.shape.index.describe("Position among the todos beside it, from 0, or omit it to add the todo last"),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
@@ -86,7 +86,7 @@ export function nestodoMcpServer(userId: string) {
     {
       title: "Edit a todo",
       description:
-        "Rename, complete, reopen, collapse or move a todo. Only the fields given change. To write down progress, use add_comment instead. A completed todo never has open todos under it: completing a todo also completes every open todo under it and returns their ids as completedUnder, and reopening a todo, or moving an open todo into a completed todo, reopens the completed todos above it.",
+        "Rename, complete, reopen, collapse or move a todo. Only the fields given change. To write down progress, use add_comment instead. A completed todo never has open todos under it, so completing a todo also completes every open todo under it and returns their ids as completedUnder, and reopening a todo, or moving an open todo into a completed todo, reopens the completed todos above it.",
       inputSchema: patchTodoBody.extend({
         id,
         title: patchTodoBody.shape.title.describe("New title"),
@@ -95,10 +95,10 @@ export function nestodoMcpServer(userId: string) {
         ),
         collapsed: patchTodoBody.shape.collapsed.describe("true to hide the todos under it in the outline"),
         parentId: patchTodoBody.shape.parentId.describe(
-          `Id of the todo to move it under, so that it and the todos under it are at most ${MAX_DEPTH} levels deep; null to move it to the top level`,
+          `Id of the todo to move it under, so that it and the todos under it are at most ${MAX_DEPTH} levels deep, or null to move it to the top level`,
         ),
         index: patchTodoBody.shape.index.describe(
-          "New position among the todos beside it, from 0; when moving it under another todo without this, it goes last",
+          "New position among the todos beside it, from 0. A todo moved under another todo without this goes last.",
         ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
@@ -117,7 +117,7 @@ export function nestodoMcpServer(userId: string) {
     {
       title: "Show a todo's work log",
       description:
-        "Show the work log of one todo, oldest first: when it was created, completed and reopened, and the comments written on it. via is mcp for comments an assistant added with add_comment and app for the member's own. Times are in UTC as ISO 8601, and editedAt is when a comment was last changed, or null.",
+        "Show the work log of one todo, oldest first. It lists when the todo was created, completed and reopened, and the comments written on it. via is mcp for comments an assistant added with add_comment and app for the member's own. Times are in UTC as ISO 8601, and editedAt is when a comment was last changed, or null.",
       inputSchema: z.object({ id }),
       annotations: { readOnlyHint: true },
     },
@@ -135,7 +135,7 @@ export function nestodoMcpServer(userId: string) {
         "Add a comment to the end of a todo's work log, such as what was done, what was found or a summary of a link. The member sees it marked as added through MCP.",
       inputSchema: z.object({
         id,
-        body: commentBody.describe(`The comment, up to ${MAX_COMMENT_LENGTH} characters; line breaks are kept`),
+        body: commentBody.describe(`The comment, up to ${MAX_COMMENT_LENGTH} characters, with line breaks kept`),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
@@ -155,7 +155,7 @@ export function nestodoMcpServer(userId: string) {
         timeZone: z
           .string()
           .refine(isTimeZone, "Not an IANA time zone")
-          .describe("The user's IANA time zone, such as Asia/Tokyo; the assistant's requests do not carry it"),
+          .describe("The user's IANA time zone, such as Asia/Tokyo, which the assistant's requests do not carry"),
       }),
       annotations: { readOnlyHint: true },
     },
