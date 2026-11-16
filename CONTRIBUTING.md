@@ -24,7 +24,7 @@ Run these in `apps/web`.
 | Command | Purpose |
 |---|---|
 | `pnpm exec vp dev` | serve the app at <http://localhost:5173>, signed in as `dev@localhost` |
-| `pnpm exec void db generate` | generate a migration after changing `db/schema.ts`; commit the new migration |
+| `pnpm exec void db generate` | generate a migration after changing `db/schema.ts`, then commit it |
 | `pnpm exec void prepare` | generate `.void/`, which the type checks need |
 | `pnpm exec tsc --noEmit && pnpm exec tsc --noEmit -p e2e` | type-check the app and the e2e tests |
 | `pnpm exec vp build` | build the app |
@@ -41,7 +41,7 @@ Run these in `apps/cli`.
 | `cargo clippy --locked --all-targets -- -D warnings` | lint, as CI does |
 | `cargo test --locked` | run the tests, as CI does |
 | `NESTODO_E2E_BASE_URL=http://localhost:5173 cargo test -- --ignored` | run the end-to-end tests against `vp dev` |
-| `cargo run -- --base-url http://localhost:5173 list` | run a command against `vp dev`, without signing in; `NESTODO_BASE_URL` sets the same |
+| `cargo run -- --base-url http://localhost:5173 list` | run a command against `vp dev`, without signing in, or set `NESTODO_BASE_URL` instead of passing `--base-url` |
 
 CI also builds the Nix package with `nix build .#nestodo` on macOS (Apple silicon) and Linux (x86_64 and arm64), and pushes it to the `nestodo` Cachix cache from `main`.
 
@@ -80,7 +80,7 @@ avdmanager create avd -n nestodo -k "system-images;android-37.0;google_apis;arm6
 emulator -avd nestodo
 ```
 
-To use `vp dev` instead of production, start it with `pnpm exec vp dev --host 127.0.0.1` and enter `http://10.0.2.2:5173` as the server in a debug build on the emulator: plain `vp dev` listens only on `::1`, which the emulator's `10.0.2.2` can't reach. Only a debug build accepts `http://`, and only for `10.0.2.2` and `localhost`.
+To use `vp dev` instead of production, start it with `pnpm exec vp dev --host 127.0.0.1` and enter `http://10.0.2.2:5173` as the server in a debug build on the emulator. Plain `vp dev` listens only on `::1`, which the emulator's `10.0.2.2` can't reach. Only a debug build accepts `http://`, and only for `10.0.2.2` and `localhost`.
 
 ## Rules
 
@@ -105,10 +105,10 @@ The environment's secret `POSTHOG_PROJECT_TOKEN` is optional. Leave it empty to 
 
 `void.lock.json` is not committed. Each deploy finds the D1 database `nestodo-db` by name in `CLOUDFLARE_ACCOUNT_ID` and creates it only when it does not exist, so renaming the database in Cloudflare or in `void.config.ts` starts from an empty one. Void keeps Durable Object migration history in the lock, so commit it again before adding a Durable Object.
 
-Profile pictures are kept in the R2 bucket `nestodo-avatars`, named in `void.config.ts`. Deploys do not create it, so create it once under **R2** in the `CLOUDFLARE_ACCOUNT_ID` account before the first deploy, with the automatic location and the Standard storage class, and leave its public access off: the app reads and writes it only through the Worker. Renaming the bucket in Cloudflare or in `void.config.ts` points the app at a different one, so every member's picture goes back to the generic icon until they choose it again.
+Profile pictures are kept in the R2 bucket `nestodo-avatars`, named in `void.config.ts`. Deploys do not create it, so create it once under **R2** in the `CLOUDFLARE_ACCOUNT_ID` account before the first deploy, with the automatic location and the Standard storage class, and leave its public access off, because the app reads and writes it only through the Worker. Renaming the bucket in Cloudflare or in `void.config.ts` points the app at a different one, so every member's picture goes back to the generic icon until they choose it again.
 
 ## Repository settings
 
 The repository settings, labels, merge options, and Actions permissions are managed with [gh-infra](https://github.com/babarot/gh-infra) in `.github/infra.yml`. To change them, edit the file, review the difference with `gh infra plan .github/infra.yml`, and apply it with `gh infra apply .github/infra.yml`. Applying needs admin access to the repository.
 
-gh-infra creates the `Cachix` and `Cloudflare` environments and limits them to `main`, but does not manage secrets or variables. Set them under **Settings → Environments** on GitHub. The `Cachix` environment needs the secret `CACHIX_AUTH_TOKEN`, a token that can push to the `nestodo` Cachix cache.
+gh-infra creates the `Cachix` and `Cloudflare` environments and limits them to `main`, but does not manage secrets or variables. Set them on GitHub, in **Environments** under the repository's **Settings**. The `Cachix` environment needs the secret `CACHIX_AUTH_TOKEN`, a token that can push to the `nestodo` Cachix cache.

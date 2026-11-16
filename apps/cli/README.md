@@ -13,7 +13,7 @@ nix profile install github:yagipass/nestodo#nestodo
 ## Usage
 
 ```sh
-export NESTODO_BASE_URL=https://nestodo.example.com  # your server; --base-url also sets it
+export NESTODO_BASE_URL=https://nestodo.example.com  # your server, which --base-url also sets
 nestodo login                         # sign in with your browser (once)
 nestodo list [ID] [-d N] [--active] [--json]
 nestodo add "Buy milk" [-p ID | --after ID]

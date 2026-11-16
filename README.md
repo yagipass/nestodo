@@ -1,6 +1,6 @@
 # Nestodo
 
-![Nestodo — A todo list that nests.](assets/nestodo-banner.png)
+![Nestodo, a todo list that nests.](assets/nestodo-banner.png)
 
 A todo list for my family. Each member signs in through Cloudflare Access and sees only their own todos.
 
