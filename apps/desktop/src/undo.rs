@@ -1,42 +1,13 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use crate::outline::{Change, Focus, Item, Key, Op, Outline, apply_ops, undo_for};
+use crate::outline::{Change, Focus, Key, Op, Outline, apply_ops, same_outline, undo_for};
 
 const LIMIT: usize = 50;
 const TYPING_PAUSE: Duration = Duration::from_millis(1000);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Field {
-    Title,
-    Note,
-}
-
-impl Field {
-    fn text(self, item: &Item) -> &str {
-        match self {
-            Field::Title => &item.title,
-            Field::Note => &item.note,
-        }
-    }
-
-    fn restore(self, key: &str, text: String) -> Op {
-        match self {
-            Field::Title => Op::Title {
-                key: key.to_owned(),
-                title: text,
-            },
-            Field::Note => Op::Note {
-                key: key.to_owned(),
-                note: text,
-            },
-        }
-    }
-}
-
 struct Typing {
     key: Key,
-    field: Field,
     original: String,
     at: Duration,
     composing: bool,
@@ -91,14 +62,7 @@ impl UndoHistory {
         });
     }
 
-    pub fn type_text(
-        &mut self,
-        before: &Outline,
-        after: &Outline,
-        key: &str,
-        field: Field,
-        composing: bool,
-    ) {
+    pub fn type_text(&mut self, before: &Outline, after: &Outline, key: &str, composing: bool) {
         let now = (self.now)();
         let going = self
             .steps
@@ -106,20 +70,17 @@ impl UndoHistory {
             .and_then(|step| step.typing.as_ref())
             .filter(|typing| {
                 typing.key == key
-                    && typing.field == field
                     && (typing.composing || now.saturating_sub(typing.at) <= TYPING_PAUSE)
             })
             .map(|typing| typing.original.clone());
         let continuing = going.is_some();
-        let original = going.unwrap_or_else(|| field.text(before.item(key)).to_owned());
+        let original = going.unwrap_or_else(|| before.item(key).title.clone());
         let focus = Some(Focus {
             key: key.to_owned(),
-            pos: edit_end(&original, field.text(after.item(key))),
-            note: field == Field::Note,
+            pos: edit_end(&original, &after.item(key).title),
         });
         let typing = Some(Typing {
             key: key.to_owned(),
-            field,
             original: original.clone(),
             at: now,
             composing,
@@ -131,7 +92,10 @@ impl UndoHistory {
                 step.typing = typing;
             }
             None => self.push(Step {
-                ops: vec![field.restore(key, original)],
+                ops: vec![Op::Title {
+                    key: key.to_owned(),
+                    title: original,
+                }],
                 focus,
                 after: after.clone(),
                 typing,
@@ -155,7 +119,7 @@ impl UndoHistory {
 
     pub fn undo(&mut self, current: &Outline) -> Option<Change> {
         let step = self.steps.pop_back()?;
-        if *current != step.after {
+        if !same_outline(current, &step.after) {
             self.steps.clear();
             return None;
         }
@@ -182,7 +146,7 @@ mod tests {
 
     use super::*;
     use crate::outline::fixtures::{Mark, outline_of, shown, todo, update_op};
-    use crate::outline::{Outline, ROOT, indent, rename, set_note, split, toggle_done};
+    use crate::outline::{Outline, ROOT, indent, remove, rename, set_comments, split, toggle_done};
     use crate::wire::Todo;
 
     fn row(id: u64, title: &str) -> Todo {
@@ -197,11 +161,10 @@ mod tests {
         shown(outline, true, "")
     }
 
-    fn at(key: &str, pos: usize, note: bool) -> Focus {
+    fn at(key: &str, pos: usize) -> Focus {
         Focus {
             key: key.to_owned(),
             pos,
-            note,
         }
     }
 
@@ -222,13 +185,7 @@ mod tests {
         composing: bool,
     ) -> Outline {
         let next = rename(outline, key, title);
-        history.type_text(outline, &next, key, Field::Title, composing);
-        next
-    }
-
-    fn type_note(history: &mut UndoHistory, outline: &Outline, key: &str, note: &str) -> Outline {
-        let next = set_note(outline, key, note);
-        history.type_text(outline, &next, key, Field::Note, false);
+        history.type_text(outline, &next, key, composing);
         next
     }
 
@@ -237,9 +194,9 @@ mod tests {
         let start = start();
         let mut history = UndoHistory::with_clock(|| Duration::ZERO);
         let added = split(&start, "t2", 4, "n1", &all(&start));
-        history.record(&start, &added, Some(at("t2", 4, false)));
+        history.record(&start, &added, Some(at("t2", 4)));
         let nested = indent(&added.outline, "n1", &all(&added.outline)).unwrap();
-        history.record(&added.outline, &nested, Some(at("n1", 0, false)));
+        history.record(&added.outline, &nested, Some(at("n1", 0)));
 
         let unnested = history.undo(&nested.outline).unwrap();
         assert_eq!(unnested.outline, added.outline);
@@ -251,7 +208,7 @@ mod tests {
                 index: 2
             }]
         );
-        assert_eq!(unnested.focus, Some(at("n1", 0, false)));
+        assert_eq!(unnested.focus, Some(at("n1", 0)));
 
         let removed = history.undo(&unnested.outline).unwrap();
         assert_eq!(removed.outline, start);
@@ -262,7 +219,7 @@ mod tests {
                 removed: vec!["n1".into()]
             }]
         );
-        assert_eq!(removed.focus, Some(at("t2", 4, false)));
+        assert_eq!(removed.focus, Some(at("t2", 4)));
 
         assert_eq!(history.undo(&removed.outline), None);
     }
@@ -396,22 +353,56 @@ mod tests {
     }
 
     #[test]
-    fn puts_the_cursor_where_the_undone_typing_was_in_the_note_when_the_note_was_typed_in() {
+    fn puts_the_cursor_where_the_undone_typing_was_in_the_row_it_was_typed_in() {
         let mut history = UndoHistory::with_clock(|| Duration::ZERO);
         let prefixed = type_title(&mut history, &start(), "t1", "oat milk", false);
         history.end();
-        let noted = type_note(&mut history, &prefixed, "t2", "free-range");
+        let ranged = type_title(&mut history, &prefixed, "t2", "free-range eggs", false);
         history.end();
-        let trimmed = type_note(&mut history, &noted, "t2", "free");
+        let trimmed = type_title(&mut history, &ranged, "t2", "free eggs", false);
 
         let untrimmed = history.undo(&trimmed).unwrap();
-        assert_eq!(untrimmed.focus, Some(at("t2", "free-range".len(), true)));
-        let unnoted = history.undo(&untrimmed.outline).unwrap();
-        assert_eq!(unnoted.focus, Some(at("t2", 0, true)));
+        assert_eq!(untrimmed.focus, Some(at("t2", "free-range".len())));
+        let unranged = history.undo(&untrimmed.outline).unwrap();
+        assert_eq!(unranged.focus, Some(at("t2", 0)));
         assert_eq!(
-            history.undo(&unnoted.outline).unwrap().focus,
-            Some(at("t1", 0, false))
+            history.undo(&unranged.outline).unwrap().focus,
+            Some(at("t1", 0))
         );
+    }
+
+    #[test]
+    fn keeps_every_step_when_a_comment_changes_a_rows_count_since_comments_are_not_taken_back_by_cmd_z()
+     {
+        let start = start();
+        let mut history = UndoHistory::with_clock(|| Duration::ZERO);
+        let added = split(&start, "t2", 4, "n1", &all(&start));
+        history.record(&start, &added, None);
+        let commented = set_comments(&added.outline, "t1", 1);
+
+        let undone = history.undo(&commented).unwrap();
+
+        assert_eq!(
+            undone.ops,
+            [Op::Delete {
+                key: "n1".into(),
+                removed: vec!["n1".into()]
+            }]
+        );
+        assert_eq!(undone.outline.item("t1").comments, 1);
+    }
+
+    #[test]
+    fn brings_a_deleted_row_back_with_its_comment_count_so_the_row_shows_its_log_again_at_once() {
+        let start = outline_of(&[row(1, "milk"), row(2, "dentist").commented(3)]);
+        let mut history = UndoHistory::with_clock(|| Duration::ZERO);
+        let removed = remove(&start, "t2");
+        history.record(&start, &removed, Some(at("t2", 0)));
+
+        let restored = history.undo(&removed.outline).unwrap();
+
+        assert_eq!(restored.outline, start);
+        assert_eq!(restored.outline.item("t2").comments, 3);
     }
 
     #[test]
@@ -426,10 +417,7 @@ mod tests {
             false,
         );
 
-        assert_eq!(
-            history.undo(&thumbs_up).unwrap().focus,
-            Some(at("t1", 0, false))
-        );
+        assert_eq!(history.undo(&thumbs_up).unwrap().focus, Some(at("t1", 0)));
     }
 
     #[test]
@@ -446,7 +434,7 @@ mod tests {
 
         assert_eq!(
             history.undo(&pleading).unwrap().focus,
-            Some(at("t1", "Dance 🕺".len(), false))
+            Some(at("t1", "Dance 🕺".len()))
         );
     }
 

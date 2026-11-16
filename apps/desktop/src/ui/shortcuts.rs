@@ -22,15 +22,17 @@ const SHORTCUTS: &[(&str, &[Shortcut])] = &[
         ],
     ),
     (
-        "Notes",
+        "Comments",
         &[
-            ("Write a note under the item", "\u{21e7} Enter", None),
+            ("Open the item\u{2019}s comments", "\u{21e7} Enter", None),
             (
-                "Back to the title",
-                "\u{21e7} Enter / Esc",
-                Some("in a note"),
+                "Post",
+                "\u{21e7} Enter / Ctrl/\u{2318} Enter",
+                Some("in a comment"),
             ),
-            ("New line", "Enter", Some("in a note")),
+            ("New line", "Enter", Some("in a comment")),
+            ("Back to the item", "Esc", Some("in a comment")),
+            ("Close the comments", "Esc", Some("on an item")),
         ],
     ),
     (

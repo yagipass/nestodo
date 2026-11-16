@@ -1,12 +1,15 @@
 use nestodo_desktop::api::{Client, StatsResponse};
 use nestodo_desktop::error::Error;
 use nestodo_desktop::profile::Profile;
+use nestodo_desktop::thread::{SearchHit, TimelineItem};
 use nestodo_desktop::webhook::{Analytics, WebhookEdit, Webhooks};
 use nestodo_desktop::wire::{Reply, Request, Todo};
 
 pub trait Backend: Send + Sync + 'static {
     fn list(&self) -> Result<Vec<Todo>, Error>;
     fn request(&self, request: &Request) -> Result<Reply, Error>;
+    fn timeline(&self, id: u64) -> Result<Vec<TimelineItem>, Error>;
+    fn search(&self, query: &str) -> Result<Vec<SearchHit>, Error>;
     fn stats(&self, time_zone: &str) -> Result<StatsResponse, Error>;
     fn webhooks(&self) -> Result<Webhooks, Error>;
     fn save_webhook(&self, edit: &WebhookEdit) -> Result<Webhooks, Error>;
@@ -27,6 +30,14 @@ impl Backend for Client {
 
     fn request(&self, request: &Request) -> Result<Reply, Error> {
         Client::request(self, request)
+    }
+
+    fn timeline(&self, id: u64) -> Result<Vec<TimelineItem>, Error> {
+        Client::timeline(self, id)
+    }
+
+    fn search(&self, query: &str) -> Result<Vec<SearchHit>, Error> {
+        Client::search(self, query)
     }
 
     fn stats(&self, time_zone: &str) -> Result<StatsResponse, Error> {

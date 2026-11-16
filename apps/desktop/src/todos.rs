@@ -1,6 +1,6 @@
 pub const MAX_TITLE_LENGTH: usize = 2000;
 
-pub const MAX_NOTE_LENGTH: usize = 10000;
+pub const MAX_COMMENT_LENGTH: usize = 10000;
 
 pub const MAX_DEPTH: usize = 64;
 

@@ -1592,7 +1592,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         cx.update(|cx| cx.set_global(Theme::light()));
-        let (field, cx) = cx.add_window_view(|_, cx| TextField::new("Note", cx).multiline());
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new("Comment", cx).multiline());
         field.update(cx, |field, cx| field.set_text("ab", 2, cx));
         cx.run_until_parked();
         let between_a_and_b = field.read_with(cx, |field, _| {

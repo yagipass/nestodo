@@ -1,29 +1,31 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable, Font, FontWeight,
-    Hsla, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, PromptLevel,
-    Radians, ScrollHandle, SharedString, StrikethroughStyle, StyledText, Subscription, Task,
-    TextLayout, TextRun, Transformation, TransformationMatrix, Window, actions, canvas, div, fill,
-    point, prelude::*, px, size,
+    Hsla, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseUpEvent, NoAction, Pixels,
+    PromptLevel, Radians, ScrollHandle, SharedString, StrikethroughStyle, StyledText, Subscription,
+    Task, TextLayout, TextRun, Transformation, TransformationMatrix, Window, actions, canvas, div,
+    fill, point, prelude::*, px, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
 use nestodo_desktop::error::Error;
 use nestodo_desktop::outline::{
     END, Focus, Guide, Key, Outline, ROOT, Row, append, caret_in, destinations, guides, indent,
-    key_for, merge_into_previous, move_by, move_to, open_under, outdent, remove, rename,
-    set_collapsed, set_note, split, subtree, toggle_done, visible_rows,
+    key_for, merge_into_previous, move_by, move_to, open_under, outdent, parent_of, remove, rename,
+    set_collapsed, set_comments, split, subtree, toggle_done, visible_rows,
 };
 use nestodo_desktop::sync::Sync;
+use nestodo_desktop::thread::snippet;
 use nestodo_desktop::title::{link_label, link_target, tokens};
-use nestodo_desktop::todos::{MAX_NOTE_LENGTH, MAX_TITLE_LENGTH};
-use nestodo_desktop::undo::{Field, UndoHistory};
+use nestodo_desktop::todos::{MAX_COMMENT_LENGTH, MAX_TITLE_LENGTH};
+use nestodo_desktop::undo::UndoHistory;
 use nestodo_desktop::wire::Todo;
 
+use crate::ui::avatar::Avatar;
 use crate::ui::backend::Backend;
 use crate::ui::clamped_text::{ClampedText, TextHits};
 use crate::ui::icons::Icon;
@@ -40,7 +42,8 @@ actions!(
         DeleteRow,
         OpenMove,
         Complete,
-        OpenNote,
+        OpenComments,
+        CloseComments,
         Split,
         Indent,
         Outdent,
@@ -51,10 +54,10 @@ actions!(
         PrevRow,
         NextRow,
         TitleBackspace,
-        BackToTitle,
-        NoteUp,
-        NoteDown,
-        NoteTab,
+        PostComment,
+        BackToItem,
+        SaveComment,
+        CancelEdit,
         CloseFilter,
         ToggleShowDone,
     ]
@@ -62,7 +65,9 @@ actions!(
 
 pub fn bindings() -> Vec<KeyBinding> {
     let title = Some("Title");
-    let note = Some("Note");
+    let composer = Some("Composer");
+    let edit = Some("CommentEdit");
+    let thread = Some("Thread");
     let outline = Some("Outline");
     let filter = Some("Filter");
     let workspace = Some("Workspace");
@@ -78,7 +83,8 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-m", OpenMove, title),
         KeyBinding::new("cmd-enter", Complete, title),
         KeyBinding::new("ctrl-enter", Complete, title),
-        KeyBinding::new("shift-enter", OpenNote, title),
+        KeyBinding::new("shift-enter", OpenComments, title),
+        KeyBinding::new("escape", CloseComments, title),
         KeyBinding::new("enter", Split, title),
         KeyBinding::new("tab", Indent, title),
         KeyBinding::new("shift-tab", Outdent, title),
@@ -97,30 +103,20 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("down", NextRow, title),
         KeyBinding::new("ctrl-n", NextRow, title),
         KeyBinding::new("backspace", TitleBackspace, title),
-        KeyBinding::new("cmd-z", Undo, note),
-        KeyBinding::new("ctrl-z", Undo, note),
-        KeyBinding::new("escape", BackToTitle, note),
-        KeyBinding::new("shift-enter", BackToTitle, note),
-        KeyBinding::new("cmd-shift-m", OpenMove, note),
-        KeyBinding::new("ctrl-shift-m", OpenMove, note),
-        KeyBinding::new("cmd-enter", Complete, note),
-        KeyBinding::new("ctrl-enter", Complete, note),
-        KeyBinding::new("up", NoteUp, note),
-        KeyBinding::new("ctrl-p", NoteUp, note),
-        KeyBinding::new("down", NoteDown, note),
-        KeyBinding::new("ctrl-n", NoteDown, note),
-        KeyBinding::new("tab", NoteTab, note),
-        KeyBinding::new("shift-tab", NoteTab, note),
+        KeyBinding::new("cmd-z", NoAction, thread),
+        KeyBinding::new("ctrl-z", NoAction, thread),
+        KeyBinding::new("shift-enter", PostComment, composer),
+        KeyBinding::new("cmd-enter", PostComment, composer),
+        KeyBinding::new("ctrl-enter", PostComment, composer),
+        KeyBinding::new("escape", BackToItem, composer),
+        KeyBinding::new("shift-enter", SaveComment, edit),
+        KeyBinding::new("cmd-enter", SaveComment, edit),
+        KeyBinding::new("ctrl-enter", SaveComment, edit),
+        KeyBinding::new("escape", CancelEdit, edit),
         KeyBinding::new("escape", CloseFilter, filter),
         KeyBinding::new("cmd-o", ToggleShowDone, workspace),
         KeyBinding::new("ctrl-o", ToggleShowDone, workspace),
     ]
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Editing {
-    key: Key,
-    note: bool,
 }
 
 pub enum OutlineEvent {
@@ -142,15 +138,19 @@ pub struct OutlineView {
     query: String,
     filtering: bool,
     kept: HashSet<Key>,
-    note_key: Option<Key>,
+    comment_hits: HashMap<Key, String>,
+    search_task: Option<Task<()>>,
+    thread: Option<thread_pane::Thread>,
+    avatar: Option<Avatar>,
     moving: Option<Focus>,
     picker: Option<Entity<MovePicker>>,
     sync: Sync,
     history: UndoHistory,
     counter: u64,
-    editing: Option<Editing>,
+    editing: Option<Key>,
     title_field: Entity<TextField>,
-    note_field: Entity<TextField>,
+    composer: Entity<TextField>,
+    comment_field: Entity<TextField>,
     filter_field: Entity<TextField>,
     focus_handle: FocusHandle,
     scroll: ScrollHandle,
@@ -205,6 +205,7 @@ impl Mirror {
 }
 
 const THIN: &str = "\u{2009}";
+const SEARCH_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
 const ICON_SLOT: &str = "\u{2003}";
 
 fn mirror_for(
@@ -306,7 +307,6 @@ fn focus_after_leaving(rows: &[Row], key: &str, previous_first: bool) -> Option<
     Some(Focus {
         key: row.key.clone(),
         pos: END,
-        note: false,
     })
 }
 
@@ -325,34 +325,30 @@ impl OutlineView {
                 .max_len(MAX_TITLE_LENGTH)
                 .encode_urls()
         });
-        let note_field = cx.new(|cx| {
-            TextField::new("Note", cx)
+        let composer = cx.new(|cx| {
+            TextField::new("Composer", cx)
                 .multiline()
-                .max_len(MAX_NOTE_LENGTH)
+                .max_len(MAX_COMMENT_LENGTH)
+                .encode_urls()
+                .placeholder("Add to the log\u{2026}")
+        });
+        let comment_field = cx.new(|cx| {
+            TextField::new("CommentEdit", cx)
+                .multiline()
+                .max_len(MAX_COMMENT_LENGTH)
                 .encode_urls()
         });
         let filter_field = cx.new(|cx| TextField::new("Filter", cx).placeholder("Filter"));
         let mut subscriptions = vec![
             cx.subscribe_in(&title_field, window, Self::on_title_event),
-            cx.subscribe_in(&note_field, window, Self::on_note_event),
             cx.subscribe_in(&filter_field, window, Self::on_filter_event),
+            cx.subscribe(&composer, |_, _, _: &FieldEvent, cx| cx.notify()),
+            cx.subscribe(&comment_field, |_, _, _: &FieldEvent, cx| cx.notify()),
         ];
         let title_focus = title_field.read(cx).focus_handle(cx);
-        let note_focus = note_field.read(cx).focus_handle(cx);
         let filter_focus = filter_field.read(cx).focus_handle(cx);
         subscriptions.push(cx.on_blur(&title_focus, window, |this, window, cx| {
-            if window.is_window_active()
-                && this.editing.as_ref().is_some_and(|editing| !editing.note)
-            {
-                this.leave_editor(window, cx);
-                this.editing = None;
-                cx.notify();
-            }
-        }));
-        subscriptions.push(cx.on_blur(&note_focus, window, |this, window, cx| {
-            if window.is_window_active()
-                && this.editing.as_ref().is_some_and(|editing| editing.note)
-            {
+            if window.is_window_active() && this.editing.is_some() {
                 this.leave_editor(window, cx);
                 this.editing = None;
                 cx.notify();
@@ -367,6 +363,7 @@ impl OutlineView {
         subscriptions.push(cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.refresh(cx);
+                this.refresh_thread(cx);
             } else {
                 this.flush_now(cx);
             }
@@ -384,7 +381,10 @@ impl OutlineView {
             query: String::new(),
             filtering: false,
             kept: HashSet::new(),
-            note_key: None,
+            comment_hits: HashMap::new(),
+            search_task: None,
+            thread: None,
+            avatar: None,
             moving: None,
             picker: None,
             sync,
@@ -392,7 +392,8 @@ impl OutlineView {
             counter: 0,
             editing: None,
             title_field,
-            note_field,
+            composer,
+            comment_field,
             filter_field,
             focus_handle: cx.focus_handle(),
             scroll: ScrollHandle::new(),
@@ -423,7 +424,12 @@ impl OutlineView {
     }
 
     fn rows(&self) -> Vec<Row> {
-        visible_rows(&self.outline, self.show_done, &self.query, &self.kept)
+        if self.comment_hits.is_empty() {
+            return visible_rows(&self.outline, self.show_done, &self.query, &self.kept);
+        }
+        let mut keep = self.kept.clone();
+        keep.extend(self.comment_hits.keys().cloned());
+        visible_rows(&self.outline, self.show_done, &self.query, &keep)
     }
 
     fn is_shown(&self, key: &str) -> bool {
@@ -440,77 +446,42 @@ impl OutlineView {
     }
 
     fn focused(&self, cx: &App) -> Option<Focus> {
-        let editing = self.editing.as_ref()?;
-        let field = if editing.note {
-            &self.note_field
-        } else {
-            &self.title_field
-        };
+        let key = self.editing.as_ref()?;
         Some(Focus {
-            key: editing.key.clone(),
-            pos: field.read(cx).selection().start,
-            note: editing.note,
+            key: key.clone(),
+            pos: self.title_field.read(cx).selection().start,
         })
     }
 
-    fn leave_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(editing) = self.editing.clone() else {
-            return;
-        };
-        if editing.note {
-            self.close_note(&editing.key, window, cx);
-        } else {
+    fn leave_editor(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if self.editing.is_some() {
             self.flush_now(cx);
         }
     }
 
-    fn close_note(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let note = self
-            .outline
-            .get(key)
-            .map(|item| item.note.clone())
-            .unwrap_or_default();
-        if !note.is_empty() && note.trim().is_empty() {
-            self.on_note(key, "", false, window, cx);
-        }
-        self.flush_now(cx);
-        if self.note_key.as_deref() == Some(key) {
-            self.note_key = None;
-        }
-    }
-
     fn focus_row(&mut self, focus: Focus, window: &mut Window, cx: &mut Context<Self>) {
-        let Focus { key, pos, note } = focus;
+        let Focus { key, pos } = focus;
         let rows = self.rows();
         let Some(index) = rows.iter().position(|row| row.key == key) else {
             return;
         };
-        if note && self.note_key.as_deref() != Some(key.as_str()) {
-            return;
-        }
-        let target = Editing { key, note };
-        if self.editing.as_ref() != Some(&target) {
+        if self.editing.as_ref() != Some(&key) {
             self.leave_editor(window, cx);
-            if note && self.note_key.as_deref() != Some(target.key.as_str()) {
-                return;
-            }
         }
-        let Some(item) = self.outline.get(&target.key) else {
+        let Some(item) = self.outline.get(&key) else {
             return;
         };
-        let (field, text) = if note {
-            (self.note_field.clone(), item.note.clone())
-        } else {
-            (self.title_field.clone(), item.title.clone())
-        };
+        let text = item.title.clone();
         let at = caret_in(&text, pos);
+        let field = self.title_field.clone();
         field.update(cx, |field, cx| {
             field.set_text(&text, at, cx);
             field.set_read_only(self.sync.failed, cx);
         });
-        self.editing = Some(target);
+        self.editing = Some(key.clone());
         window.focus(&field.focus_handle(cx), cx);
         self.scroll.scroll_to_item(self.row_child_offset() + index);
+        self.follow_caret(&key, cx);
         cx.notify();
     }
 
@@ -519,29 +490,17 @@ impl OutlineView {
     }
 
     fn detach_if_hidden(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(editing) = self.editing.clone() else {
+        let Some(key) = self.editing.clone() else {
             return;
         };
-        if !self.is_shown(&editing.key) || !self.outline.contains(&editing.key) {
+        if !self.is_shown(&key) || !self.outline.contains(&key) {
             self.editing = None;
-            if self.note_key.as_deref() == Some(editing.key.as_str()) {
-                self.note_key = None;
-            }
             self.flush_now(cx);
             window.focus(&self.focus_handle, cx);
             return;
         }
-        let text = if editing.note {
-            self.outline.item(&editing.key).note.clone()
-        } else {
-            self.outline.item(&editing.key).title.clone()
-        };
-        let field = if editing.note {
-            &self.note_field
-        } else {
-            &self.title_field
-        };
-        field.update(cx, |field, cx| {
+        let text = self.outline.item(&key).title.clone();
+        self.title_field.update(cx, |field, cx| {
             if !field.is_composing() {
                 field.sync_text(&text, cx);
             }
@@ -586,16 +545,11 @@ impl OutlineView {
         self.pump(cx);
         self.keep(keys);
         let next = focus.or(change.focus);
-        if let Some(next) = &next
-            && next.note
-            && self.is_shown(&next.key)
-        {
-            self.note_key = Some(next.key.clone());
-        }
         self.detach_if_hidden(window, cx);
         if let Some(next) = next {
             self.focus_row(next, window, cx);
         }
+        self.sync_thread(cx);
         cx.notify();
     }
 
@@ -624,10 +578,48 @@ impl OutlineView {
     fn close_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.query.clear();
         self.kept.clear();
+        self.comment_hits.clear();
+        self.search_task = None;
         self.filtering = false;
         self.filter_field
             .update(cx, |field, cx| field.set_text("", 0, cx));
         window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    fn search_comments(&mut self, cx: &mut Context<Self>) {
+        let text = self.query.trim().to_string();
+        if text.is_empty() {
+            self.comment_hits.clear();
+            self.search_task = None;
+            return;
+        }
+        let backend = self.backend.clone();
+        self.search_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SEARCH_DELAY).await;
+            let query = text.clone();
+            let found = cx
+                .background_spawn(async move { backend.search(&query) })
+                .await;
+            this.update(cx, |this, cx| {
+                let Ok(found) = found else {
+                    return;
+                };
+                this.comment_hits = found
+                    .into_iter()
+                    .map(|hit| {
+                        let key = this.sync.key_of(hit.id).unwrap_or_else(|| key_for(hit.id));
+                        (key, hit.comment)
+                    })
+                    .collect();
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    pub fn set_avatar(&mut self, avatar: Option<Avatar>, cx: &mut Context<Self>) {
+        self.avatar = avatar;
         cx.notify();
     }
 
@@ -711,7 +703,6 @@ impl OutlineView {
             let focus = Focus {
                 key: key.to_string(),
                 pos,
-                note: false,
             };
             self.apply(Some(change), Some(focus), before, window, cx);
             return;
@@ -811,30 +802,10 @@ impl OutlineView {
 
     fn on_title(&mut self, key: &str, title: &str, composing: bool, cx: &mut Context<Self>) {
         let next = rename(&self.outline, key, title);
-        self.history
-            .type_text(&self.outline, &next, key, Field::Title, composing);
+        self.history.type_text(&self.outline, &next, key, composing);
         self.outline = next;
         let now = cx.background_executor().now();
         self.sync.title(key, title, now);
-        self.schedule_flush(cx);
-        self.keep([key.to_string()]);
-        cx.notify();
-    }
-
-    fn on_note(
-        &mut self,
-        key: &str,
-        note: &str,
-        composing: bool,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let next = set_note(&self.outline, key, note);
-        self.history
-            .type_text(&self.outline, &next, key, Field::Note, composing);
-        self.outline = next;
-        let now = cx.background_executor().now();
-        self.sync.note(key, note, now);
         self.schedule_flush(cx);
         self.keep([key.to_string()]);
         cx.notify();
@@ -873,10 +844,13 @@ impl OutlineView {
                     })
                     .await;
                 let next = this.update(cx, |this, cx| {
-                    this.sync.finish(reply.map_err(|_| ()));
+                    if let Some(saved) = this.sync.finish(reply.map_err(|_| ())) {
+                        this.comment_saved(saved, cx);
+                    }
                     let next = this.sync.start();
                     if next.is_none() {
                         this.check_failed(cx);
+                        this.sync_thread(cx);
                     }
                     next
                 });
@@ -891,10 +865,9 @@ impl OutlineView {
 
     fn check_failed(&mut self, cx: &mut Context<Self>) {
         if self.sync.failed {
-            self.title_field
-                .update(cx, |field, cx| field.set_read_only(true, cx));
-            self.note_field
-                .update(cx, |field, cx| field.set_read_only(true, cx));
+            for field in [&self.title_field, &self.composer, &self.comment_field] {
+                field.update(cx, |field, cx| field.set_read_only(true, cx));
+            }
             cx.notify();
         }
     }
@@ -952,43 +925,18 @@ impl OutlineView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(editing) = self
+        let Some(key) = self
             .editing
             .clone()
-            .filter(|editing| !editing.note && self.outline.contains(&editing.key))
+            .filter(|key| self.outline.contains(key))
         else {
             return;
         };
         match event {
             FieldEvent::Changed { composing } => {
                 let text = field.read(cx).text().to_string();
-                if self.outline.get(&editing.key).map(|item| &item.title) != Some(&text) {
-                    self.on_title(&editing.key, &text, *composing, cx);
-                }
-            }
-            FieldEvent::CompositionEnded => self.history.composed(),
-        }
-    }
-
-    fn on_note_event(
-        &mut self,
-        field: &Entity<TextField>,
-        event: &FieldEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(editing) = self
-            .editing
-            .clone()
-            .filter(|editing| editing.note && self.outline.contains(&editing.key))
-        else {
-            return;
-        };
-        match event {
-            FieldEvent::Changed { composing } => {
-                let text = field.read(cx).text().to_string();
-                if self.outline.get(&editing.key).map(|item| &item.note) != Some(&text) {
-                    self.on_note(&editing.key, &text, *composing, window, cx);
+                if self.outline.get(&key).map(|item| &item.title) != Some(&text) {
+                    self.on_title(&key, &text, *composing, cx);
                 }
             }
             FieldEvent::CompositionEnded => self.history.composed(),
@@ -1005,21 +953,17 @@ impl OutlineView {
         if let FieldEvent::Changed { .. } = event {
             self.query = field.read(cx).text().to_string();
             self.kept.clear();
+            self.search_comments(cx);
             cx.notify();
         }
     }
 
     fn title_context(&self, cx: &App) -> Option<(Key, usize, Vec<Row>, usize)> {
-        let editing = self.editing.as_ref()?;
+        let key = self.editing.as_ref()?;
         let rows = self.rows();
-        let index = rows.iter().position(|row| row.key == editing.key)?;
-        let field = if editing.note {
-            &self.note_field
-        } else {
-            &self.title_field
-        };
-        let pos = field.read(cx).selection().start;
-        Some((editing.key.clone(), pos, rows, index))
+        let index = rows.iter().position(|row| &row.key == key)?;
+        let pos = self.title_field.read(cx).selection().start;
+        Some((key.clone(), pos, rows, index))
     }
 
     fn on_undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
@@ -1045,50 +989,15 @@ impl OutlineView {
     }
 
     fn on_open_move(&mut self, _: &OpenMove, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(mut here) = self.focused(cx) else {
+        let Some(here) = self.focused(cx) else {
             return;
         };
-        if here.note {
-            here = Focus {
-                key: here.key,
-                pos: END,
-                note: false,
-            };
-        }
         self.open_move(here, window, cx);
     }
 
     fn on_complete(&mut self, _: &Complete, window: &mut Window, cx: &mut Context<Self>) {
         let Some(here) = self.focused(cx) else { return };
-        let pos = if here.note { END } else { here.pos };
-        self.complete(&here.key, pos, window, cx);
-    }
-
-    pub fn open_note(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if self
-            .editing
-            .as_ref()
-            .is_some_and(|editing| editing.key == key && editing.note)
-        {
-            return;
-        }
-        self.leave_editor(window, cx);
-        self.editing = None;
-        self.note_key = Some(key.to_string());
-        self.focus_row(
-            Focus {
-                key: key.to_string(),
-                pos: END,
-                note: true,
-            },
-            window,
-            cx,
-        );
-    }
-
-    fn on_open_note(&mut self, _: &OpenNote, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(here) = self.focused(cx) else { return };
-        self.open_note(&here.key, window, cx);
+        self.complete(&here.key, here.pos, window, cx);
     }
 
     fn on_split(&mut self, _: &Split, window: &mut Window, cx: &mut Context<Self>) {
@@ -1110,11 +1019,7 @@ impl OutlineView {
             return;
         };
         let change = indent(&self.outline, &key, &Self::shown(&rows));
-        let here = Focus {
-            key,
-            pos,
-            note: false,
-        };
+        let here = Focus { key, pos };
         self.apply(change, Some(here.clone()), Some(here), window, cx);
     }
 
@@ -1123,11 +1028,7 @@ impl OutlineView {
             return;
         };
         let change = outdent(&self.outline, &key);
-        let here = Focus {
-            key,
-            pos,
-            note: false,
-        };
+        let here = Focus { key, pos };
         self.apply(change, Some(here.clone()), Some(here), window, cx);
     }
 
@@ -1136,11 +1037,7 @@ impl OutlineView {
             return;
         };
         let change = move_by(&self.outline, &key, step, &Self::shown(&rows));
-        let here = Focus {
-            key,
-            pos,
-            note: false,
-        };
+        let here = Focus { key, pos };
         self.apply(change, Some(here.clone()), Some(here), window, cx);
     }
 
@@ -1184,7 +1081,6 @@ impl OutlineView {
         let focus = Focus {
             key: target.key.clone(),
             pos: offset_from_utf16(next_title, units),
-            note: false,
         };
         self.focus_row(focus, window, cx);
     }
@@ -1209,7 +1105,7 @@ impl OutlineView {
             return;
         };
         let item = self.outline.item(&key);
-        if item.title.is_empty() && item.note.is_empty() && item.children.is_empty() {
+        if item.title.is_empty() && item.comments == 0 && item.children.is_empty() {
             self.remove_row(&key, window, cx);
             return;
         }
@@ -1219,60 +1115,6 @@ impl OutlineView {
             return;
         }
         cx.propagate();
-    }
-
-    fn on_back_to_title(&mut self, _: &BackToTitle, window: &mut Window, cx: &mut Context<Self>) {
-        if self.note_field.read(cx).is_composing() {
-            return;
-        }
-        let Some(here) = self.focused(cx) else { return };
-        self.focus_row(
-            Focus {
-                key: here.key,
-                pos: END,
-                note: false,
-            },
-            window,
-            cx,
-        );
-    }
-
-    fn on_note_up(&mut self, _: &NoteUp, window: &mut Window, cx: &mut Context<Self>) {
-        let field = self.note_field.read(cx);
-        let caret_at_start = field.selection() == (0..0);
-        let Some(here) = self.focused(cx).filter(|_| caret_at_start) else {
-            cx.propagate();
-            return;
-        };
-        self.focus_row(
-            Focus {
-                key: here.key,
-                pos: END,
-                note: false,
-            },
-            window,
-            cx,
-        );
-    }
-
-    fn on_note_down(&mut self, _: &NoteDown, window: &mut Window, cx: &mut Context<Self>) {
-        let field = self.note_field.read(cx);
-        let len = field.text().len();
-        let caret_at_end = field.selection() == (len..len);
-        let Some((_, _, rows, index)) = self.title_context(cx).filter(|_| caret_at_end) else {
-            cx.propagate();
-            return;
-        };
-        let Some(next) = rows.get(index + 1) else {
-            cx.propagate();
-            return;
-        };
-        let focus = Focus {
-            key: next.key.clone(),
-            pos: 0,
-            note: false,
-        };
-        self.focus_row(focus, window, cx);
     }
 
     fn on_close_filter(&mut self, _: &CloseFilter, window: &mut Window, cx: &mut Context<Self>) {
@@ -1309,16 +1151,11 @@ impl OutlineView {
             Focus {
                 key: key.to_string(),
                 pos,
-                note: false,
             },
             window,
             cx,
         );
-        if self
-            .editing
-            .as_ref()
-            .is_some_and(|editing| editing.key == key && !editing.note)
-        {
+        if self.editing.as_deref() == Some(key) {
             self.title_field
                 .update(cx, super::text_field::TextField::begin_mouse_selection);
         }
@@ -1458,15 +1295,9 @@ impl OutlineView {
         let item = self.outline.item(&row.key);
         let key = row.key.clone();
         let has_children = !item.children.is_empty();
-        let editing_title = self
-            .editing
-            .as_ref()
-            .is_some_and(|editing| editing.key == key && !editing.note);
-        let editing_note = self.note_key.as_deref() == Some(key.as_str());
-        let active = self
-            .editing
-            .as_ref()
-            .is_some_and(|editing| editing.key == key);
+        let editing_title = self.editing.as_ref() == Some(&key);
+        let active = editing_title;
+        let threaded = self.thread.as_ref().is_some_and(|thread| thread.key == key);
         let muted_text = item.done || row.under;
         let base = if muted_text {
             colors.muted
@@ -1686,104 +1517,46 @@ impl OutlineView {
                 .into_any_element()
         };
 
-        let note: Option<AnyElement> = if editing_note {
-            Some(
+        let query = self.query.trim().to_lowercase();
+        let hit = self
+            .comment_hits
+            .get(&key)
+            .filter(|_| !query.is_empty())
+            .map(|comment| {
+                let shown = snippet(comment, &query, 60);
+                let mirror = mirror_for(
+                    &shown,
+                    &self.query,
+                    &colors,
+                    colors.muted,
+                    false,
+                    false,
+                    &window.text_style().font(),
+                );
+                let text = ClampedText::new(
+                    mirror.text.clone(),
+                    mirror.runs.clone(),
+                    Some(1),
+                    colors.muted,
+                    TextHits::default(),
+                )
+                .with_icons(mirror.icons.clone(), Icon::Link.path(), colors.accent);
+                let selector_key = key.clone();
                 div()
+                    .debug_selector(move || format!("comment-hit-{selector_key}"))
                     .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .mt(px(-4.))
-                            .px(px(4.))
-                            .pb(px(6.))
-                            .text_size(px(13.))
-                            .line_height(px(20.))
-                            .text_color(colors.text)
-                            .child(self.note_field.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap(px(4.))
-                            .px(px(4.))
-                            .pb(px(8.))
-                            .text_size(px(12.))
-                            .text_color(colors.muted)
-                            .child(kbd("Enter", cx))
-                            .child("new line \u{00b7}")
-                            .child(kbd("\u{21e7}", cx))
-                            .child(kbd("Enter", cx))
-                            .child("or")
-                            .child(kbd("Esc", cx))
-                            .child("back to the title"),
-                    )
-                    .into_any_element(),
-            )
-        } else if !item.note.is_empty() {
-            let whole = !self.query.trim().is_empty()
-                && item
-                    .note
-                    .to_lowercase()
-                    .contains(&self.query.trim().to_lowercase());
-            let mirror = Rc::new(mirror_for(
-                &item.note,
-                &self.query,
-                &colors,
-                colors.muted,
-                false,
-                false,
-                &window.text_style().font(),
-            ));
-            let hits = TextHits::default();
-            let text = ClampedText::new(
-                mirror.text.clone(),
-                mirror.runs.clone(),
-                (!whole).then_some(2),
-                colors.muted,
-                hits.clone(),
-            )
-            .with_icons(mirror.icons.clone(), Icon::Link.path(), colors.accent);
-            let note_key = key.clone();
-            Some(
-                div()
-                    .id("note")
+                    .items_center()
+                    .gap(px(6.))
+                    .min_w_0()
                     .mt(px(-4.))
                     .mb(px(6.))
                     .px(px(4.))
                     .text_size(px(13.))
                     .line_height(px(20.))
                     .text_color(colors.muted)
-                    .cursor_text()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                        let clicked_link = hits
-                            .index_for(event.position())
-                            .and_then(|index| mirror.link_at(index));
-                        match clicked_link {
-                            Some(href) => {
-                                if let Some(target) = link_target(href) {
-                                    cx.open_url(&target);
-                                }
-                            }
-                            None => this.focus_row(
-                                Focus {
-                                    key: note_key.clone(),
-                                    pos: END,
-                                    note: false,
-                                },
-                                window,
-                                cx,
-                            ),
-                        }
-                    }))
-                    .child(text)
-                    .into_any_element(),
-            )
-        } else {
-            None
-        };
+                    .child(icon(Icon::Comment, 13., colors.muted))
+                    .child(div().flex_1().min_w_0().child(text))
+            });
 
         let title = div()
             .flex()
@@ -1791,45 +1564,50 @@ impl OutlineView {
             .flex_1()
             .min_w_0()
             .child(line)
-            .children(note);
+            .children(hit);
 
-        let note_button = {
+        let comment_button = {
             let key = key.clone();
+            let count = item.comments;
+            let color = if threaded {
+                colors.on_accent
+            } else {
+                colors.muted
+            };
+            let selector_key = key.clone();
             div()
-                .id("note-button")
+                .id("comment-button")
+                .debug_selector(move || format!("comments-{selector_key}"))
                 .flex()
                 .flex_none()
                 .items_center()
                 .justify_center()
-                .size(px(28.))
+                .gap(px(3.))
+                .h(px(28.))
+                .min_w(px(28.))
+                .px(px(5.))
                 .mt(px(3.))
                 .rounded(px(8.))
+                .text_size(px(13.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(color)
                 .cursor_pointer()
-                .when(!active, |button| {
+                .when(threaded, |button| button.bg(colors.accent))
+                .when(!threaded, |button| {
+                    button.hover(move |style| style.bg(colors.hover_strong_on_bg))
+                })
+                .when(!active && !threaded && count == 0, |button| {
                     button
                         .opacity(0.)
                         .group_hover(group.clone(), |style| style.opacity(1.))
                 })
-                .hover(move |style| style.bg(colors.hover_strong_on_bg))
-                .tooltip(Tooltip::text("Note (\u{21e7} Enter)"))
+                .tooltip(Tooltip::text("Comments (\u{21e7} Enter)"))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    let open = this.note_key.as_deref() == Some(key.as_str());
-                    if open {
-                        this.focus_row(
-                            Focus {
-                                key: key.clone(),
-                                pos: END,
-                                note: false,
-                            },
-                            window,
-                            cx,
-                        );
-                    } else {
-                        this.open_note(&key, window, cx);
-                    }
+                    this.open_comments(&key, window, cx);
                 }))
-                .child(icon(Icon::Note, 17., colors.muted))
+                .child(icon(Icon::Comment, 17., color))
+                .when(count > 0, |button| button.child(count.to_string()))
         };
 
         let check = {
@@ -1867,12 +1645,15 @@ impl OutlineView {
             .min_h(px(34.))
             .pl(px(28.))
             .rounded(px(9.))
-            .when(active, |row| row.bg(colors.hover_on_bg))
-            .hover(move |style| style.bg(colors.hover_on_bg))
+            .when(threaded, |row| row.bg(colors.accent_soft_on_bg))
+            .when(active && !threaded, |row| row.bg(colors.hover_on_bg))
+            .when(!threaded, |row| {
+                row.hover(move |style| style.bg(colors.hover_on_bg))
+            })
             .children(guides)
             .child(marker)
             .child(title)
-            .child(note_button)
+            .child(comment_button)
             .child(check)
             .into_any_element()
     }
@@ -1980,12 +1761,8 @@ impl Render for OutlineView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if std::mem::take(&mut self.needs_editor_check) {
             self.detach_if_hidden(window, cx);
-            if let Some(note_key) = self.note_key.clone()
-                && !self.outline.contains(&note_key)
-            {
-                self.note_key = None;
-            }
         }
+        self.sync_thread(cx);
         let colors = theme(cx);
         let rows = self.rows();
         let lines = guides(&rows);
@@ -2095,6 +1872,7 @@ impl Render for OutlineView {
                 .child(part)
         });
 
+        let thread = self.render_thread(window, cx);
         let picker = self.picker.clone().map(|picker| {
             let backdrop = cx.entity().downgrade();
             modal(
@@ -2116,14 +1894,14 @@ impl Render for OutlineView {
             .track_focus(&self.focus_handle)
             .size_full()
             .flex()
-            .flex_col()
             .text_color(colors.text)
             .on_action(cx.listener(Self::on_undo))
             .on_action(cx.listener(Self::on_toggle_collapse))
             .on_action(cx.listener(Self::on_delete_row))
             .on_action(cx.listener(Self::on_open_move))
             .on_action(cx.listener(Self::on_complete))
-            .on_action(cx.listener(Self::on_open_note))
+            .on_action(cx.listener(Self::on_open_comments))
+            .on_action(cx.listener(Self::on_close_comments))
             .on_action(cx.listener(Self::on_split))
             .on_action(cx.listener(Self::on_indent))
             .on_action(cx.listener(Self::on_outdent))
@@ -2134,16 +1912,13 @@ impl Render for OutlineView {
             .on_action(cx.listener(Self::on_prev_row))
             .on_action(cx.listener(Self::on_next_row))
             .on_action(cx.listener(Self::on_title_backspace))
-            .on_action(cx.listener(Self::on_back_to_title))
-            .on_action(cx.listener(Self::on_note_up))
-            .on_action(cx.listener(Self::on_note_down))
-            .on_action(|_: &NoteTab, _, _| {})
             .on_key_down(cx.listener(Self::on_key_down))
             .child(
                 div()
                     .id("outline-scroll")
                     .flex_1()
-                    .min_h_0()
+                    .min_w_0()
+                    .h_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
                     .on_mouse_down(
@@ -2158,9 +1933,13 @@ impl Render for OutlineView {
                     .pb(px(26.))
                     .children(page),
             )
+            .children(thread)
             .children(picker)
     }
 }
+
+#[path = "thread_pane.rs"]
+mod thread_pane;
 
 #[cfg(test)]
 #[path = "outline_view_tests.rs"]
