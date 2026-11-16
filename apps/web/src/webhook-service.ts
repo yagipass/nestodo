@@ -6,7 +6,7 @@ import { ValidationError } from "void/handler";
 import { webhooks } from "@schema";
 import { sqliteTime } from "./time";
 import { webhookCandidatesOf } from "./todo-service";
-import { todosAwaitingNote } from "./todos";
+import { todosAwaitingComment } from "./todos";
 import { nextWebhookTarget, openWebhookTarget, sealWebhookTarget, visibleWebhookTarget, webhookRequest, webhookTargetProblem, type WebhookEdit, type WebhookTarget } from "./webhooks";
 
 const SEND_TIMEOUT = 10_000;
@@ -95,7 +95,7 @@ async function attempt(webhook: Webhook, waiting: Parameters<typeof webhookReque
 }
 
 async function sendTo(webhook: Webhook, now: Date) {
-  const waiting = todosAwaitingNote(await webhookCandidatesOf(webhook.userId, now), webhook.project, now);
+  const waiting = todosAwaitingComment(await webhookCandidatesOf(webhook.userId, now), webhook.project, now);
   if (waiting.length === 0) return null;
   const lastError = await attempt(webhook, waiting);
   await db

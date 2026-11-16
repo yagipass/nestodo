@@ -19,11 +19,14 @@ const SHORTCUTS: { name: string; shortcuts: Shortcut[] }[] = [
     ],
   },
   {
-    name: "Notes",
+    name: "Comments",
     shortcuts: [
-      ["Write a note under the item", "⇧ Enter"],
-      ["Back to the title", "⇧ Enter / Esc", "in a note"],
-      ["New line", "Enter", "in a note"],
+      ["Open the item's comments", "⇧ Enter"],
+      ["Post", "⇧ Enter / Ctrl/⌘ Enter", "in a comment"],
+      ["New line", "Enter", "in a comment"],
+      ["Back to the item", "Esc", "in the comment box"],
+      ["Stop editing a comment", "Esc", "while editing"],
+      ["Close the comments", "Esc", "on an item"],
     ],
   },
   {
@@ -83,7 +86,7 @@ function ShortcutsDialog({ ref, onClose }: { ref: RefObject<HTMLDialogElement | 
             <h3>{name}</h3>
             <ul>
               {shortcuts.map(([action, keys, note]) => (
-                <li key={keys}>
+                <li key={`${action} ${keys}`}>
                   {action}
                   <span className="shortcut-keys">
                     {keys.split(" ").map((key, index) => (key === "/" && index > 0 ? <span key={index}>/</span> : <kbd key={index}>{key}</kbd>))}

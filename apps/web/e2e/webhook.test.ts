@@ -21,9 +21,9 @@ async function received() {
   return json<Received[]>(await fetch(`${receiver.url}/received`));
 }
 
-async function addUnderProject(client: Session, title: string, note = "") {
+async function addUnderProject(client: Session, title: string, comment?: string) {
   const root = await client.createTodo(PROJECT);
-  return client.createTodo(title, { parentId: root.id, note });
+  return client.createTodo(title, { parentId: root.id, comment });
 }
 
 function secret(name: string, value: string): WebhookHeader {
@@ -47,7 +47,7 @@ beforeEach(async () => {
 });
 
 describe("sending waiting todos to a webhook", () => {
-  it("sends a todo's title and note with the token once it has sat 3 minutes without a note, so the receiver can act without reading the app", async () => {
+  it("sends a todo's title and comments with the token once it has sat 3 minutes with nothing but a link, so the receiver can act without reading the app", async () => {
     const client = await memberWithWebhook(hook("mine"), "e2e-token");
     const todo = await addUnderProject(client, "read the Workers changelog", "https://developers.cloudflare.com/workers/");
 
@@ -61,14 +61,14 @@ describe("sending waiting todos to a webhook", () => {
         body: {
           event: "todos.awaiting_note",
           project: PROJECT,
-          todos: [{ id: todo.id, title: "read the Workers changelog", note: "https://developers.cloudflare.com/workers/" }],
+          todos: [{ id: todo.id, title: "read the Workers changelog", comments: ["https://developers.cloudflare.com/workers/"] }],
         },
       },
     ]);
     expect((await client.settings()).webhook).toMatchObject({ lastError: null, lastSentAt: expect.any(String) });
   });
 
-  it("sends nothing while every todo under the project has a note, so the receiver is not called for nothing", async () => {
+  it("sends nothing while every todo under the project has a comment of its own, so the receiver is not called for nothing", async () => {
     const client = await memberWithWebhook(hook("mine"));
     await addUnderProject(client, "read the Workers changelog", "check what changed in cron triggers");
 

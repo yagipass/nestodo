@@ -12,7 +12,7 @@ type WebhookField = "url" | "headers";
 
 type NextTarget = { target: WebhookTarget; field: null; problem: null } | { target: null; field: WebhookField; problem: string };
 
-type Waiting = { id: number; title: string; note: string };
+type Waiting = { id: number; title: string; comments: readonly string[] };
 
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const HEADER_VALUE = /^[\x20-\x7e]+$/;
@@ -101,7 +101,7 @@ export function webhookRequest({ token, headers: listed }: WebhookTarget, projec
     body: JSON.stringify({
       event: WEBHOOK_EVENT,
       project,
-      todos: waiting.map(({ id, title, note }) => ({ id, title, note })),
+      todos: waiting.map(({ id, title, comments }) => ({ id, title, comments })),
     }),
   } satisfies RequestInit;
 }

@@ -99,19 +99,18 @@ function reachingAny(rows: readonly Placed[], ancestorIds: ReadonlySet<number>) 
   return reaches;
 }
 
-type Noted = Placed & { title: string; note: string; completedAt: string | null; createdAt: string };
+type Commented = Placed & { title: string; comments: readonly string[]; completedAt: string | null; createdAt: string };
 
-function lacksNote(note: string) {
-  const trimmed = note.trim();
-  return trimmed === "" || /^https?:\/\/\S+$/i.test(trimmed);
+function isLinkOnly(comment: string) {
+  return /^https?:\/\/\S+$/i.test(comment.trim());
 }
 
-export function awaitingNoteWindow(now: Date) {
+export function awaitingCommentWindow(now: Date) {
   return { since: sqliteTime(now.getTime() - 13 * MINUTE), until: sqliteTime(now.getTime() - 3 * MINUTE) };
 }
 
-export function todosAwaitingNote<T extends Noted>(rows: readonly T[], rootTitle: string, now: Date): T[] {
-  const { since, until } = awaitingNoteWindow(now);
+export function todosAwaitingComment<T extends Commented>(rows: readonly T[], rootTitle: string, now: Date): T[] {
+  const { since, until } = awaitingCommentWindow(now);
   const parents = new Set(rows.map((row) => row.parentId));
   const roots = new Set(rows.filter((row) => row.parentId === null && row.title.trim() === rootTitle).map((row) => row.id));
   const underRoot = reachingAny(rows, roots);
@@ -122,7 +121,7 @@ export function todosAwaitingNote<T extends Noted>(rows: readonly T[], rootTitle
       !parents.has(row.id) &&
       since < row.createdAt &&
       row.createdAt <= until &&
-      lacksNote(row.note) &&
+      row.comments.every((comment) => comment.trim() === "" || isLinkOnly(comment)) &&
       row.title.trim() !== "" &&
       underRoot.get(row.id) === true,
   );
@@ -130,7 +129,7 @@ export function todosAwaitingNote<T extends Noted>(rows: readonly T[], rootTitle
 
 export const MAX_TITLE_LENGTH = 2000;
 
-export const MAX_NOTE_LENGTH = 10000;
+export const MAX_COMMENT_LENGTH = 10000;
 
 export const MAX_DEPTH = 64;
 

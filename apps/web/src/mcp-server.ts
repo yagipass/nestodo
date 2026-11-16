@@ -4,9 +4,9 @@ import { z } from "zod";
 import { isTimeZone } from "./stats";
 import { activityOf } from "./stats-service";
 import { inUtc } from "./time";
-import { createTodoBody, patchTodoBody } from "./todo-schemas";
-import { createTodo, getTodo, listTodos, updateTodo } from "./todo-service";
-import { KEEP_COMPLETED_DAYS, MAX_DEPTH, MAX_NOTE_LENGTH, MAX_TITLE_LENGTH } from "./todos";
+import { commentBody, createTodoBody, patchTodoBody } from "./todo-schemas";
+import { addComment, createTodo, getTodo, listTodos, timelineOf, updateTodo } from "./todo-service";
+import { KEEP_COMPLETED_DAYS, MAX_COMMENT_LENGTH, MAX_DEPTH, MAX_TITLE_LENGTH } from "./todos";
 
 const notFound = { error: "not_found", message: "Todo not found" };
 
@@ -40,7 +40,7 @@ export function nestodoMcpServer(userId: string) {
     "list_todos",
     {
       title: "List todos",
-      description: `List every todo of the signed-in user in outline order. parentId is the todo it is nested under, note is what the member wrote under the title, such as details or links, and is empty when there is none, createdAt is when it was added, and completedAt is when it was completed, or null while the todo is open. Both times are in UTC as ISO 8601. Completed todos are removed from this list ${KEEP_COMPLETED_DAYS} days after they were completed, or later while a todo under them is kept, so this is not a full history of finished work; get_stats still counts them on the days they were completed.`,
+      description: `List every todo of the signed-in user in outline order. parentId is the todo it is nested under, commentCount is how many comments the member's work log on it has, which get_timeline shows, createdAt is when it was added, and completedAt is when it was completed, or null while the todo is open. Both times are in UTC as ISO 8601. Completed todos are removed from this list ${KEEP_COMPLETED_DAYS} days after they were completed, or later while a todo under them is kept, so this is not a full history of finished work; get_stats still counts them on the days they were completed.`,
       annotations: { readOnlyHint: true },
     },
     async () => reply({ todos: (await listTodos(userId)).map(withUtcTimes) }),
@@ -65,11 +65,11 @@ export function nestodoMcpServer(userId: string) {
     {
       title: "Add a todo",
       description:
-        "Add a todo, at the top level or under another todo, optionally with a note under its title. Adding it under a completed todo reopens that todo and the completed todos above it, since a completed todo never has open todos under it.",
+        "Add a todo, at the top level or under another todo, optionally with a first comment in its work log. Adding it under a completed todo reopens that todo and the completed todos above it, since a completed todo never has open todos under it.",
       inputSchema: createTodoBody.extend({
         title: createTodoBody.shape.title.describe(`Title, up to ${MAX_TITLE_LENGTH} characters`),
-        note: createTodoBody.shape.note.describe(
-          `Note shown under the title for details that do not fit in it, such as links, up to ${MAX_NOTE_LENGTH} characters; omit for none`,
+        comment: createTodoBody.shape.comment.describe(
+          `First comment in the todo's work log, for details that do not fit in the title, such as links, up to ${MAX_COMMENT_LENGTH} characters; omit for none`,
         ),
         parentId: createTodoBody.shape.parentId.describe(
           `Id of the todo to nest it under, so that it is at most ${MAX_DEPTH} levels deep; omit for the top level`,
@@ -78,7 +78,7 @@ export function nestodoMcpServer(userId: string) {
       }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
-    async (input) => refusingRejections(async () => reply({ todo: withUtcTimes(await createTodo(userId, input)) })),
+    async (input) => refusingRejections(async () => reply({ todo: withUtcTimes(await createTodo(userId, input, "mcp")) })),
   );
 
   server.registerTool(
@@ -86,11 +86,10 @@ export function nestodoMcpServer(userId: string) {
     {
       title: "Edit a todo",
       description:
-        "Rename, complete, reopen, collapse or move a todo, or change its note. Only the fields given change. A completed todo never has open todos under it: completing a todo also completes every open todo under it and returns their ids as completedUnder, and reopening a todo, or moving an open todo into a completed todo, reopens the completed todos above it.",
+        "Rename, complete, reopen, collapse or move a todo. Only the fields given change. To write down progress, use add_comment instead. A completed todo never has open todos under it: completing a todo also completes every open todo under it and returns their ids as completedUnder, and reopening a todo, or moving an open todo into a completed todo, reopens the completed todos above it.",
       inputSchema: patchTodoBody.extend({
         id,
         title: patchTodoBody.shape.title.describe("New title"),
-        note: patchTodoBody.shape.note.describe("New note shown under the title, replacing the whole note; an empty string removes it"),
         completed: patchTodoBody.shape.completed.describe(
           "true to complete it and every open todo under it, false to reopen it and the completed todos above it",
         ),
@@ -111,6 +110,39 @@ export function nestodoMcpServer(userId: string) {
         const todo = withUtcTimes(updated.todo);
         return reply(changes.completed === true ? { todo, completedUnder: updated.completedUnder } : { todo });
       }),
+  );
+
+  server.registerTool(
+    "get_timeline",
+    {
+      title: "Show a todo's work log",
+      description:
+        "Show the work log of one todo, oldest first: when it was created, completed and reopened, and the comments written on it. via is mcp for comments an assistant added with add_comment and app for the member's own. Times are in UTC as ISO 8601, and editedAt is when a comment was last changed, or null.",
+      inputSchema: z.object({ id }),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ id }) => {
+      const items = await timelineOf(userId, id);
+      return items ? reply({ items }) : refuse(notFound);
+    },
+  );
+
+  server.registerTool(
+    "add_comment",
+    {
+      title: "Comment on a todo",
+      description:
+        "Add a comment to the end of a todo's work log, such as what was done, what was found or a summary of a link. The member sees it marked as added through MCP.",
+      inputSchema: z.object({
+        id,
+        body: commentBody.describe(`The comment, up to ${MAX_COMMENT_LENGTH} characters; line breaks are kept`),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async ({ id, body }) => {
+      const comment = await addComment(userId, id, body, "mcp");
+      return comment ? reply({ comment }) : refuse(notFound);
+    },
   );
 
   server.registerTool(

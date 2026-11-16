@@ -438,7 +438,7 @@ export default function SettingsPage({ available, webhook, analytics, appearance
             )}
           </div>
           <p className="card-note">
-            Within 13 minutes of adding a todo with no note or only a link, its id, title and note are sent to this URL.
+            Within 13 minutes of adding a todo with no comments or only a link, its id, title and comments are sent to this URL.
           </p>
           {available ? (
             <>

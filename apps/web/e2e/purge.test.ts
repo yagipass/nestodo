@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vite-plus/test";
-import { archiveDirectly, archivedTodos, reopenDirectly, runCron, Session, setParentDirectly, signedInUser, triggerCron } from "./helpers";
+import { archiveDirectly, archivedTodos, reopenDirectly, runCron, Session, setParentDirectly, signedInUser, storedComments, triggerCron } from "./helpers";
 
 const DAILY = "0 18 * * *";
 const HOUR = 3_600_000;
@@ -108,10 +108,10 @@ describe("the daily cleanup of completed todos", () => {
     expect(await client.stats("UTC")).toEqual(before);
   });
 
-  it("keeps what a todo said and when it was added and completed after it leaves the list, so finished work can be looked back on", async () => {
+  it("keeps what a todo said, its comments and when it was added and completed after it leaves the list, so finished work can be looked back on", async () => {
     const email = `${randomUUID()}@e2e.test`;
     const client = await signedInUser(email);
-    const done = await client.createTodo("renew passport", { note: "bring two photos" });
+    const done = await client.createTodo("renew passport", { comment: "bring two photos" });
     await client.patch(done.id, { completed: true });
     const [completed] = await client.todos();
 
@@ -119,8 +119,9 @@ describe("the daily cleanup of completed todos", () => {
 
     expect(await client.todos()).toEqual([]);
     expect(archivedTodos(email)).toEqual([
-      { path: [], title: "renew passport", note: "bring two photos", createdAt: completed.createdAt, completedAt: completed.completedAt },
+      { path: [], title: "renew passport", createdAt: completed.createdAt, completedAt: completed.completedAt },
     ]);
+    expect(storedComments(email)).toEqual([{ todoId: done.id, body: "bring two photos" }]);
   });
 
   it("keeps the titles a todo was under when it left the list, so it stays in context after they are renamed or deleted", async () => {

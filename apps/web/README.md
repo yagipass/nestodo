@@ -8,15 +8,17 @@ On macOS or Windows, open the site in Chrome or Edge and click the install icon 
 
 ## Webhook
 
-In **Settings**, enter a URL, an optional bearer token or other headers, and the title of a top-level todo. Within 13 minutes of adding a todo under it with no note or only a link, the server receives its id, title and note:
+In **Settings**, enter a URL, an optional bearer token or other headers, and the title of a top-level todo. Within 13 minutes of adding a todo under it with no comments or only a link, the server receives its id, title and comments:
 
 ```json
 {
   "event": "todos.awaiting_note",
   "project": "Reading list",
-  "todos": [{ "id": 12, "title": "Read the changelog", "note": "https://example.com" }]
+  "todos": [{ "id": 12, "title": "Read the changelog", "comments": ["https://example.com"] }]
 }
 ```
+
+To answer, add a comment to the todo with the MCP tool `add_comment`.
 
 A failed send is not retried. The reason appears in **Settings**.
 

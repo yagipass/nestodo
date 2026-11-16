@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import { fromTodos, indent, rename, setNote, split, visibleRows, type Outline } from "./outline";
+import { fromTodos, indent, rename, split, visibleRows, type Outline } from "./outline";
 import { UndoHistory } from "./undo";
 
-function todo(id: number, title: string, note = "") {
-  return { id, title, note, parentId: null, completedAt: null, collapsed: false };
+function todo(id: number, title: string) {
+  return { id, title, commentCount: 0, parentId: null, completedAt: null, collapsed: false };
 }
 
 function shown(outline: Outline) {
@@ -16,12 +16,7 @@ function typing(history: UndoHistory) {
   return {
     title(outline: Outline, key: string, title: string, composing = false) {
       const next = rename(outline, key, title);
-      history.type(outline, next, key, "title", composing);
-      return next;
-    },
-    note(outline: Outline, key: string, note: string) {
-      const next = setNote(outline, key, note);
-      history.type(outline, next, key, "note");
+      history.type(outline, next, key, composing);
       return next;
     },
   };
@@ -115,34 +110,34 @@ describe("UndoHistory", () => {
     expect(history.undo(retyped)?.outline.t1.title).toBe("milk!");
   });
 
-  it("puts the cursor where the undone typing was, in the note when the note was typed in", () => {
+  it("puts the cursor where the undone typing was, in the row it was typed in", () => {
     const history = new UndoHistory(() => 0);
     const type = typing(history);
     const prefixed = type.title(start, "t1", "oat milk");
     history.end();
-    const noted = type.note(prefixed, "t2", "free-range");
+    const ranged = type.title(prefixed, "t2", "free-range eggs");
     history.end();
-    const trimmed = type.note(noted, "t2", "free");
+    const trimmed = type.title(ranged, "t2", "free eggs");
 
     const untrimmed = history.undo(trimmed)!;
-    expect(untrimmed.focus).toEqual({ key: "t2", pos: "free-range".length, note: true });
-    const unnoted = history.undo(untrimmed.outline)!;
-    expect(unnoted.focus).toEqual({ key: "t2", pos: 0, note: true });
-    expect(history.undo(unnoted.outline)!.focus).toEqual({ key: "t1", pos: 0, note: false });
+    expect(untrimmed.focus).toEqual({ key: "t2", pos: "free-range".length });
+    const unranged = history.undo(untrimmed.outline)!;
+    expect(unranged.focus).toEqual({ key: "t2", pos: 0 });
+    expect(history.undo(unranged.outline)!.focus).toEqual({ key: "t1", pos: 0 });
   });
 
   it("puts the cursor back where an emoji was typed in front of another emoji, not after the one left, so the next keystroke lands where the undone one was", () => {
     const history = new UndoHistory(() => 0);
     const thumbsUp = typing(history).title(fromTodos([todo(1, "😀 Dentist")]), "t1", "👍😀 Dentist");
 
-    expect(history.undo(thumbsUp)!.focus).toEqual({ key: "t1", pos: 0, note: false });
+    expect(history.undo(thumbsUp)!.focus).toEqual({ key: "t1", pos: 0 });
   });
 
   it("puts the cursor after an emoji whose replacement is undone, never between its two halves, where the next keystroke would break it", () => {
     const history = new UndoHistory(() => 0);
     const pleading = typing(history).title(fromTodos([todo(1, "Dance 🕺")]), "t1", "Dance 🥺");
 
-    expect(history.undo(pleading)!.focus).toEqual({ key: "t1", pos: "Dance 🕺".length, note: false });
+    expect(history.undo(pleading)!.focus).toEqual({ key: "t1", pos: "Dance 🕺".length });
   });
 
   it("keeps every step when reloading brings back the same outline, so switching tabs does not cost the user their undo", () => {
