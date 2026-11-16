@@ -159,7 +159,7 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), Error> {
     let base = cli.base_url.as_ref().ok_or_else(|| {
-        Error::Invalid("no server to connect to; set NESTODO_BASE_URL or pass --base-url".into())
+        Error::Invalid("no server to connect to, so set NESTODO_BASE_URL or pass --base-url".into())
     })?;
     let http = Http::new(cli.verbose);
     let store = SystemStore::new();
@@ -255,7 +255,7 @@ fn todos(command: Command, api: &mut Api, style: Style) -> Result<(), Error> {
             let mut outline = Outline::new(api.list()?);
             for step in outline.plan_moves(&args.ids, args.to, args.after)? {
                 api.move_to(step.id, step.parent, step.index)?;
-                println!("Moved {} → {}", step.id, outline.path(step.parent));
+                println!("Moved {} to {}", step.id, outline.path(step.parent));
             }
         }
         Command::Indent { id } => shift(api, id, Outline::indent, style)?,

@@ -20,7 +20,7 @@ impl fmt::Display for Error {
             Error::Network { url, reason } => write!(f, "could not reach {url}: {reason}"),
             Error::NotSignedIn => write!(
                 f,
-                "you are not signed in or your session has expired; run `nestodo login`"
+                "you are not signed in or your session has expired, so run `nestodo login`"
             ),
             Error::NotProtected { host } => write!(
                 f,
@@ -36,7 +36,10 @@ impl fmt::Display for Error {
             ),
             Error::Login(reason) => write!(f, "login failed: {reason}"),
             Error::NotFound { id } => {
-                write!(f, "todo {id} not found; run `nestodo list` to see the IDs")
+                write!(
+                    f,
+                    "todo {id} not found, so run `nestodo list` to see the IDs"
+                )
             }
             Error::Invalid(message) => write!(f, "{message}"),
             Error::Server { status, message } => {
