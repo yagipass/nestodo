@@ -26,7 +26,11 @@ enum Job {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Saved {
-    Posted { ticket: u64, comment: Comment },
+    Posted {
+        key: Key,
+        ticket: u64,
+        comment: Comment,
+    },
     Edited(Comment),
 }
 
@@ -192,13 +196,17 @@ impl Sync {
                 self.track([(key, id)]);
                 None
             }
-            Job::Comment { ticket, .. } => {
-                let ticket = *ticket;
+            Job::Comment { ticket, key, .. } => {
+                let (ticket, key) = (*ticket, key.clone());
                 let Some(comment) = Self::comment_in(reply) else {
                     self.failed = true;
                     return None;
                 };
-                Some(Saved::Posted { ticket, comment })
+                Some(Saved::Posted {
+                    key,
+                    ticket,
+                    comment,
+                })
             }
             Job::EditComment { .. } => {
                 let Some(comment) = Self::comment_in(reply) else {
@@ -583,8 +591,8 @@ mod tests {
         );
         assert!(matches!(
             h.saved.as_slice(),
-            [Saved::Posted { ticket: posted, comment }]
-                if *posted == ticket && comment.body == "near the station"
+            [Saved::Posted { key, ticket: posted, comment }]
+                if key == "new1" && *posted == ticket && comment.body == "near the station"
         ));
     }
 
@@ -635,6 +643,18 @@ mod tests {
         assert_eq!(h.saved, []);
         assert!(h.sync.failed);
         assert!(h.sync.pending());
+        assert_eq!(h.notified, 1);
+    }
+
+    #[test]
+    fn treats_an_edit_to_a_comment_deleted_on_another_device_as_a_failure_so_editing_pauses_and_the_member_learns_the_edit_was_not_saved()
+     {
+        let mut h = Harness::new(&[], Server::new(|_| 404));
+
+        h.sync.edit_comment(7, "no answer, try Friday");
+        h.run_all_timers();
+
+        assert!(h.sync.failed);
         assert_eq!(h.notified, 1);
     }
 

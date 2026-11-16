@@ -173,11 +173,14 @@ pub fn snippet(body: &str, query: &str, room: usize) -> String {
     let end = (start + room * 2 + q.chars().count()).min(chars.len());
     let text: String = chars[start..end].iter().collect();
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if start > 0 {
-        format!("\u{2026}{text}")
-    } else {
-        text
-    }
+    let cut = |rest: &[char]| {
+        if rest.iter().any(|c| !c.is_whitespace()) {
+            "\u{2026}"
+        } else {
+            ""
+        }
+    };
+    format!("{}{text}{}", cut(&chars[..start]), cut(&chars[end..]))
 }
 
 #[cfg(test)]
@@ -328,6 +331,27 @@ mod tests {
         assert!(shown.starts_with('\u{2026}'));
         assert!(shown.contains("the quote from B"));
         assert!(shown.chars().count() < 40);
+    }
+
+    #[test]
+    fn marks_a_cut_at_the_end_too_so_a_comment_cut_short_does_not_look_complete() {
+        let body = format!("asked about the quote {}", "z ".repeat(100));
+
+        assert!(snippet(&body, "quote", 10).ends_with('\u{2026}'));
+        assert_eq!(snippet("quote it   \n", "quote", 2), "quote it");
+    }
+
+    #[test]
+    fn counts_the_room_around_the_match_in_characters_so_japanese_gets_as_much_context_as_english()
+    {
+        assert_eq!(
+            snippet(
+                "\u{3042}\u{3044}\u{3046}\u{3048}\u{304a}\u{304b}\u{304d}\u{304f}\u{3051}\u{3053}",
+                "\u{304b}",
+                2
+            ),
+            "\u{2026}\u{3048}\u{304a}\u{304b}\u{304d}\u{304f}\u{2026}"
+        );
     }
 
     #[test]

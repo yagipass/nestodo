@@ -28,6 +28,23 @@ pub(super) struct Thread {
     shown_entries: usize,
 }
 
+#[derive(Default)]
+pub(super) struct Draft {
+    text: String,
+    editing: Option<(u64, String)>,
+    pending: Vec<Entry>,
+}
+
+impl Draft {
+    fn is_empty(&self) -> bool {
+        self.text.is_empty() && self.editing.is_none() && self.pending.is_empty()
+    }
+}
+
+fn is_ticket(entry: &Entry, ticket: u64) -> bool {
+    matches!(entry, Entry::Pending { ticket: pending, .. } if *pending == ticket)
+}
+
 impl Thread {
     fn new(key: &str, done: bool) -> Self {
         Thread {
@@ -135,16 +152,44 @@ impl OutlineView {
         if self.thread.as_ref().is_some_and(|thread| thread.key == key) {
             return;
         }
+        self.park_thread(cx);
         let done = self.outline.get(key).is_some_and(|item| item.done);
-        self.thread = Some(Thread::new(key, done));
+        let draft = self.drafts.remove(key).unwrap_or_default();
+        let mut thread = Thread::new(key, done);
+        thread.local = draft.pending;
+        thread.editing = draft.editing.as_ref().map(|(id, _)| *id);
+        self.thread = Some(thread);
         let read_only = self.sync.failed;
-        for field in [&self.composer, &self.comment_field] {
+        let edit = draft.editing.map(|(_, text)| text).unwrap_or_default();
+        for (field, text) in [(&self.composer, draft.text), (&self.comment_field, edit)] {
             field.update(cx, |field, cx| {
-                field.set_text("", 0, cx);
+                field.set_text(&text, text.len(), cx);
                 field.set_read_only(read_only, cx);
             });
         }
         self.fetch_thread(cx);
+    }
+
+    fn park_thread(&mut self, cx: &App) {
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        let draft = Draft {
+            text: self.composer.read(cx).text().to_string(),
+            editing: thread
+                .editing
+                .map(|id| (id, self.comment_field.read(cx).text().to_string())),
+            pending: thread
+                .local
+                .into_iter()
+                .filter(|entry| matches!(entry, Entry::Pending { .. }))
+                .collect(),
+        };
+        if draft.is_empty() {
+            self.drafts.remove(&thread.key);
+        } else {
+            self.drafts.insert(thread.key, draft);
+        }
     }
 
     pub(super) fn follow_caret(&mut self, key: &str, cx: &mut Context<Self>) {
@@ -154,17 +199,11 @@ impl OutlineView {
     }
 
     fn close_comments(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self.thread.take() else {
+        let Some(key) = self.thread.as_ref().map(|thread| thread.key.clone()) else {
             return;
         };
-        self.focus_row(
-            Focus {
-                key: thread.key,
-                pos: END,
-            },
-            window,
-            cx,
-        );
+        self.park_thread(cx);
+        self.focus_row(Focus { key, pos: END }, window, cx);
         cx.notify();
     }
 
@@ -197,10 +236,7 @@ impl OutlineView {
         };
         let Some(id) = self.sync.id_of(&thread.key) else {
             if thread.items.is_none() {
-                thread.items = Some(vec![TimelineItem::Event {
-                    kind: EventKind::Created,
-                    at: Utc::now(),
-                }]);
+                thread.items = Some(Vec::new());
             }
             return;
         };
@@ -317,15 +353,23 @@ impl OutlineView {
     }
 
     pub(super) fn comment_saved(&mut self, saved: Saved, cx: &mut Context<Self>) {
-        let Some(thread) = self.thread.as_mut() else {
-            return;
-        };
         match saved {
-            Saved::Posted { ticket, comment } => {
+            Saved::Posted {
+                key,
+                ticket,
+                comment,
+            } => {
+                let Some(thread) = self.thread.as_mut().filter(|thread| thread.key == key) else {
+                    if let Some(draft) = self.drafts.get_mut(&key) {
+                        draft.pending.retain(|entry| !is_ticket(entry, ticket));
+                        if draft.is_empty() {
+                            self.drafts.remove(&key);
+                        }
+                    }
+                    return;
+                };
                 let before = thread.local.len();
-                thread.local.retain(|entry| {
-                    !matches!(entry, Entry::Pending { ticket: pending, .. } if *pending == ticket)
-                });
+                thread.local.retain(|entry| !is_ticket(entry, ticket));
                 if thread.local.len() == before {
                     return;
                 }
@@ -338,7 +382,11 @@ impl OutlineView {
                 }
             }
             Saved::Edited(comment) => {
-                if let Some(known) = thread.comment_mut(comment.id) {
+                if let Some(known) = self
+                    .thread
+                    .as_mut()
+                    .and_then(|thread| thread.comment_mut(comment.id))
+                {
                     *known = comment;
                 }
             }
@@ -491,7 +539,7 @@ impl OutlineView {
         if self.title_field.read(cx).is_composing() {
             return;
         }
-        self.thread = None;
+        self.park_thread(cx);
         cx.notify();
     }
 
@@ -690,6 +738,7 @@ impl OutlineView {
             .children(actions);
         let body = if editing {
             let can_save = !self.comment_field.read(cx).text().trim().is_empty();
+            let field = self.comment_field.clone();
             div()
                 .flex()
                 .flex_col()
@@ -708,6 +757,11 @@ impl OutlineView {
                         .text_size(px(14.5))
                         .line_height(px(22.))
                         .text_color(colors.text)
+                        .cursor_text()
+                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                            window.focus(&field.focus_handle(cx), cx);
+                            window.prevent_default();
+                        })
                         .child(self.comment_field.clone()),
                 )
                 .child(
@@ -991,6 +1045,7 @@ impl OutlineView {
                     .cursor_text()
                     .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                         window.focus(&composer.focus_handle(cx), cx);
+                        window.prevent_default();
                     })
                     .child(self.composer.clone()),
             )

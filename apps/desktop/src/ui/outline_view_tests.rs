@@ -945,6 +945,149 @@ fn the_pane_closes_when_its_todo_is_deleted_on_another_device_so_no_comment_is_s
     assert_eq!(thread_of(&view, cx), None);
 }
 
+fn composer_text(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> String {
+    view.read_with(cx, |view, cx| view.composer.read(cx).text().to_string())
+}
+
+fn edit_of(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> Option<(u64, String)> {
+    view.read_with(cx, |view, cx| {
+        let id = view.thread.as_ref()?.editing?;
+        Some((id, view.comment_field.read(cx).text().to_string()))
+    })
+}
+
+fn post_then_visit(view: &Entity<OutlineView>, cx: &mut VisualTestContext, keys: &[&str]) {
+    view.update_in(cx, |view, window, cx| {
+        view.composer
+            .update(cx, |field, cx| field.set_text("near the station", 0, cx));
+        view.post_comment(cx);
+        for key in keys {
+            view.focus_row(
+                Focus {
+                    key: (*key).to_string(),
+                    pos: 0,
+                },
+                window,
+                cx,
+            );
+        }
+    });
+}
+
+#[gpui::test]
+fn an_unposted_comment_and_an_edit_in_progress_wait_for_their_todo_while_the_caret_visits_another_row(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Dentist").comment("call on Monday"),
+        seed("Milk"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Dentist");
+    cx.simulate_input("asked for a Saturday");
+    click_on(cx, "edit-comment-1");
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("call on Tuesday");
+
+    focus(&view, cx, "Milk", 0);
+    settle(cx);
+    assert_eq!(composer_text(&view, cx), "");
+    assert_eq!(edit_of(&view, cx), None);
+
+    focus(&view, cx, "Dentist", 0);
+    settle(cx);
+    assert_eq!(composer_text(&view, cx), "asked for a Saturday");
+    assert_eq!(edit_of(&view, cx), Some((1, "call on Tuesday".into())));
+    assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
+
+    click_on(cx, "comment-editor");
+    cx.simulate_keystrokes("shift-enter");
+    click_on(cx, "composer");
+    cx.simulate_keystrokes("shift-enter");
+    settle(cx);
+    assert_eq!(
+        server.tree(),
+        "Dentist [comment: call on Tuesday] [comment: asked for a Saturday]\nMilk"
+    );
+}
+
+#[gpui::test]
+fn a_comment_still_sending_when_the_caret_moves_away_and_back_stays_in_the_log_until_it_is_saved(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Bread");
+
+    post_then_visit(&view, cx, &["t2", "t3"]);
+
+    assert_eq!(log(&view, cx), ["Sending near the station"]);
+    settle(cx);
+    assert_eq!(log(&view, cx), ["Created", "near the station"]);
+}
+
+#[gpui::test]
+fn a_comment_saved_while_the_pane_shows_another_todo_is_not_left_sending_when_its_todo_comes_back(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Bread");
+
+    post_then_visit(&view, cx, &["t2"]);
+    settle(cx);
+    assert_eq!(thread_of(&view, cx).as_deref(), Some("Milk"));
+    focus(&view, cx, "Bread", 0);
+    settle(cx);
+
+    assert_eq!(log(&view, cx), ["Created", "near the station"]);
+}
+
+#[gpui::test]
+fn a_row_the_server_has_not_created_yet_shows_no_made_up_creation_time_until_the_server_answers(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+
+    view.update_in(cx, |view, window, cx| {
+        view.add_item(window, cx);
+        let fresh = view.editing.clone().unwrap();
+        view.open_comments(&fresh, window, cx);
+    });
+    assert_eq!(log(&view, cx), [] as [String; 0]);
+    settle(cx);
+    settle(cx);
+
+    assert_eq!(log(&view, cx), ["Created"]);
+}
+
+#[gpui::test]
+fn the_filter_forgets_rows_found_through_the_previous_words_comments_as_soon_as_the_words_change_but_not_for_a_trailing_space(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Health"),
+        seed("Dentist").under(1).comment("Only weekday mornings"),
+        seed("Milk"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    view.update_in(cx, OutlineView::open_filter);
+    cx.simulate_input("weekday");
+    cx.executor().advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    assert_eq!(titles(&view, cx), ["Health", "  Dentist"]);
+
+    cx.simulate_input(" ");
+    cx.executor().advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    assert_eq!(titles(&view, cx), ["Health", "  Dentist"]);
+    assert_eq!(server.searches(), ["weekday"]);
+
+    cx.simulate_input("s");
+    assert_eq!(titles(&view, cx), [] as [String; 0]);
+}
+
 #[gpui::test]
 fn cmd_shift_m_moves_the_row_under_the_chosen_todo(cx: &mut TestAppContext) {
     let server = groceries();

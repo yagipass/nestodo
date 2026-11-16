@@ -139,8 +139,10 @@ pub struct OutlineView {
     filtering: bool,
     kept: HashSet<Key>,
     comment_hits: HashMap<Key, String>,
+    searched_for: String,
     search_task: Option<Task<()>>,
     thread: Option<thread_pane::Thread>,
+    drafts: HashMap<Key, thread_pane::Draft>,
     avatar: Option<Avatar>,
     moving: Option<Focus>,
     picker: Option<Entity<MovePicker>>,
@@ -382,8 +384,10 @@ impl OutlineView {
             filtering: false,
             kept: HashSet::new(),
             comment_hits: HashMap::new(),
+            searched_for: String::new(),
             search_task: None,
             thread: None,
+            drafts: HashMap::new(),
             avatar: None,
             moving: None,
             picker: None,
@@ -579,6 +583,7 @@ impl OutlineView {
         self.query.clear();
         self.kept.clear();
         self.comment_hits.clear();
+        self.searched_for.clear();
         self.search_task = None;
         self.filtering = false;
         self.filter_field
@@ -589,8 +594,12 @@ impl OutlineView {
 
     fn search_comments(&mut self, cx: &mut Context<Self>) {
         let text = self.query.trim().to_string();
+        if text == self.searched_for {
+            return;
+        }
+        self.searched_for.clone_from(&text);
+        self.comment_hits.clear();
         if text.is_empty() {
-            self.comment_hits.clear();
             self.search_task = None;
             return;
         }
