@@ -123,12 +123,12 @@ describe("Sync", () => {
     let notified = 0;
     const sync = new Sync([["t1", 1], ["t2", 2]], send, () => notified++);
 
-    const refused = sync.comment("t1", "first");
-    const waiting = sync.comment("t2", "second");
+    const refused = expect(sync.comment("t1", "first")).rejects.toThrow();
+    const waiting = expect(sync.comment("t2", "second")).rejects.toThrow();
     await vi.runAllTimersAsync();
 
-    await expect(refused).rejects.toThrow();
-    await expect(waiting).rejects.toThrow();
+    await refused;
+    await waiting;
     await expect(sync.comment("t2", "third")).rejects.toThrow();
     expect([sync.failed, notified]).toEqual([true, 1]);
   });
