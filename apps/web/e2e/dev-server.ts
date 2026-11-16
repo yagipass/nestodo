@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { PAGE_HEADERS } from "./pages-client";
 
 export type DevServer = { baseUrl: string; triggerToken: string; stateDir: string; stop: () => Promise<void> };
 
@@ -88,7 +89,7 @@ async function warmUp(baseUrl: string, output: () => string) {
       const res = await fetch(baseUrl + path, {
         method,
         redirect: "manual",
-        headers: { Origin: baseUrl, "Content-Type": "application/json", "X-VoidPages": "true", Accept: "application/json" },
+        headers: { Origin: baseUrl, "Content-Type": "application/json", ...PAGE_HEADERS },
         body: body === undefined ? undefined : JSON.stringify(body),
       }).catch(() => null);
       if (res && res.status < 500) break;

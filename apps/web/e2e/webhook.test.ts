@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, inject, it } from "vite-plus/test";
 import { corruptStoredWebhook, deleteAllWebhooks, json, runCron, Session, signedInUser, storedWebhook, triggerCron, type WebhookHeader, type WebhookSettings } from "./helpers";
+import { pageData } from "./pages-client";
 
 const EVERY_TEN_MINUTES = "*/10 * * * *";
 const MINUTE = 60_000;
@@ -240,7 +241,7 @@ describe("saving webhook settings", () => {
 
     const res = await client.saveWebhook({ url: "", token: "", project: PROJECT });
 
-    expect(await res.json()).toMatchObject({ errors: { url: expect.any(String) } });
+    expect(pageData(await res.text())).toMatchObject({ errors: { url: expect.any(String) } });
     expect((await client.settings()).webhook).toBeNull();
   });
 
@@ -249,7 +250,7 @@ describe("saving webhook settings", () => {
 
     const res = await client.saveWebhook({ url: "ftp://example.com/hook", token: "", project: PROJECT });
 
-    expect(await res.json()).toMatchObject({ errors: { url: expect.any(String) } });
+    expect(pageData(await res.text())).toMatchObject({ errors: { url: expect.any(String) } });
     expect((await client.settings()).webhook).toBeNull();
   });
 
@@ -258,7 +259,7 @@ describe("saving webhook settings", () => {
 
     const res = await client.saveWebhook({ url: hook("mine"), token: "a\nb", project: PROJECT });
 
-    expect(await res.json()).toMatchObject({ errors: { token: expect.any(String) } });
+    expect(pageData(await res.text())).toMatchObject({ errors: { token: expect.any(String) } });
     expect((await client.settings()).webhook).toBeNull();
   });
 
@@ -270,7 +271,7 @@ describe("saving webhook settings", () => {
     expect((await client.settings()).webhook).toMatchObject({ unreadable: true, url: null, headers: [secret("X-Api-Version", "")] });
 
     const blank = await client.saveWebhook({ url: "", token: "", project: PROJECT });
-    expect(await blank.json()).toMatchObject({ errors: { url: expect.stringContaining("no longer be read") } });
+    expect(pageData(await blank.text())).toMatchObject({ errors: { url: expect.stringContaining("no longer be read") } });
 
     await client.saveWebhook({ url: hook("mine"), token: "", project: PROJECT });
     expect((await client.settings()).webhook).toMatchObject({ unreadable: false, hasToken: false });
@@ -325,7 +326,7 @@ describe("a webhook's custom headers", () => {
     const client = await memberWithWebhook(hook("first"), "", [secret("X-Api-Key", "e2e-header-value")]);
 
     const res = await client.saveWebhook({ url: hook("second"), token: "", headers: [secret("X-Api-Key", "")], project: PROJECT });
-    expect(await res.json()).toMatchObject({ errors: { headers: expect.stringContaining("new URL") } });
+    expect(pageData(await res.text())).toMatchObject({ errors: { headers: expect.stringContaining("new URL") } });
 
     await client.saveWebhook({ url: hook("second"), token: "", headers: [plain("X-Api-Version", "2")], project: PROJECT });
     await addUnderProject(client, "read the Workers changelog");
@@ -377,7 +378,7 @@ describe("a webhook's custom headers", () => {
     const res = await client.saveWebhook({ url: "", token: "", headers: [plain("X-Api-Key", "")], project: PROJECT });
     const body = await res.text();
 
-    expect(JSON.parse(body)).toMatchObject({ errors: { headers: expect.stringContaining("again") } });
+    expect(pageData(body)).toMatchObject({ errors: { headers: expect.stringContaining("again") } });
     expect(body).not.toContain("e2e-header-value");
     expect((await client.settings()).webhook?.headers).toEqual([secret("X-Api-Key", "")]);
   });
@@ -387,7 +388,7 @@ describe("a webhook's custom headers", () => {
 
     const res = await client.saveWebhook({ url: hook("mine"), token: "", headers: [secret("Host", "evil.example")], project: PROJECT });
 
-    expect(await res.json()).toMatchObject({ errors: { headers: expect.stringContaining("Host") } });
+    expect(pageData(await res.text())).toMatchObject({ errors: { headers: expect.stringContaining("Host") } });
     expect((await client.settings()).webhook).toBeNull();
   });
 
@@ -397,7 +398,7 @@ describe("a webhook's custom headers", () => {
     const res = await client.saveWebhook({ url: hook("mine"), token: "", headers: [secret("", "e2e-pasted-secret-without-a-name")], project: PROJECT });
     const body = await res.text();
 
-    expect(JSON.parse(body)).toMatchObject({ errors: { headers: expect.any(String) } });
+    expect(pageData(body)).toMatchObject({ errors: { headers: expect.any(String) } });
     expect(body).not.toContain("e2e-pasted-secret-without-a-name");
   });
 
@@ -406,7 +407,7 @@ describe("a webhook's custom headers", () => {
 
     const res = await client.saveWebhook({ url: hook("mine"), token: "e2e-token", headers: [secret("Authorization", "Basic e2e")], project: PROJECT });
 
-    expect(await res.json()).toMatchObject({ errors: { headers: expect.stringContaining("Authorization") } });
+    expect(pageData(await res.text())).toMatchObject({ errors: { headers: expect.stringContaining("Authorization") } });
     expect((await client.settings()).webhook).toBeNull();
   });
 
@@ -415,7 +416,7 @@ describe("a webhook's custom headers", () => {
 
     const res = await client.saveWebhook({ url: "", token: "e2e-token", headers: [secret("Authorization", "")], project: PROJECT });
 
-    expect(await res.json()).toMatchObject({ errors: { headers: expect.stringContaining("Authorization") } });
+    expect(pageData(await res.text())).toMatchObject({ errors: { headers: expect.stringContaining("Authorization") } });
   });
 
   it("sends an Authorization header when there is no token, so servers using a scheme other than Bearer can be reached", async () => {

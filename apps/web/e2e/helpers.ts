@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { importJWK, SignJWT, type JWK } from "jose";
 import { expect, inject } from "vite-plus/test";
+import { PAGE_HEADERS, pageData } from "./pages-client";
 
 export type Todo = {
   id: number;
@@ -189,10 +190,7 @@ export class Session {
     if (init.secFetchSite) headers["Sec-Fetch-Site"] = init.secFetchSite;
     if (this.assertion) headers["Cf-Access-Jwt-Assertion"] = this.assertion;
     if (init.cookie) headers.Cookie = init.cookie;
-    if (init.page) {
-      headers["X-VoidPages"] = "true";
-      headers.Accept = "application/json";
-    }
+    if (init.page) Object.assign(headers, PAGE_HEADERS);
     if (init.body !== undefined) headers["Content-Type"] = init.contentType ?? "application/json";
     const url = pathOrUrl.startsWith("http") ? pathOrUrl : baseUrl + pathOrUrl;
     return fetch(url, {
@@ -206,7 +204,7 @@ export class Session {
   async page(cookie?: string) {
     const res = await this.request("/", { page: true, cookie });
     expect(res.status).toBe(200);
-    return (await json<{ props: { todos: Todo[]; showDone: boolean } }>(res)).props;
+    return pageData<{ props: { todos: Todo[]; showDone: boolean } }>(await res.text()).props;
   }
 
   async todos(): Promise<Todo[]> {
@@ -258,13 +256,13 @@ export class Session {
   async stats(timeZone: string) {
     const res = await this.request(`/stats?tz=${encodeURIComponent(timeZone)}`, { page: true });
     expect(res.status).toBe(200);
-    return (await json<{ props: { timeZone: string; days: Day[] } }>(res)).props;
+    return pageData<{ props: { timeZone: string; days: Day[] } }>(await res.text()).props;
   }
 
   async settings(cookie?: string) {
     const res = await this.request("/settings", { page: true, cookie });
     expect(res.status).toBe(200);
-    return (await json<{ props: { available: boolean; webhook: WebhookSettings | null; analytics: boolean; appearance: string } }>(res)).props;
+    return pageData<{ props: { available: boolean; webhook: WebhookSettings | null; analytics: boolean; appearance: string } }>(await res.text()).props;
   }
 
   async analytics() {
@@ -306,7 +304,7 @@ export class Session {
   async pageProfile() {
     const res = await this.request("/settings", { page: true });
     expect(res.status).toBe(200);
-    return (await json<{ shared: { auth: { profile: Profile | null } } }>(res)).shared.auth.profile;
+    return pageData<{ shared: { auth: { profile: Profile | null } } }>(await res.text()).shared.auth.profile;
   }
 
   saveName(name: unknown) {
