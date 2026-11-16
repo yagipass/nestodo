@@ -22,14 +22,15 @@ class CommentsTest {
                 listOf(
                     event("2026-11-14T14:30:00Z"),
                     comment(1, "2026-11-14T15:30:00Z"),
-                    comment(2, "2026-11-15T16:00:00Z"),
+                    comment(2, "2026-11-15T14:59:00Z"),
+                    comment(3, "2026-11-15T16:00:00Z"),
                 ),
                 now,
                 tokyo,
             )
 
         assertEquals(listOf("Nov 14", "Yesterday", "Today"), days.map { it.label })
-        assertEquals(listOf(1, 1, 1), days.map { it.entries.size })
+        assertEquals(listOf(1, 2, 1), days.map { it.entries.size })
     }
 
     @Test
@@ -42,6 +43,11 @@ class CommentsTest {
             )
 
         assertEquals(listOf("Dec 31, 2025", "Nov 12"), days.map { it.label })
+    }
+
+    @Test
+    fun `the day labels are next worked out at the phone's own midnight, so entries from before it stop being labelled Today`() {
+        assertEquals(Instant.parse("2026-11-16T15:00:00Z"), nextMidnight(now, tokyo))
     }
 
     @Test

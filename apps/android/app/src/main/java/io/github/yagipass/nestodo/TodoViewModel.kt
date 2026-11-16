@@ -140,7 +140,7 @@ data class CommentsState(
     val deleting: TimelineItem.Comment? = null,
 ) {
     val entries: List<Entry>
-        get() = items?.let { it + local }.orEmpty()
+        get() = items.orEmpty() + local
 
     val written: Boolean
         get() = entries.any { it !is TimelineItem.Event }
@@ -855,6 +855,7 @@ class TodoViewModel(
     }
 
     private fun commit(changes: List<Change>, caret: Caret?) {
+        val done = current.comments?.done
         _state.update { state ->
             val outline = changes.fold(state.outline) { outline, change -> outline.apply(change) }
             val rows = outline.rows(state.viewport)
@@ -870,6 +871,7 @@ class TodoViewModel(
         }
         current.caret?.let { cursor = it.position }
         changes.forEach { enqueue(Task.Send(it)) }
+        current.comments?.takeIf { it.done != done }?.let { loadComments(it.key) }
     }
 
     private fun saveTypingLater() {
@@ -1011,7 +1013,7 @@ class TodoViewModel(
                     state.copy(
                         comments =
                             comments.copy(
-                                items = comments.items.orEmpty() + comment,
+                                items = comments.items?.plus(comment),
                                 local =
                                     comments.local.filterNot {
                                         it is Pending && it.key == task.pending
@@ -1019,6 +1021,9 @@ class TodoViewModel(
                             )
                     )
                 }
+                current.comments
+                    ?.takeIf { it.key == task.key && it.items == null }
+                    ?.let { loadComments(it.key) }
             }
             is Task.EditComment -> {
                 val comment = repository.editComment(task.id, task.body)

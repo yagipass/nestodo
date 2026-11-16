@@ -62,6 +62,23 @@ class CommentSheetTest {
     }
 
     @Test
+    fun `a log that fails to refresh keeps what it showed and says so at its newest end, so the member knows it may be out of date and can try again`() {
+        assertEquals(
+            listOf("date Today", "Event", "unwritten", "unloaded"),
+            kinds(CommentsState(4, done = false, items = listOf(created), failed = true)),
+        )
+    }
+
+    @Test
+    fun `a comment being sent shows before the log has loaded, so the text just posted does not seem to vanish`() {
+        val sending = Pending(-1, "Call at 9", Instant.parse("2026-11-16T03:00:00Z"))
+        assertEquals(
+            listOf("date Today", "Pending"),
+            kinds(CommentsState(4, done = false, local = listOf(sending))),
+        )
+    }
+
+    @Test
     fun `a log that could not load says so instead of looking empty, so the member can try again`() {
         assertEquals(listOf("unloaded"), kinds(CommentsState(4, done = false, failed = true)))
     }

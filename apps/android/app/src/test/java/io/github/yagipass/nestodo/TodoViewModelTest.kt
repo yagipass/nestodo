@@ -802,8 +802,10 @@ class TodoViewModelTest {
 
         viewModel.onForeground()
 
-        assertEquals(1, viewModel.state.value.outline[2]!!.comments)
         assertTrue(viewModel.state.value.canUndo)
+        viewModel.undo()
+        assertEquals(original, viewModel.outline())
+        assertEquals(1, viewModel.state.value.outline[2]!!.comments)
     }
 
     @Test
@@ -994,6 +996,55 @@ class TodoViewModelTest {
     }
 
     @Test
+    fun `a comment posted while the log is still loading shows as sending at once, so the text just posted never seems to vanish`() {
+        val viewModel = viewModel()
+        repository.gate = CompletableDeferred()
+        viewModel.openComments(4)
+
+        viewModel.postComment("Call at 9")
+
+        assertEquals(listOf(Pending(-1, "Call at 9", now)), viewModel.comments().entries)
+    }
+
+    @Test
+    fun `a comment posted after the log failed to load reloads the log, so it shows the todo's whole history and not only the new comment`() {
+        val viewModel = viewModel()
+        repository.failure = IOException("offline")
+        viewModel.openComments(4)
+
+        viewModel.postComment("Call at 9")
+
+        assertEquals(
+            listOf("GET 4 timeline", "POST comment on 4 \"Call at 9\"", "GET 4 timeline"),
+            repository.calls,
+        )
+        assertEquals(
+            listOf(created, TimelineItem.Comment(500, "Call at 9", at = POSTED)),
+            viewModel.comments().entries,
+        )
+        assertFalse(viewModel.comments().failed)
+    }
+
+    @Test
+    fun `a comment queued behind one that fails is not sent, like any change after a failure, so the log never holds comments out of the order they were written`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        repository.gate = CompletableDeferred()
+        viewModel.postComment("Call at 9")
+        viewModel.postComment("Booked for Tuesday")
+        repository.failure = IOException("offline")
+
+        repository.gate!!.complete(Unit)
+
+        assertEquals(
+            listOf("GET 4 timeline", "POST comment on 4 \"Call at 9\"", "GET", "GET 4 timeline"),
+            repository.calls,
+        )
+        assertEquals("Can't connect. Check your connection.", viewModel.state.value.notice?.text)
+        assertEquals(listOf(created), viewModel.comments().entries)
+    }
+
+    @Test
     fun `an edited comment shows the new text at once and then the server's copy marked as edited`() {
         repository.timelines[4] = listOf(created, TimelineItem.Comment(9, "Call at 9", at = POSTED))
         val viewModel = viewModel()
@@ -1084,6 +1135,26 @@ class TodoViewModelTest {
                 TimelineItem.Event(TimelineItem.Event.Kind.Completed, now),
                 TimelineItem.Event(TimelineItem.Event.Kind.Reopened, now),
             ),
+            viewModel.comments().entries,
+        )
+    }
+
+    @Test
+    fun `completing the todo while its log is still loading keeps Completed in the log, since a log read before the change cannot hold it`() {
+        val viewModel = viewModel()
+        repository.gate = CompletableDeferred()
+        viewModel.openComments(4)
+        viewModel.select(4, 0)
+        viewModel.toggleCompleted()
+
+        repository.gate!!.complete(Unit)
+
+        assertEquals(
+            listOf("GET 4 timeline", "PATCH 4 completed true", "GET 4 timeline"),
+            repository.calls,
+        )
+        assertEquals(
+            listOf(created, TimelineItem.Event(TimelineItem.Event.Kind.Completed, POSTED)),
             viewModel.comments().entries,
         )
     }

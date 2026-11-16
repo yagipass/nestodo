@@ -93,6 +93,9 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
                 else -> it.copy(completedAt = null)
             }
         }
+        val kind =
+            if (completed) TimelineItem.Event.Kind.Completed else TimelineItem.Event.Kind.Reopened
+        timelines[id] = timelineOf(id) + TimelineItem.Event(kind, POSTED)
         return find(id)
     }
 
@@ -118,23 +121,35 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
         return find(id)
     }
 
+    private fun timelineOf(id: Long): List<TimelineItem> =
+        timelines[id] ?: listOf(TimelineItem.Event(TimelineItem.Event.Kind.Created, POSTED))
+
     override suspend fun timeline(id: Long): List<TimelineItem> {
         answer("GET $id timeline")
-        return timelines[id] ?: listOf(TimelineItem.Event(TimelineItem.Event.Kind.Created, POSTED))
+        return timelineOf(id)
     }
 
     override suspend fun comment(todoId: Long, body: String): TimelineItem.Comment {
         answer("POST comment on $todoId \"$body\"")
-        return TimelineItem.Comment(nextComment++, body, at = POSTED)
+        val comment = TimelineItem.Comment(nextComment++, body, at = POSTED)
+        timelines[todoId] = timelineOf(todoId) + comment
+        return comment
     }
 
     override suspend fun editComment(id: Long, body: String): TimelineItem.Comment {
         answer("PATCH comment $id \"$body\"")
-        return TimelineItem.Comment(id, body, at = POSTED, editedAt = POSTED)
+        val comment = TimelineItem.Comment(id, body, at = POSTED, editedAt = POSTED)
+        timelines.replaceAll { _, items ->
+            items.map { if (it is TimelineItem.Comment && it.id == id) comment else it }
+        }
+        return comment
     }
 
     override suspend fun deleteComment(id: Long) {
         answer("DELETE comment $id")
+        timelines.replaceAll { _, items ->
+            items.filterNot { it is TimelineItem.Comment && it.id == id }
+        }
     }
 
     override suspend fun stats(timeZone: String): List<Day> {

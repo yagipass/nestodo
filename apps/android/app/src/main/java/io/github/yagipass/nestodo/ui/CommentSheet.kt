@@ -42,6 +42,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -89,9 +90,12 @@ import io.github.yagipass.nestodo.domain.Stamped
 import io.github.yagipass.nestodo.domain.TimelineItem
 import io.github.yagipass.nestodo.domain.Via
 import io.github.yagipass.nestodo.domain.byDay
+import io.github.yagipass.nestodo.domain.nextMidnight
+import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 internal sealed interface LogLine {
@@ -117,7 +121,6 @@ internal sealed interface LogLine {
 
 internal fun logLines(comments: CommentsState, now: Instant, zone: ZoneId): List<LogLine> =
     buildList {
-        if (comments.failed && comments.items == null) add(LogLine.Unloaded)
         byDay(comments.entries, now, zone).forEach { day ->
             add(LogLine.Date(day.label, "date:$size"))
             day.entries.forEachIndexed { index, stamped ->
@@ -131,6 +134,7 @@ internal fun logLines(comments: CommentsState, now: Instant, zone: ZoneId): List
             }
         }
         if (comments.items != null && !comments.written) add(LogLine.Unwritten)
+        if (comments.failed) add(LogLine.Unloaded)
     }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -257,9 +261,17 @@ private fun Log(
     onEditing: () -> Unit,
     modifier: Modifier,
 ) {
+    val zone = ZoneId.systemDefault()
+    val now by
+        produceState(Instant.now(), zone) {
+            while (true) {
+                delay(Duration.between(Instant.now(), nextMidnight(value, zone)).toMillis())
+                value = Instant.now()
+            }
+        }
     val lines =
-        remember(comments.items, comments.local, comments.failed) {
-                logLines(comments, Instant.now(), ZoneId.systemDefault())
+        remember(comments.items, comments.local, comments.failed, now) {
+                logLines(comments, now, zone)
             }
             .asReversed()
     val listState = rememberLazyListState()

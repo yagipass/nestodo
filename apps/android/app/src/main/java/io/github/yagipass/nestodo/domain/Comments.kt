@@ -70,6 +70,9 @@ fun byDay(entries: List<Entry>, now: Instant, zone: ZoneId): List<LogDay> {
     return days.map { (date, stamped) -> LogDay(dayLabel(date, today), stamped) }
 }
 
+fun nextMidnight(now: Instant, zone: ZoneId): Instant =
+    LocalDate.ofInstant(now, zone).plusDays(1).atStartOfDay(zone).toInstant()
+
 private fun dayLabel(date: LocalDate, today: LocalDate): String =
     when {
         date == today -> "Today"
