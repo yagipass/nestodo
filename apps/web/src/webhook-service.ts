@@ -112,5 +112,5 @@ export async function sendWaitingTodos(now: Date) {
     if (result.status === "rejected") return [String(result.reason)];
     return result.value === null ? [] : [result.value];
   });
-  if (failures.length > 0) throw new Error(`Webhook delivery failed for ${failures.length} of ${rows.length} members: ${failures.join("; ")}`);
+  if (failures.length > 0) throw new Error(`Webhook delivery failed for ${failures.length} of ${rows.length} members: ${failures.join(", ")}`);
 }

@@ -419,5 +419,5 @@ export async function purgeCompletedTodos(now: Date) {
     .all<{ userId: string }>();
   const results = await Promise.allSettled(members.map(({ userId }) => purgeCompletedTodosOf(userId, cutoff)));
   const failures = results.flatMap((result) => (result.status === "rejected" ? [String(result.reason)] : []));
-  if (failures.length > 0) throw new Error(`Cleanup failed for ${failures.length} of ${members.length} members: ${failures.join("; ")}`);
+  if (failures.length > 0) throw new Error(`Cleanup failed for ${failures.length} of ${members.length} members: ${failures.join(", ")}`);
 }
