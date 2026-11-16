@@ -15,7 +15,9 @@ import io.github.yagipass.nestodo.data.AccessBackend
 import io.github.yagipass.nestodo.data.ApiException
 import io.github.yagipass.nestodo.data.Backend
 import io.github.yagipass.nestodo.data.Connection
+import io.github.yagipass.nestodo.data.OutlineCache
 import io.github.yagipass.nestodo.data.PostHogCapture
+import io.github.yagipass.nestodo.data.PreferenceOutlineCache
 import io.github.yagipass.nestodo.data.PreferenceSettings
 import io.github.yagipass.nestodo.data.Screen
 import io.github.yagipass.nestodo.data.Settings
@@ -156,6 +158,8 @@ data class TodoUiState(
     val avatar: Avatar? = null,
     val outline: Outline = Outline(),
     val loaded: Boolean = false,
+    val restored: Boolean = false,
+    val starting: Boolean = false,
     val showCompleted: Boolean = true,
     val appearance: Appearance = Appearance.System,
     val editing: Long? = null,
@@ -176,6 +180,9 @@ data class TodoUiState(
     val rows: List<OutlineRow>
         get() = outline.rows(viewport)
 
+    val showsOutline: Boolean
+        get() = auth == AuthState.SignedIn || auth == AuthState.Checking && restored
+
     val screen: Screen?
         get() =
             when {
@@ -189,6 +196,7 @@ data class TodoUiState(
 class TodoViewModel(
     private val backendAt: (HttpUrl) -> Backend,
     private val settings: Settings,
+    private val cache: OutlineCache,
     private val cleartextAllowed: (String) -> Boolean = { false },
     private val timeZone: () -> String = { ZoneId.systemDefault().id },
     private val timeSource: TimeSource = TimeSource.Monotonic,
@@ -234,6 +242,8 @@ class TodoViewModel(
 
     private data class Queued(val task: Task, val generation: Int)
 
+    private data class Saved(val server: String, val outline: Outline)
+
     private data class Typing(
         val key: Long,
         val original: String,
@@ -247,7 +257,7 @@ class TodoViewModel(
         val typing: Typing? = null,
     )
 
-    private val _state = MutableStateFlow(TodoUiState())
+    private val _state = MutableStateFlow(TodoUiState(starting = true))
     val state: StateFlow<TodoUiState> = _state.asStateFlow()
 
     private val current: TodoUiState
@@ -262,6 +272,8 @@ class TodoViewModel(
     private var analyticsJob: Job? = null
     private var typingJob: Job? = null
     private var tasks: Channel<Queued>? = null
+    private val cacheWrites = Channel<Saved?>(Channel.CONFLATED)
+    private var kept: Outline? = null
     private var generation = 0
     private var pending = 0
     private var lastKey = 0L
@@ -275,6 +287,15 @@ class TodoViewModel(
     private var commentsRequest = 0L
 
     init {
+        viewModelScope.launch {
+            for (write in cacheWrites) {
+                if (write == null) {
+                    cache.clear()
+                } else if (!cache.save(write.server, write.outline) && kept === write.outline) {
+                    kept = null
+                }
+            }
+        }
         usage?.let { usage ->
             viewModelScope.launch {
                 state
@@ -292,15 +313,15 @@ class TodoViewModel(
             val shown = settings.showCompleted()
             val appearance = settings.appearance()
             _state.update { it.copy(showCompleted = shown, appearance = appearance) }
-            val backend = backend ?: settings.baseUrl()?.let(::open)
+            val backend = backend ?: settings.baseUrl()?.let(::open)?.also { restore() }
             if (backend == null) {
-                _state.update { it.copy(auth = AuthState.NoServer) }
+                _state.update { it.copy(auth = AuthState.NoServer, starting = false) }
                 return@launch
             }
             try {
                 when (val connection = backend.connect()) {
                     is Connection.Ready -> onReady(connection)
-                    Connection.SignedOut -> _state.update { it.copy(auth = AuthState.SignedOut) }
+                    Connection.SignedOut -> onSignedOut()
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -346,6 +367,7 @@ class TodoViewModel(
                     rejectServer("Couldn't save the server. Try again.")
                     return@launch
                 }
+                if (saved != null && saved != base) forget()
                 backend.takeIf { saved != null && saved.host != base.host }?.let { logout(it) }
                 backend = candidate
                 _state.update {
@@ -353,7 +375,7 @@ class TodoViewModel(
                 }
                 when (connection) {
                     is Connection.Ready -> onReady(connection, todos)
-                    Connection.SignedOut -> _state.update { it.copy(auth = AuthState.SignedOut) }
+                    Connection.SignedOut -> onSignedOut()
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -425,6 +447,7 @@ class TodoViewModel(
     fun signOut() {
         loginJob?.cancel()
         disconnect()
+        forget()
         _state.value =
             TodoUiState(
                 auth = AuthState.SignedOut,
@@ -447,6 +470,36 @@ class TodoViewModel(
     private fun open(base: HttpUrl): Backend {
         _state.update { it.copy(server = base.label()) }
         return backendAt(base).also { backend = it }
+    }
+
+    private suspend fun restore() {
+        val outline = current.server?.let { cache.load(it) }
+        kept = outline
+        _state.update {
+            it.copy(outline = outline ?: it.outline, restored = outline != null, starting = false)
+        }
+    }
+
+    private fun keep() {
+        val state = current
+        val server = state.server ?: return
+        if (state.auth != AuthState.SignedIn || !state.loaded || !isIdle(queued = 0)) return
+        val outline = state.outline.rekeyed(::idOf)
+        if (outline == kept) return
+        kept = outline
+        cacheWrites.trySend(Saved(server, outline))
+    }
+
+    private fun forget() {
+        kept = null
+        cacheWrites.trySend(null)
+    }
+
+    private fun onSignedOut() {
+        forget()
+        _state.update {
+            it.copy(auth = AuthState.SignedOut, outline = Outline(), restored = false)
+        }
     }
 
     fun refresh() {
@@ -473,6 +526,7 @@ class TodoViewModel(
     }
 
     fun setTitle(key: Long, title: String, composing: Boolean = false) {
+        if (!current.loaded) return
         val text = singleLine(title).take(MAX_TITLE_LENGTH)
         val node = current.outline[key] ?: return
         type(key, node.title, text, composing)
@@ -485,6 +539,7 @@ class TodoViewModel(
     }
 
     fun select(key: Long, cursor: Int) {
+        if (!current.loaded) return
         this.cursor = cursor
         if (current.editing != key) _state.update { it.copy(editing = key) }
     }
@@ -496,6 +551,7 @@ class TodoViewModel(
     }
 
     fun openComments(key: Long) {
+        if (!current.loaded) return
         val node = current.outline[key] ?: return
         _state.update { it.copy(comments = CommentsState(key, done = node.completed)) }
         loadComments(key)
@@ -815,6 +871,7 @@ class TodoViewModel(
     }
 
     private fun perform(edit: Edit?, before: Caret?) {
+        if (!current.loaded) return
         edit ?: return
         saveTyping(edit.changes)
         val undo = current.outline.undoFor(edit.changes)
@@ -959,6 +1016,7 @@ class TodoViewModel(
                 } finally {
                     pending -= 1
                 }
+                keep()
             }
         }
     }
@@ -1169,6 +1227,7 @@ class TodoViewModel(
             state.copy(
                 outline = outline,
                 loaded = true,
+                restored = false,
                 editing = state.editing?.takeIf { it in outline },
                 caret = null,
                 comments =
@@ -1268,6 +1327,7 @@ class TodoViewModel(
             is ApiException.NotSignedIn -> {
                 loginJob?.cancel()
                 disconnect()
+                forget()
                 _state.value =
                     TodoUiState(
                         auth = AuthState.SignedOut,
@@ -1302,6 +1362,7 @@ class TodoViewModel(
                     TodoViewModel(
                         accessBackends(appContext),
                         settings,
+                        PreferenceOutlineCache(appContext),
                         NetworkSecurityPolicy.getInstance()::isCleartextTrafficPermitted,
                         usage = usageAnalytics(settings),
                         applyAppearance = { uiModes.setApplicationNightMode(nightModeOf(it)) },

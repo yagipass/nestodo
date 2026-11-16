@@ -31,6 +31,19 @@ class OutlineTest {
         )
 
     @Test
+    fun `rekeying renames a row everywhere it is referred to, so its parent and the todos under it still find it`() {
+        val ids = mapOf(1L to 100L, 2L to 200L)
+
+        val rekeyed = outline.rekeyed { ids[it] ?: it }
+
+        assertEquals(listOf("Groceries", "  Milk", "  Eggs", "Dentist"), rekeyed.render())
+        assertEquals(listOf(100L, 4L), rekeyed.roots)
+        assertEquals(listOf(200L, 3L), rekeyed[100]?.children)
+        assertEquals(100L, rekeyed[200]?.parent)
+        assertEquals(100L, rekeyed[3]?.parent)
+    }
+
+    @Test
     fun `the server's rows become a tree ordered by position so siblings keep the order the user gave them`() {
         val shuffled =
             outlineOf(
