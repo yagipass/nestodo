@@ -438,13 +438,13 @@ mod tests {
     }
 
     #[test]
-    fn a_note_that_fits_in_two_lines_is_shown_whole_like_the_web_line_clamp() {
+    fn text_that_fits_in_its_lines_is_shown_whole_like_the_web_line_clamp() {
         assert_eq!(cut_line(1, 2), None);
         assert_eq!(cut_line(2, 2), None);
     }
 
     #[gpui::test]
-    fn a_longer_note_stops_after_its_second_line_counting_every_paragraph_together(
+    fn a_longer_text_stops_after_its_last_line_counting_every_paragraph_together(
         cx: &mut gpui::TestAppContext,
     ) {
         let cx = cx.add_empty_window();
@@ -580,7 +580,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_click_on_the_ellipsis_of_a_cut_note_lands_on_no_character_so_it_cannot_open_the_link_it_cut(
+    fn a_click_on_the_ellipsis_of_a_cut_snippet_lands_on_no_character_so_it_cannot_open_the_link_it_cut(
         cx: &mut gpui::TestAppContext,
     ) {
         let cx = cx.add_empty_window();
@@ -624,7 +624,7 @@ mod tests {
         });
         assert!(laid.visible < text.len());
         assert_eq!(laid.height, px(42.));
-        let (_, shown) = laid.paragraphs.last().expect("the note was laid out");
+        let (_, shown) = laid.paragraphs.last().expect("the text was laid out");
         assert!(shown.text.ends_with(ELLIPSIS));
     }
 }

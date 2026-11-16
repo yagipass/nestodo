@@ -70,6 +70,55 @@ pub fn choice(
         .child(text.into())
 }
 
+pub fn pill(
+    id: impl Into<ElementId>,
+    text: &'static str,
+    enabled: bool,
+    colors: &Theme,
+) -> Stateful<Div> {
+    let strong = colors.accent_strong;
+    div()
+        .id(id)
+        .flex_none()
+        .h(px(32.))
+        .px(px(14.))
+        .flex()
+        .items_center()
+        .rounded(px(10.))
+        .bg(colors.accent)
+        .text_color(colors.on_accent)
+        .text_size(px(14.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .when(enabled, |pill| {
+            pill.cursor_pointer().hover(move |style| style.bg(strong))
+        })
+        .when(!enabled, |pill| pill.opacity(0.5))
+        .child(text)
+}
+
+pub fn text_button(
+    id: impl Into<ElementId>,
+    text: &'static str,
+    danger: bool,
+    enabled: bool,
+    colors: &Theme,
+) -> Stateful<Div> {
+    let hover = colors.hover;
+    div()
+        .id(id)
+        .flex_none()
+        .px(px(10.))
+        .py(px(6.))
+        .rounded(px(10.))
+        .text_size(px(14.))
+        .text_color(if danger { colors.danger } else { colors.accent })
+        .when(enabled, |button| {
+            button.cursor_pointer().hover(move |style| style.bg(hover))
+        })
+        .when(!enabled, |button| button.opacity(0.5))
+        .child(text)
+}
+
 pub fn kbd(text: impl Into<SharedString>, cx: &App) -> Div {
     let colors = theme(cx);
     div()

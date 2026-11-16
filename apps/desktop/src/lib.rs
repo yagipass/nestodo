@@ -8,6 +8,7 @@ pub mod profile;
 pub mod stats;
 pub mod store;
 pub mod sync;
+pub mod thread;
 pub mod title;
 pub mod todos;
 pub mod undo;

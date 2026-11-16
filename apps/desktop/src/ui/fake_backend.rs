@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use nestodo_desktop::api::StatsResponse;
 use nestodo_desktop::error::Error;
 use nestodo_desktop::profile::Profile;
+use nestodo_desktop::thread::{SearchHit, Timeline, TimelineItem};
 use nestodo_desktop::webhook::{Analytics, WebhookEdit, Webhooks};
 use nestodo_desktop::wire::{Reply, Request, Todo};
 
@@ -17,19 +18,68 @@ struct Row {
     parent: Option<u64>,
     position: usize,
     title: String,
-    note: String,
     done: bool,
     collapsed: bool,
+}
+
+#[derive(Clone, Debug)]
+struct Comment {
+    id: u64,
+    todo: u64,
+    body: String,
+    via: &'static str,
+    edited: bool,
 }
 
 #[derive(Default)]
 struct State {
     rows: Vec<Row>,
+    trash: Vec<(u64, Vec<Row>)>,
+    comments: Vec<Comment>,
     next_id: u64,
+    next_comment: u64,
     failing: Option<u16>,
     failing_creates: Option<u16>,
+    failing_timelines: bool,
     signed_out: bool,
     sent: Vec<Request>,
+    timelines: Vec<u64>,
+    searches: Vec<String>,
+}
+
+impl State {
+    fn add_comment(&mut self, todo: u64, body: &str, via: &'static str) -> Comment {
+        self.next_comment += 1;
+        let comment = Comment {
+            id: self.next_comment,
+            todo,
+            body: body.to_string(),
+            via,
+            edited: false,
+        };
+        self.comments.push(comment.clone());
+        comment
+    }
+
+    fn comments_of(&self, todo: u64) -> impl Iterator<Item = &Comment> {
+        self.comments
+            .iter()
+            .filter(move |comment| comment.todo == todo)
+    }
+}
+
+fn at_of(comment: &Comment) -> String {
+    format!("2026-11-16T10:{:02}:00.000Z", comment.id % 60)
+}
+
+fn comment_json(comment: &Comment) -> Value {
+    json!({
+        "id": comment.id,
+        "body": comment.body,
+        "via": comment.via,
+        "at": at_of(comment),
+        "editedAt": comment.edited.then_some("2026-11-16T11:00:00.000Z"),
+    })
 }
 
 #[derive(Default)]
@@ -40,7 +90,7 @@ pub struct FakeServer {
 pub struct Seed<'a> {
     pub title: &'a str,
     pub parent: Option<u64>,
-    pub note: &'a str,
+    pub comments: Vec<(&'a str, &'static str)>,
     pub done: bool,
     pub collapsed: bool,
 }
@@ -49,7 +99,7 @@ pub fn seed(title: &str) -> Seed<'_> {
     Seed {
         title,
         parent: None,
-        note: "",
+        comments: Vec::new(),
         done: false,
         collapsed: false,
     }
@@ -61,8 +111,13 @@ impl Seed<'_> {
         self
     }
 
-    pub fn note(mut self, note: &'static str) -> Self {
-        self.note = note;
+    pub fn comment(mut self, body: &'static str) -> Self {
+        self.comments.push((body, "app"));
+        self
+    }
+
+    pub fn comment_via_mcp(mut self, body: &'static str) -> Self {
+        self.comments.push((body, "mcp"));
         self
     }
 
@@ -95,10 +150,12 @@ impl FakeServer {
                     parent: seed.parent,
                     position,
                     title: seed.title.to_string(),
-                    note: seed.note.to_string(),
                     done: seed.done,
                     collapsed: seed.collapsed,
                 });
+                for (body, via) in seed.comments {
+                    state.add_comment(id, body, via);
+                }
             }
         }
         server
@@ -112,6 +169,18 @@ impl FakeServer {
         self.state.lock().unwrap().failing_creates = Some(status);
     }
 
+    pub fn fail_timelines(&self, failing: bool) {
+        self.state.lock().unwrap().failing_timelines = failing;
+    }
+
+    pub fn timelines(&self) -> Vec<u64> {
+        self.state.lock().unwrap().timelines.clone()
+    }
+
+    pub fn searches(&self) -> Vec<String> {
+        self.state.lock().unwrap().searches.clone()
+    }
+
     pub fn expire_sign_in(&self) {
         self.state.lock().unwrap().signed_out = true;
     }
@@ -123,11 +192,12 @@ impl FakeServer {
     pub fn tree(&self) -> String {
         let state = self.state.lock().unwrap();
         let mut out = Vec::new();
-        Self::walk(&state.rows, None, 0, &mut out);
+        Self::walk(&state, None, 0, &mut out);
         out.join("\n")
     }
 
-    fn walk(rows: &[Row], parent: Option<u64>, depth: usize, out: &mut Vec<String>) {
+    fn walk(state: &State, parent: Option<u64>, depth: usize, out: &mut Vec<String>) {
+        let rows = &state.rows;
         let mut children: Vec<&Row> = rows.iter().filter(|row| row.parent == parent).collect();
         children.sort_by_key(|row| (row.position, row.id));
         for row in children {
@@ -138,17 +208,21 @@ impl FakeServer {
             if row.collapsed {
                 line.push_str(" [collapsed]");
             }
-            if !row.note.is_empty() {
-                let _ = write!(line, " [note: {}]", row.note.replace('\n', "\\n"));
+            for comment in state.comments_of(row.id) {
+                let _ = write!(line, " [comment: {}]", comment.body.replace('\n', "\\n"));
             }
             out.push(line);
-            Self::walk(rows, Some(row.id), depth + 1, out);
+            Self::walk(state, Some(row.id), depth + 1, out);
         }
     }
 
-    fn ordered(rows: &[Row]) -> Vec<Todo> {
-        fn visit(rows: &[Row], parent: Option<u64>, out: &mut Vec<Todo>) {
-            let mut children: Vec<&Row> = rows.iter().filter(|row| row.parent == parent).collect();
+    fn ordered(state: &State) -> Vec<Todo> {
+        fn visit(state: &State, parent: Option<u64>, out: &mut Vec<Todo>) {
+            let mut children: Vec<&Row> = state
+                .rows
+                .iter()
+                .filter(|row| row.parent == parent)
+                .collect();
             children.sort_by_key(|row| (row.position, row.id));
             for row in children {
                 out.push(Todo {
@@ -156,15 +230,15 @@ impl FakeServer {
                     parent_id: row.parent,
                     position: row.position as u64,
                     title: row.title.clone(),
-                    note: row.note.clone(),
                     completed_at: row.done.then(|| "2026-11-09 00:00:00".to_string()),
                     collapsed: row.collapsed,
+                    comment_count: state.comments_of(row.id).count() as u64,
                 });
-                visit(rows, Some(row.id), out);
+                visit(state, Some(row.id), out);
             }
         }
         let mut out = Vec::new();
-        visit(rows, None, &mut out);
+        visit(state, None, &mut out);
         out
     }
 
@@ -242,15 +316,19 @@ impl FakeServer {
         let body = request.body.clone().unwrap_or(Value::Null);
         let path = request.path.split('?').next().unwrap_or_default();
         let recursive = request.path.ends_with("?recursive=true");
-        let id: Option<u64> = path
-            .strip_prefix("/api/v1/todos/")
-            .and_then(|id| id.parse().ok());
+        let segments: Vec<&str> = path
+            .strip_prefix("/api/v1/")
+            .unwrap_or_default()
+            .split('/')
+            .collect();
         let reply = |status: u16, body: Value| Reply {
             status,
             body: Some(body),
         };
-        match (request.method, id) {
-            ("POST", None) => {
+        let not_found = || reply(404, json!({ "error": "not_found" }));
+        let id = segments.get(1).and_then(|id| id.parse::<u64>().ok());
+        match (request.method, segments.as_slice(), id) {
+            ("POST", ["todos"], _) => {
                 state.next_id += 1;
                 let id = state.next_id;
                 let parent = body["parentId"].as_u64();
@@ -259,7 +337,6 @@ impl FakeServer {
                     parent,
                     position: usize::MAX,
                     title: body["title"].as_str().unwrap_or_default().to_string(),
-                    note: body["note"].as_str().unwrap_or_default().to_string(),
                     done: false,
                     collapsed: false,
                 });
@@ -268,17 +345,17 @@ impl FakeServer {
                     .and_then(|index| usize::try_from(index).ok());
                 Self::place(&mut state.rows, id, parent, index);
                 Self::reopen(&mut state.rows, parent);
+                if let Some(comment) = body["comment"].as_str() {
+                    state.add_comment(id, comment, "app");
+                }
                 reply(201, json!({ "todo": { "id": id } }))
             }
-            ("PATCH", Some(id)) => {
+            ("PATCH", ["todos", _], Some(id)) => {
                 let Some(row) = state.rows.iter_mut().find(|row| row.id == id) else {
-                    return reply(404, json!({ "error": "not_found" }));
+                    return not_found();
                 };
                 if let Some(title) = body["title"].as_str() {
                     row.title = title.to_string();
-                }
-                if let Some(note) = body["note"].as_str() {
-                    row.note = note.to_string();
                 }
                 if let Some(collapsed) = body["collapsed"].as_bool() {
                     row.collapsed = collapsed;
@@ -304,31 +381,95 @@ impl FakeServer {
                 if completed == Some(true) {
                     Self::complete(&mut state.rows, id);
                 } else if completed == Some(false) || moved {
-                    let open = Self::subtree(&state.rows, id)
-                        .iter()
-                        .any(|id| state.rows.iter().any(|row| row.id == *id && !row.done));
-                    if open {
-                        Self::reopen(&mut state.rows, Some(id));
-                    }
+                    Self::reopen_if_open_below(&mut state.rows, id);
                 }
                 reply(200, json!({ "todo": { "id": id } }))
             }
-            ("DELETE", Some(id)) => {
+            ("DELETE", ["todos", _], Some(id)) => {
                 let Some(target) = state.rows.iter().find(|row| row.id == id).cloned() else {
-                    return reply(404, json!({ "error": "not_found" }));
+                    return not_found();
                 };
                 if !recursive && state.rows.iter().any(|row| row.parent == Some(id)) {
                     return reply(409, json!({ "error": "has_children" }));
                 }
                 let gone = Self::subtree(&state.rows, id);
-                state.rows.retain(|row| !gone.contains(&row.id));
+                let (trashed, kept): (Vec<Row>, Vec<Row>) = std::mem::take(&mut state.rows)
+                    .into_iter()
+                    .partition(|row| gone.contains(&row.id));
+                state.rows = kept;
+                state.trash.push((id, trashed));
                 Self::reorder(&mut state.rows, target.parent);
                 Reply {
                     status: 204,
                     body: None,
                 }
             }
+            ("POST", ["todos", _, "restore"], Some(id)) => {
+                let Some(at) = state.trash.iter().position(|(batch, _)| *batch == id) else {
+                    return not_found();
+                };
+                let parent = body["parentId"].as_u64();
+                if parent.is_some_and(|parent| !state.rows.iter().any(|row| row.id == parent)) {
+                    return reply(400, json!({ "error": "invalid_placement" }));
+                }
+                let (_, rows) = state.trash.remove(at);
+                for mut row in rows {
+                    if row.id == id {
+                        row.position = usize::MAX;
+                    }
+                    state.rows.push(row);
+                }
+                let index = body["index"]
+                    .as_u64()
+                    .and_then(|index| usize::try_from(index).ok());
+                Self::place(&mut state.rows, id, parent, index);
+                Self::reopen_if_open_below(&mut state.rows, id);
+                reply(200, json!({ "todo": { "id": id } }))
+            }
+            ("POST", ["todos", _, "comments"], Some(id)) => {
+                if !state.rows.iter().any(|row| row.id == id) {
+                    return not_found();
+                }
+                let text = body["body"].as_str().unwrap_or_default();
+                if text.trim().is_empty() {
+                    return reply(400, json!({ "error": "invalid_body" }));
+                }
+                let comment = state.add_comment(id, text, "app");
+                reply(201, json!({ "comment": comment_json(&comment) }))
+            }
+            ("PATCH", ["comments", _], Some(id)) => {
+                let Some(comment) = state.comments.iter_mut().find(|comment| comment.id == id)
+                else {
+                    return not_found();
+                };
+                let text = body["body"].as_str().unwrap_or_default();
+                if comment.body != text {
+                    comment.body = text.to_string();
+                    comment.edited = true;
+                }
+                reply(200, json!({ "comment": comment_json(comment) }))
+            }
+            ("DELETE", ["comments", _], Some(id)) => {
+                let before = state.comments.len();
+                state.comments.retain(|comment| comment.id != id);
+                if state.comments.len() == before {
+                    return not_found();
+                }
+                Reply {
+                    status: 204,
+                    body: None,
+                }
+            }
             _ => reply(400, json!({ "error": "unsupported" })),
+        }
+    }
+
+    fn reopen_if_open_below(rows: &mut [Row], id: u64) {
+        let open = Self::subtree(rows, id)
+            .iter()
+            .any(|id| rows.iter().any(|row| row.id == *id && !row.done));
+        if open {
+            Self::reopen(rows, Some(id));
         }
     }
 }
@@ -339,7 +480,7 @@ impl Backend for FakeServer {
         if state.signed_out {
             return Err(Error::NotSignedIn);
         }
-        Ok(Self::ordered(&state.rows))
+        Ok(Self::ordered(&state))
     }
 
     fn request(&self, request: &Request) -> Result<Reply, Error> {
@@ -356,6 +497,62 @@ impl Backend for FakeServer {
             });
         }
         Ok(Self::handle(&mut state, request))
+    }
+
+    fn timeline(&self, id: u64) -> Result<Vec<TimelineItem>, Error> {
+        let mut state = self.state.lock().unwrap();
+        if state.signed_out {
+            return Err(Error::NotSignedIn);
+        }
+        state.timelines.push(id);
+        let Some(row) = state.rows.iter().find(|row| row.id == id) else {
+            return Err(Error::Server {
+                status: 404,
+                message: "Todo not found".into(),
+            });
+        };
+        if state.failing_timelines {
+            return Err(Error::Server {
+                status: 500,
+                message: "failing".into(),
+            });
+        }
+        let mut items =
+            vec![json!({ "type": "event", "kind": "created", "at": "2026-11-16T09:00:00Z" })];
+        items.extend(state.comments_of(id).map(|comment| {
+            let mut item = comment_json(comment);
+            item["type"] = json!("comment");
+            item
+        }));
+        if row.done {
+            items.push(
+                json!({ "type": "event", "kind": "completed", "at": "2026-11-16T12:00:00Z" }),
+            );
+        }
+        let timeline: Timeline = serde_json::from_value(json!({ "items": items }))
+            .map_err(|error| Error::Invalid(error.to_string()))?;
+        Ok(timeline.items)
+    }
+
+    fn search(&self, query: &str) -> Result<Vec<SearchHit>, Error> {
+        let mut state = self.state.lock().unwrap();
+        if state.signed_out {
+            return Err(Error::NotSignedIn);
+        }
+        state.searches.push(query.to_string());
+        let q = query.to_lowercase();
+        Ok(Self::ordered(&state)
+            .into_iter()
+            .filter_map(|todo| {
+                state
+                    .comments_of(todo.id)
+                    .find(|comment| comment.body.to_lowercase().contains(&q))
+                    .map(|comment| SearchHit {
+                        id: todo.id,
+                        comment: comment.body.clone(),
+                    })
+            })
+            .collect())
     }
 
     fn stats(&self, time_zone: &str) -> Result<StatsResponse, Error> {

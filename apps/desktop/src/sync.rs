@@ -1,28 +1,52 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::outline::{Key, Op, ROOT};
-use crate::undo::Field;
+use crate::thread::Comment;
 use crate::wire::{Reply, Request};
 
 pub const TYPING_DELAY: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Debug)]
 struct Typed {
-    field: Field,
     op: Op,
     due: Instant,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Job {
+    Op(Op),
+    Comment { ticket: u64, key: Key, body: String },
+    EditComment { id: u64, body: String },
+    DeleteComment { id: u64 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Saved {
+    Posted {
+        key: Key,
+        ticket: u64,
+        comment: Comment,
+    },
+    Edited(Comment),
+}
+
+#[derive(Deserialize)]
+struct One {
+    comment: Comment,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct Sync {
     ids: HashMap<Key, u64>,
     keys: HashMap<u64, Key>,
-    queue: VecDeque<Op>,
+    queue: VecDeque<Job>,
     typed: Vec<Typed>,
     running: bool,
+    tickets: u64,
     pub failed: bool,
     pub revision: u64,
 }
@@ -44,6 +68,11 @@ impl Sync {
         self.keys.get(&id).cloned()
     }
 
+    #[must_use]
+    pub fn id_of(&self, key: &str) -> Option<u64> {
+        self.ids.get(key).copied()
+    }
+
     pub fn track(&mut self, ids: impl IntoIterator<Item = (Key, u64)>) {
         for (key, id) in ids {
             self.ids.insert(key.clone(), id);
@@ -57,38 +86,60 @@ impl Sync {
             match op {
                 Op::Delete { removed, .. } => {
                     for key in removed {
-                        self.discard(Field::Title, key);
-                        self.discard(Field::Note, key);
+                        self.discard(key);
                     }
                 }
-                Op::Title { key, .. } => self.discard(Field::Title, key),
-                Op::Note { key, .. } => self.discard(Field::Note, key),
+                Op::Title { key, .. } => self.discard(key),
                 _ => {}
             }
             self.flush();
-            self.queue.push_back(op.clone());
+            self.queue.push_back(Job::Op(op.clone()));
         }
     }
 
     pub fn title(&mut self, key: &str, title: &str, now: Instant) {
-        let op = Op::Title {
-            key: key.to_owned(),
-            title: title.to_owned(),
-        };
-        self.type_op(Field::Title, op, now);
+        self.revision += 1;
+        self.discard(key);
+        self.typed.push(Typed {
+            op: Op::Title {
+                key: key.to_owned(),
+                title: title.to_owned(),
+            },
+            due: now + TYPING_DELAY,
+        });
     }
 
-    pub fn note(&mut self, key: &str, note: &str, now: Instant) {
-        let op = Op::Note {
+    pub fn comment(&mut self, key: &str, body: &str) -> u64 {
+        self.tickets += 1;
+        let ticket = self.tickets;
+        self.enqueue(Job::Comment {
+            ticket,
             key: key.to_owned(),
-            note: note.to_owned(),
-        };
-        self.type_op(Field::Note, op, now);
+            body: body.to_owned(),
+        });
+        ticket
+    }
+
+    pub fn edit_comment(&mut self, id: u64, body: &str) {
+        self.enqueue(Job::EditComment {
+            id,
+            body: body.to_owned(),
+        });
+    }
+
+    pub fn delete_comment(&mut self, id: u64) {
+        self.enqueue(Job::DeleteComment { id });
+    }
+
+    fn enqueue(&mut self, job: Job) {
+        self.revision += 1;
+        self.flush();
+        self.queue.push_back(job);
     }
 
     pub fn flush(&mut self) {
         self.queue
-            .extend(self.typed.drain(..).map(|typed| typed.op));
+            .extend(self.typed.drain(..).map(|typed| Job::Op(typed.op)));
     }
 
     pub fn flush_due(&mut self, now: Instant) {
@@ -97,7 +148,8 @@ impl Sync {
             .partition(|typed| typed.due <= now);
         due.sort_by_key(|typed| typed.due);
         self.typed = waiting;
-        self.queue.extend(due.into_iter().map(|typed| typed.op));
+        self.queue
+            .extend(due.into_iter().map(|typed| Job::Op(typed.op)));
     }
 
     #[must_use]
@@ -117,55 +169,66 @@ impl Sync {
         request
     }
 
-    pub fn finish(&mut self, reply: Result<Reply, ()>) {
+    pub fn finish(&mut self, reply: Result<Reply, ()>) -> Option<Saved> {
         if !std::mem::take(&mut self.running) {
-            return;
+            return None;
         }
-        let Some(op) = self.queue.front() else {
-            return;
-        };
-        let reply = reply.ok().filter(|reply| {
-            reply.is_success() || (matches!(op, Op::Delete { .. }) && reply.status == 404)
-        });
+        let job = self.queue.front()?;
+        let gone_is_done = matches!(job, Job::Op(Op::Delete { .. }) | Job::DeleteComment { .. });
+        let reply = reply
+            .ok()
+            .filter(|reply| reply.is_success() || (gone_is_done && reply.status == 404));
         let Some(reply) = reply else {
             self.failed = true;
-            return;
+            return None;
         };
-        if let Op::Create { key, .. } = op {
-            let id = reply
-                .body
-                .as_ref()
-                .and_then(|body| body.get("todo")?.get("id")?.as_u64());
-            let Some(id) = id else {
-                self.failed = true;
-                return;
-            };
-            let key = key.clone();
-            self.track([(key, id)]);
-        }
+        let saved = match job {
+            Job::Op(Op::Create { key, .. }) => {
+                let id = reply
+                    .body
+                    .as_ref()
+                    .and_then(|body| body.get("todo")?.get("id")?.as_u64());
+                let Some(id) = id else {
+                    self.failed = true;
+                    return None;
+                };
+                let key = key.clone();
+                self.track([(key, id)]);
+                None
+            }
+            Job::Comment { ticket, key, .. } => {
+                let (ticket, key) = (*ticket, key.clone());
+                let Some(comment) = Self::comment_in(reply) else {
+                    self.failed = true;
+                    return None;
+                };
+                Some(Saved::Posted {
+                    key,
+                    ticket,
+                    comment,
+                })
+            }
+            Job::EditComment { .. } => {
+                let Some(comment) = Self::comment_in(reply) else {
+                    self.failed = true;
+                    return None;
+                };
+                Some(Saved::Edited(comment))
+            }
+            Job::Op(_) | Job::DeleteComment { .. } => None,
+        };
         self.queue.pop_front();
+        saved
     }
 
-    fn type_op(&mut self, field: Field, op: Op, now: Instant) {
-        self.revision += 1;
-        self.discard(field, op.key());
-        self.typed.push(Typed {
-            field,
-            op,
-            due: now + TYPING_DELAY,
-        });
+    fn comment_in(reply: Reply) -> Option<Comment> {
+        serde_json::from_value::<One>(reply.body?)
+            .ok()
+            .map(|one| one.comment)
     }
 
-    fn take_typed(&mut self, field: Field, key: &str) -> Option<Op> {
-        let at = self
-            .typed
-            .iter()
-            .position(|typed| typed.field == field && typed.op.key() == key)?;
-        Some(self.typed.remove(at).op)
-    }
-
-    fn discard(&mut self, field: Field, key: &str) {
-        self.take_typed(field, key);
+    fn discard(&mut self, key: &str) {
+        self.typed.retain(|typed| typed.op.key() != key);
     }
 
     fn todo_path(&self, key: &str) -> Option<String> {
@@ -179,20 +242,34 @@ impl Sync {
         self.ids.get(key).map(|&id| Value::from(id))
     }
 
-    fn request(&self, op: &Op) -> Option<Request> {
+    fn request(&self, job: &Job) -> Option<Request> {
+        let (method, path, body) = match job {
+            Job::Op(op) => return self.op_request(op),
+            Job::Comment { key, body, .. } => (
+                "POST",
+                format!("{}/comments", self.todo_path(key)?),
+                Some(json!({ "body": body })),
+            ),
+            Job::EditComment { id, body } => (
+                "PATCH",
+                format!("/api/v1/comments/{id}"),
+                Some(json!({ "body": body })),
+            ),
+            Job::DeleteComment { id } => ("DELETE", format!("/api/v1/comments/{id}"), None),
+        };
+        Some(Request { method, path, body })
+    }
+
+    fn op_request(&self, op: &Op) -> Option<Request> {
         let (method, path, body) = match op {
             Op::Create {
                 parent,
                 index,
                 title,
-                note,
                 ..
             } => {
                 let mut body = Map::new();
                 body.insert("title".to_owned(), json!(title));
-                if let Some(note) = note {
-                    body.insert("note".to_owned(), json!(note));
-                }
                 body.insert("parentId".to_owned(), self.parent_id(parent)?);
                 body.insert("index".to_owned(), json!(index));
                 (
@@ -210,14 +287,18 @@ impl Sync {
                 };
                 ("DELETE", path, None)
             }
+            Op::Restore {
+                key, parent, index, ..
+            } => (
+                "POST",
+                format!("{}/restore", self.todo_path(key)?),
+                Some(json!({ "parentId": self.parent_id(parent)?, "index": index })),
+            ),
             Op::Title { key, title } => (
                 "PATCH",
                 self.todo_path(key)?,
                 Some(json!({ "title": title })),
             ),
-            Op::Note { key, note } => {
-                ("PATCH", self.todo_path(key)?, Some(json!({ "note": note })))
-            }
             Op::Move { key, parent, index } => {
                 let path = self.todo_path(key)?;
                 let parent = self.parent_id(parent)?;
@@ -272,7 +353,18 @@ mod tests {
 
         fn reply(&mut self, request: Request) -> Reply {
             let status = (self.status)(&request);
-            let payload = if request.method == "POST" {
+            let commenting = request.path.ends_with("/comments")
+                || request.path.starts_with("/api/v1/comments/");
+            let payload = if commenting {
+                self.next_id += 1;
+                json!({ "comment": {
+                    "id": self.next_id - 1,
+                    "body": request.body.as_ref().and_then(|body| body.get("body")).cloned(),
+                    "via": "app",
+                    "at": "2026-11-16T01:00:00.000Z",
+                    "editedAt": null
+                } })
+            } else if request.method == "POST" {
                 self.next_id += 1;
                 json!({ "todo": { "id": self.next_id - 1 } })
             } else {
@@ -300,6 +392,7 @@ mod tests {
         t0: Instant,
         elapsed: Duration,
         notified: usize,
+        saved: Vec<Saved>,
     }
 
     impl Harness {
@@ -310,6 +403,7 @@ mod tests {
                 t0: Instant::now(),
                 elapsed: Duration::ZERO,
                 notified: 0,
+                saved: Vec::new(),
             }
         }
 
@@ -317,7 +411,7 @@ mod tests {
             let failed = self.sync.failed;
             while let Some(request) = self.sync.start() {
                 let reply = self.server.reply(request);
-                self.sync.finish(Ok(reply));
+                self.saved.extend(self.sync.finish(Ok(reply)));
             }
             if !failed && self.sync.failed {
                 self.notified += 1;
@@ -331,10 +425,6 @@ mod tests {
 
         fn title(&mut self, key: &str, title: &str) {
             self.sync.title(key, title, self.t0 + self.elapsed);
-        }
-
-        fn note(&mut self, key: &str, note: &str) {
-            self.sync.note(key, note, self.t0 + self.elapsed);
         }
 
         fn fire(&mut self, due: Instant) {
@@ -401,29 +491,35 @@ mod tests {
     }
 
     #[test]
-    fn brings_back_a_deleted_rows_note_in_the_request_that_recreates_it_so_undoing_a_delete_loses_nothing_written_under_it()
+    fn asks_the_server_to_bring_a_deleted_row_back_under_its_old_id_so_undoing_a_delete_keeps_the_comments_written_on_it()
      {
-        let mut h = Harness::new(&[], Server::ok());
+        let mut h = Harness::new(&[("t1", 1), ("t2", 2)], Server::new(|_| 200));
+        let outline = crate::outline::fixtures::outline_of(&[
+            crate::outline::fixtures::todo(1, "health", None),
+            crate::outline::fixtures::todo(2, "dentist", Some(1)),
+        ]);
 
-        h.apply(&[Op::Create {
-            key: "t1".into(),
-            parent: ROOT.into(),
+        h.apply(&[delete_op("t2", &["t2"])]);
+        h.apply(&[Op::Restore {
+            key: "t2".into(),
+            parent: "t1".into(),
             index: 0,
-            title: "dentist".into(),
-            note: Some("weekday mornings".into()),
+            items: vec![outline.item("t2").clone()],
         }]);
         h.run_all_timers();
 
         assert_eq!(
             h.server.calls,
-            [request(
-                "POST",
-                "/api/v1/todos",
-                Some(
-                    json!({ "title": "dentist", "note": "weekday mornings", "parentId": null, "index": 0 })
-                )
-            )]
+            [
+                request("DELETE", "/api/v1/todos/2", None),
+                request(
+                    "POST",
+                    "/api/v1/todos/2/restore",
+                    Some(json!({ "parentId": 1, "index": 0 }))
+                ),
+            ]
         );
+        assert!(!h.sync.failed);
     }
 
     #[test]
@@ -470,15 +566,43 @@ mod tests {
     }
 
     #[test]
-    fn sends_a_burst_of_note_typing_as_one_update_of_its_own_so_it_never_overwrites_the_title_being_typed_in_the_same_pause()
+    fn sends_a_comment_on_a_row_still_being_created_once_the_server_has_given_it_an_id_so_a_comment_written_right_after_enter_is_kept()
      {
-        let mut h = Harness::new(&[("t1", 1)], Server::ok());
+        let mut h = Harness::new(&[], Server::ok());
 
-        h.title("t1", "book hotel");
-        for note in ["n", "ne", "near the station"] {
-            h.note("t1", note);
-            h.advance(200);
-        }
+        h.sync.apply(&[create_op("new1", ROOT, 0, "book hotel")]);
+        let ticket = h.sync.comment("new1", "near the station");
+        h.run_all_timers();
+
+        assert_eq!(
+            h.server.calls,
+            [
+                request(
+                    "POST",
+                    "/api/v1/todos",
+                    Some(json!({ "title": "book hotel", "parentId": null, "index": 0 }))
+                ),
+                request(
+                    "POST",
+                    "/api/v1/todos/100/comments",
+                    Some(json!({ "body": "near the station" }))
+                ),
+            ]
+        );
+        assert!(matches!(
+            h.saved.as_slice(),
+            [Saved::Posted { key, ticket: posted, comment }]
+                if key == "new1" && *posted == ticket && comment.body == "near the station"
+        ));
+    }
+
+    #[test]
+    fn edits_and_deletes_comments_by_their_own_ids_in_the_order_they_were_made() {
+        let server = Server::new(|call| if call.method == "DELETE" { 204 } else { 200 });
+        let mut h = Harness::new(&[("t1", 1)], server);
+
+        h.sync.edit_comment(7, "no answer, try Friday");
+        h.sync.delete_comment(8);
         h.run_all_timers();
 
         assert_eq!(
@@ -486,32 +610,94 @@ mod tests {
             [
                 request(
                     "PATCH",
-                    "/api/v1/todos/1",
-                    Some(json!({ "title": "book hotel" }))
+                    "/api/v1/comments/7",
+                    Some(json!({ "body": "no answer, try Friday" }))
                 ),
-                request(
-                    "PATCH",
-                    "/api/v1/todos/1",
-                    Some(json!({ "note": "near the station" }))
-                ),
+                request("DELETE", "/api/v1/comments/8", None),
             ]
         );
+        assert!(matches!(
+            h.saved.as_slice(),
+            [Saved::Edited(comment)] if comment.body == "no answer, try Friday"
+        ));
         assert!(!h.sync.pending());
     }
 
     #[test]
-    fn sends_a_pending_note_before_a_structural_change_to_the_same_row_keeping_the_users_order() {
+    fn stops_at_a_comment_the_server_refused_and_sends_nothing_after_it_so_editing_pauses_like_any_failed_save()
+     {
+        let server = Server::new(|call| {
+            if call.path == "/api/v1/todos/1/comments" {
+                500
+            } else {
+                200
+            }
+        });
+        let mut h = Harness::new(&[("t1", 1), ("t2", 2)], server);
+
+        h.sync.comment("t1", "first");
+        h.sync.comment("t2", "second");
+        h.run_all_timers();
+
+        assert_eq!(h.server.paths(), ["/api/v1/todos/1/comments"]);
+        assert_eq!(h.saved, []);
+        assert!(h.sync.failed);
+        assert!(h.sync.pending());
+        assert_eq!(h.notified, 1);
+    }
+
+    #[test]
+    fn treats_an_edit_to_a_comment_deleted_on_another_device_as_a_failure_so_editing_pauses_and_the_member_learns_the_edit_was_not_saved()
+     {
+        let mut h = Harness::new(&[], Server::new(|_| 404));
+
+        h.sync.edit_comment(7, "no answer, try Friday");
+        h.run_all_timers();
+
+        assert!(h.sync.failed);
+        assert_eq!(h.notified, 1);
+    }
+
+    #[test]
+    fn treats_deleting_a_comment_that_is_already_gone_as_done() {
+        let mut h = Harness::new(&[], Server::new(|_| 404));
+
+        h.sync.delete_comment(8);
+        h.run_all_timers();
+
+        assert!(!h.sync.failed);
+        assert!(!h.sync.pending());
+    }
+
+    #[test]
+    fn treats_a_comment_reply_without_the_saved_comment_as_a_failure_so_the_pane_never_shows_a_comment_the_server_did_not_confirm()
+     {
+        let mut sync = Sync::new([("t1".to_owned(), 1)]);
+
+        sync.comment("t1", "near the station");
+        assert!(sync.start().is_some());
+        let saved = sync.finish(Ok(Reply {
+            status: 201,
+            body: Some(json!({})),
+        }));
+
+        assert_eq!(saved, None);
+        assert!(sync.failed);
+    }
+
+    #[test]
+    fn sends_typing_from_before_a_comment_first_keeping_the_users_order() {
         let mut h = Harness::new(&[("t1", 1)], Server::ok());
 
-        h.note("t1", "near the station");
-        h.apply(&[update_op("t1", Some(true), None)]);
+        h.title("t1", "book hotel");
+        h.sync.comment("t1", "near the station");
         h.run_all_timers();
 
         assert_eq!(
             h.server.bodies(),
             [
-                Some(json!({ "note": "near the station" })),
-                Some(json!({ "completed": true }))
+                Some(json!({ "title": "book hotel" })),
+                Some(json!({ "body": "near the station" }))
             ]
         );
     }
@@ -555,13 +741,12 @@ mod tests {
     }
 
     #[test]
-    fn drops_pending_titles_and_notes_of_deleted_rows_instead_of_sending_them_to_todos_that_no_longer_exist()
-     {
+    fn drops_pending_titles_of_deleted_rows_instead_of_sending_them_to_todos_that_no_longer_exist()
+    {
         let server = Server::new(|call| if call.method == "DELETE" { 204 } else { 200 });
         let mut h = Harness::new(&[("t1", 1), ("t2", 2)], server);
 
         h.title("t1", "typed into the row");
-        h.note("t1", "typed under the title");
         h.title("t2", "typed under the parent");
         h.apply(&[delete_op("t1", &["t1", "t2"])]);
         h.run_all_timers();

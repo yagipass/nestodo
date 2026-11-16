@@ -16,7 +16,7 @@ use crate::ui::backend::Backend;
 use crate::ui::icons::Icon;
 use crate::ui::text_field::{FieldEvent, TextField};
 use crate::ui::theme::{Theme, theme};
-use crate::ui::widgets::{PAGE_WIDTH, choice, icon, icon_button, sheet_shadow};
+use crate::ui::widgets::{PAGE_WIDTH, choice, icon, icon_button, pill, sheet_shadow, text_button};
 
 actions!(settings, [SaveWebhook, CancelWebhook, SaveProfile]);
 
@@ -885,55 +885,6 @@ fn field_box(field: &Entity<TextField>, invalid: bool, colors: &Theme) -> Div {
         .child(div().flex_1().min_w_0().child(field.clone()))
 }
 
-fn pill(
-    id: impl Into<ElementId>,
-    text: &'static str,
-    enabled: bool,
-    colors: &Theme,
-) -> Stateful<Div> {
-    let strong = colors.accent_strong;
-    div()
-        .id(id)
-        .flex_none()
-        .h(px(32.))
-        .px(px(14.))
-        .flex()
-        .items_center()
-        .rounded(px(10.))
-        .bg(colors.accent)
-        .text_color(colors.on_accent)
-        .text_size(px(14.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .when(enabled, |pill| {
-            pill.cursor_pointer().hover(move |style| style.bg(strong))
-        })
-        .when(!enabled, |pill| pill.opacity(0.5))
-        .child(text)
-}
-
-fn text_button(
-    id: impl Into<ElementId>,
-    text: &'static str,
-    danger: bool,
-    enabled: bool,
-    colors: &Theme,
-) -> Stateful<Div> {
-    let hover = colors.hover;
-    div()
-        .id(id)
-        .flex_none()
-        .px(px(10.))
-        .py(px(6.))
-        .rounded(px(10.))
-        .text_size(px(14.))
-        .text_color(if danger { colors.danger } else { colors.accent })
-        .when(enabled, |button| {
-            button.cursor_pointer().hover(move |style| style.bg(hover))
-        })
-        .when(!enabled, |button| button.opacity(0.5))
-        .child(text)
-}
-
 fn checkbox(
     id: impl Into<ElementId>,
     text: &'static str,
@@ -1253,7 +1204,7 @@ impl SettingsView {
                     }),
             )
             .child(note(
-                "Within 13 minutes of adding a todo with no note or only a link, its id, title and note are sent to this URL.",
+                "Within 13 minutes of adding a todo with no comments or only a link, its id, title and comments are sent to this URL.",
                 &colors,
             ))
             .child(content)
@@ -1505,6 +1456,7 @@ mod tests {
 
     use gpui::{Focusable, TestAppContext, VisualTestContext};
     use nestodo_desktop::api::StatsResponse;
+    use nestodo_desktop::thread::{SearchHit, TimelineItem};
     use nestodo_desktop::webhook::WebhookEdit;
     use nestodo_desktop::wire::{Reply, Request, Todo};
 
@@ -1588,6 +1540,14 @@ mod tests {
         }
 
         fn request(&self, _: &Request) -> Result<Reply, Error> {
+            Err(Error::Invalid("not used".into()))
+        }
+
+        fn timeline(&self, _: u64) -> Result<Vec<TimelineItem>, Error> {
+            Err(Error::Invalid("not used".into()))
+        }
+
+        fn search(&self, _: &str) -> Result<Vec<SearchHit>, Error> {
             Err(Error::Invalid("not used".into()))
         }
 

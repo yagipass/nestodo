@@ -581,6 +581,9 @@ impl Root {
             return;
         };
         workspace.profile = Some(profile);
+        workspace
+            .outline
+            .update(cx, |outline, cx| outline.set_avatar(avatar.clone(), cx));
         workspace.avatar = avatar;
         cx.notify();
     }
@@ -1653,7 +1656,7 @@ mod tests {
         server
             .mock("GET", "/api/v1/todos")
             .with_body(
-                r#"{"todos":[{"id":1,"parentId":null,"position":0,"title":"Milk","note":"","completedAt":null,"collapsed":false}]}"#,
+                r#"{"todos":[{"id":1,"parentId":null,"position":0,"title":"Milk","completedAt":null,"collapsed":false,"commentCount":0}]}"#,
             )
             .create();
         server
@@ -1751,12 +1754,13 @@ mod tests {
         cx.run_until_parked();
     }
 
-    fn edit_note(outline: &Entity<OutlineView>, cx: &mut VisualTestContext) {
+    fn post_comment(outline: &Entity<OutlineView>, cx: &mut VisualTestContext) {
         outline.update_in(cx, |outline, window, cx| {
-            outline.open_note("t1", window, cx);
+            outline.open_comments("t1", window, cx);
         });
         cx.run_until_parked();
         cx.simulate_input("x");
+        cx.simulate_keystrokes("cmd-enter");
     }
 
     fn ask_before_leaving(cx: &mut VisualTestContext) -> Rc<Cell<bool>> {
@@ -1781,7 +1785,7 @@ mod tests {
         let prefs = TempDir::new();
         let (_, outline, cx) = open(cx, &server, &prefs);
         let quit = ask_before_leaving(cx);
-        edit_note(&outline, cx);
+        post_comment(&outline, cx);
 
         cx.simulate_keystrokes("cmd-q");
         wait(cx);
@@ -1801,7 +1805,7 @@ mod tests {
         let prefs = TempDir::new();
         let (_, outline, cx) = open(cx, &server, &prefs);
         ask_before_leaving(cx);
-        edit_note(&outline, cx);
+        post_comment(&outline, cx);
 
         let closed = cx.simulate_close();
         wait(cx);
@@ -2352,7 +2356,7 @@ mod tests {
         let server = refusing_saves();
         let prefs = TempDir::new();
         let (root, outline, cx) = open(cx, &server, &prefs);
-        edit_note(&outline, cx);
+        post_comment(&outline, cx);
         wait(cx);
         root.update_in(cx, Root::toggle_menu);
 
@@ -2725,7 +2729,7 @@ mod tests {
         let server = refusing_saves();
         let prefs = TempDir::new();
         let (root, outline, cx) = open(cx, &server, &prefs);
-        edit_note(&outline, cx);
+        post_comment(&outline, cx);
 
         root.update_in(cx, Root::change_server);
         wait(cx);

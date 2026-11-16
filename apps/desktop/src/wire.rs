@@ -9,11 +9,11 @@ pub struct Todo {
     #[serde(default)]
     pub position: u64,
     pub title: String,
-    #[serde(default)]
-    pub note: String,
     pub completed_at: Option<String>,
     #[serde(default)]
     pub collapsed: bool,
+    #[serde(default)]
+    pub comment_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -15,18 +15,18 @@ pub const END: usize = usize::MAX;
 pub struct Item {
     pub key: Key,
     pub title: String,
-    pub note: String,
+    pub comments: u64,
     pub done: bool,
     pub collapsed: bool,
     pub children: Vec<Key>,
 }
 
 impl Item {
-    fn new(key: &str, title: &str, note: &str) -> Item {
+    fn new(key: &str, title: &str) -> Item {
         Item {
             key: key.to_owned(),
             title: title.to_owned(),
-            note: note.to_owned(),
+            comments: 0,
             done: false,
             collapsed: false,
             children: Vec::new(),
@@ -42,7 +42,7 @@ pub struct Outline {
 impl Default for Outline {
     fn default() -> Self {
         Outline {
-            items: HashMap::from([(ROOT.to_owned(), Item::new(ROOT, "", ""))]),
+            items: HashMap::from([(ROOT.to_owned(), Item::new(ROOT, ""))]),
         }
     }
 }
@@ -55,7 +55,8 @@ impl Outline {
             let item = Item {
                 done: todo.completed_at.is_some(),
                 collapsed: todo.collapsed,
-                ..Item::new(&key, &todo.title, &todo.note)
+                comments: todo.comment_count,
+                ..Item::new(&key, &todo.title)
             };
             outline.items.insert(key, item);
         }
@@ -121,15 +122,10 @@ pub enum Op {
         parent: Key,
         index: usize,
         title: String,
-        note: Option<String>,
     },
     Title {
         key: Key,
         title: String,
-    },
-    Note {
-        key: Key,
-        note: String,
     },
     Update {
         key: Key,
@@ -145,6 +141,12 @@ pub enum Op {
         key: Key,
         removed: Vec<Key>,
     },
+    Restore {
+        key: Key,
+        parent: Key,
+        index: usize,
+        items: Vec<Item>,
+    },
 }
 
 impl Op {
@@ -153,10 +155,10 @@ impl Op {
         match self {
             Op::Create { key, .. }
             | Op::Title { key, .. }
-            | Op::Note { key, .. }
             | Op::Update { key, .. }
             | Op::Move { key, .. }
-            | Op::Delete { key, .. } => key,
+            | Op::Delete { key, .. }
+            | Op::Restore { key, .. } => key,
         }
     }
 }
@@ -165,7 +167,6 @@ impl Op {
 pub struct Focus {
     pub key: Key,
     pub pos: usize,
-    pub note: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -193,7 +194,6 @@ fn focus(key: &str, pos: usize) -> Focus {
     Focus {
         key: key.to_owned(),
         pos,
-        note: false,
     }
 }
 
@@ -285,9 +285,7 @@ fn mark(
     hit: &mut HashSet<Key>,
 ) -> bool {
     let item = outline.item(key);
-    let mut any = item.title.to_lowercase().contains(q)
-        || item.note.to_lowercase().contains(q)
-        || keep.contains(key);
+    let mut any = item.title.to_lowercase().contains(q) || keep.contains(key);
     for child in &item.children {
         if mark(outline, child, q, keep, hit) {
             any = true;
@@ -409,9 +407,11 @@ pub fn rename(outline: &Outline, key: &str, title: &str) -> Outline {
 }
 
 #[must_use]
-pub fn set_note(outline: &Outline, key: &str, note: &str) -> Outline {
+pub fn set_comments(outline: &Outline, key: &str, comments: u64) -> Outline {
     let mut next = outline.clone();
-    note.clone_into(&mut next.item_mut(key).note);
+    if let Some(item) = next.items.get_mut(key) {
+        item.comments = comments;
+    }
     next
 }
 
@@ -429,8 +429,7 @@ pub fn split(
     let mut next = outline.clone();
     if pos == 0 && !item.title.is_empty() {
         let index = next.index_in(&parent, key);
-        next.items
-            .insert(fresh.to_owned(), Item::new(fresh, "", ""));
+        next.items.insert(fresh.to_owned(), Item::new(fresh, ""));
         next.insert_child(&parent, index, fresh);
         reopen_up(&mut next, &parent);
         return Change {
@@ -440,7 +439,6 @@ pub fn split(
                 parent,
                 index,
                 title: String::new(),
-                note: None,
             }],
             focus: Some(focus(key, 0)),
         };
@@ -451,8 +449,7 @@ pub fn split(
         && item.children.iter().any(|child| shown.contains(child));
     let target = if into_children { key } else { parent.as_str() };
     before.clone_into(&mut next.item_mut(key).title);
-    next.items
-        .insert(fresh.to_owned(), Item::new(fresh, after, ""));
+    next.items.insert(fresh.to_owned(), Item::new(fresh, after));
     let index = if into_children {
         0
     } else {
@@ -465,7 +462,6 @@ pub fn split(
         parent: target.to_owned(),
         index,
         title: after.to_owned(),
-        note: None,
     }];
     if !after.is_empty() {
         ops.push(Op::Title {
@@ -703,7 +699,7 @@ pub fn merge_into_previous(outline: &Outline, rows: &[Row], key: &str) -> Option
     }
     let target = outline.item(&previous.key);
     let title = format!("{}{}", target.title, item.title);
-    if item.done || target.done || !item.note.is_empty() || utf16_len(&title) > MAX_TITLE_LENGTH {
+    if item.done || target.done || item.comments > 0 || utf16_len(&title) > MAX_TITLE_LENGTH {
         return None;
     }
     let removed = remove(outline, key);
@@ -723,8 +719,7 @@ pub fn merge_into_previous(outline: &Outline, rows: &[Row], key: &str) -> Option
 pub fn append(outline: &Outline, parent: &str, fresh: &str) -> Change {
     let mut next = outline.clone();
     let index = next.item(parent).children.len();
-    next.items
-        .insert(fresh.to_owned(), Item::new(fresh, "", ""));
+    next.items.insert(fresh.to_owned(), Item::new(fresh, ""));
     next.item_mut(parent).children.push(fresh.to_owned());
     reopen_up(&mut next, parent);
     Change {
@@ -734,7 +729,6 @@ pub fn append(outline: &Outline, parent: &str, fresh: &str) -> Change {
             parent: parent.to_owned(),
             index,
             title: String::new(),
-            note: None,
         }],
         focus: Some(focus(fresh, 0)),
     }
@@ -747,17 +741,12 @@ fn apply_op(outline: &mut Outline, op: &Op) {
             parent,
             index,
             title,
-            note,
         } => {
-            let note = note.as_deref().unwrap_or("");
-            outline
-                .items
-                .insert(key.clone(), Item::new(key, title, note));
+            outline.items.insert(key.clone(), Item::new(key, title));
             outline.insert_child(parent, *index, key);
             reopen_up(outline, parent);
         }
         Op::Title { key, title } => outline.item_mut(key).title.clone_from(title),
-        Op::Note { key, note } => outline.item_mut(key).note.clone_from(note),
         Op::Update {
             key,
             completed,
@@ -780,6 +769,18 @@ fn apply_op(outline: &mut Outline, op: &Op) {
         Op::Delete { key, .. } => {
             delete_subtree(outline, key);
         }
+        Op::Restore {
+            key,
+            parent,
+            index,
+            items,
+        } => {
+            for item in items {
+                outline.items.insert(item.key.clone(), item.clone());
+            }
+            outline.insert_child(parent, *index, key);
+            settle_move(outline, key, parent);
+        }
     }
 }
 
@@ -792,26 +793,6 @@ pub fn apply_ops(outline: &Outline, ops: &[Op]) -> Outline {
     next
 }
 
-fn recreate(outline: &Outline, key: &str) -> Vec<Op> {
-    let parent = parent_of(outline, key).unwrap_or_else(|| panic!("{key} has no parent"));
-    let item = outline.item(key);
-    let mut ops = vec![Op::Create {
-        key: key.to_owned(),
-        index: outline.index_in(&parent, key),
-        parent,
-        title: item.title.clone(),
-        note: Some(item.note.clone()),
-    }];
-    if item.collapsed {
-        ops.push(Op::Update {
-            key: key.to_owned(),
-            completed: None,
-            collapsed: Some(true),
-        });
-    }
-    ops
-}
-
 fn inverse(outline: &Outline, op: &Op) -> Vec<Op> {
     match op {
         Op::Create { key, .. } => vec![Op::Delete {
@@ -821,10 +802,6 @@ fn inverse(outline: &Outline, op: &Op) -> Vec<Op> {
         Op::Title { key, .. } => vec![Op::Title {
             key: key.clone(),
             title: outline.item(key).title.clone(),
-        }],
-        Op::Note { key, .. } => vec![Op::Note {
-            key: key.clone(),
-            note: outline.item(key).note.clone(),
         }],
         Op::Update { key, collapsed, .. } => collapsed
             .map(|_| Op::Update {
@@ -842,10 +819,22 @@ fn inverse(outline: &Outline, op: &Op) -> Vec<Op> {
                 parent,
             }]
         }
-        Op::Delete { removed, .. } => removed
-            .iter()
-            .flat_map(|key| recreate(outline, key))
-            .collect(),
+        Op::Delete { key, removed } => {
+            let parent = parent_of(outline, key).unwrap_or_else(|| panic!("{key} has no parent"));
+            vec![Op::Restore {
+                key: key.clone(),
+                index: outline.index_in(&parent, key),
+                parent,
+                items: removed
+                    .iter()
+                    .map(|key| outline.item(key).clone())
+                    .collect(),
+            }]
+        }
+        Op::Restore { key, items, .. } => vec![Op::Delete {
+            key: key.clone(),
+            removed: items.iter().map(|item| item.key.clone()).collect(),
+        }],
     }
 }
 
@@ -861,6 +850,19 @@ pub fn undo_for(outline: &Outline, ops: &[Op]) -> Vec<Op> {
     let restored = apply_ops(&current, &undo);
     undo.extend(restore_done(&restored, outline));
     undo
+}
+
+#[must_use]
+pub fn same_outline(a: &Outline, b: &Outline) -> bool {
+    a.items.len() == b.items.len()
+        && a.items.iter().all(|(key, x)| {
+            b.items.get(key).is_some_and(|y| {
+                x.title == y.title
+                    && x.done == y.done
+                    && x.collapsed == y.collapsed
+                    && x.children == y.children
+            })
+        })
 }
 
 fn set_done(key: Key, done: bool) -> Op {
@@ -912,16 +914,16 @@ pub(crate) mod fixtures {
             parent_id: parent,
             position: 0,
             title: title.to_owned(),
-            note: String::new(),
             completed_at: None,
             collapsed: false,
+            comment_count: 0,
         }
     }
 
     pub(crate) trait Mark {
         fn done(self) -> Self;
         fn folded(self) -> Self;
-        fn noted(self, note: &str) -> Self;
+        fn commented(self, comments: u64) -> Self;
     }
 
     impl Mark for Todo {
@@ -939,9 +941,9 @@ pub(crate) mod fixtures {
             }
         }
 
-        fn noted(self, note: &str) -> Self {
+        fn commented(self, comments: u64) -> Self {
             Todo {
-                note: note.to_owned(),
+                comment_count: comments,
                 ..self
             }
         }
@@ -964,7 +966,6 @@ pub(crate) mod fixtures {
             parent: parent.to_owned(),
             index,
             title: title.to_owned(),
-            note: None,
         }
     }
 
@@ -1257,18 +1258,16 @@ mod tests {
         }
 
         #[test]
-        fn leaves_the_note_with_the_head_of_the_title_since_the_note_was_written_about_the_row_it_is_under()
+        fn leaves_the_comments_with_the_head_of_the_title_since_they_were_written_about_the_row_they_are_under()
          {
-            let outline = outline_of(&[
-                todo(1, "book hotel near the station", None).noted("budget 20000 yen")
-            ]);
+            let outline = outline_of(&[todo(1, "book hotel near the station", None).commented(2)]);
             let change = split(&outline, "t1", "book hotel".len(), "n1", &all(&outline));
             assert_eq!(
                 [
-                    &change.outline.item("t1").note,
-                    &change.outline.item("n1").note
+                    change.outline.item("t1").comments,
+                    change.outline.item("n1").comments
                 ],
-                ["budget 20000 yen", ""]
+                [2, 0]
             );
         }
 
@@ -1611,12 +1610,8 @@ mod tests {
         }
 
         #[test]
-        fn refuses_when_the_row_has_a_note_so_backspace_never_throws_away_what_was_written_under_it()
-         {
-            let outline = outline_of(&[
-                todo(1, "buy ", None),
-                todo(2, "milk", None).noted("the low-fat one"),
-            ]);
+        fn refuses_when_the_row_has_comments_so_backspace_never_throws_away_the_log_kept_on_it() {
+            let outline = outline_of(&[todo(1, "buy ", None), todo(2, "milk", None).commented(1)]);
             assert_eq!(merge(&outline, "t2"), None);
         }
 
@@ -1836,30 +1831,66 @@ mod tests {
         }
 
         #[test]
-        fn recreates_a_deleted_subtree_parents_first_under_the_same_keys_with_every_note_completion_and_fold_it_had()
+        fn restores_a_deleted_subtree_in_one_step_under_the_same_keys_and_place_so_the_server_can_bring_back_the_same_todos_with_their_comments()
          {
             let outline = outline_of(&[
-                todo(1, "trip", None).folded(),
-                todo(2, "packing", Some(1)).noted("check the weather"),
-                todo(3, "socks", Some(2)).done(),
-                todo(4, "home", None),
+                todo(1, "home", None),
+                todo(2, "trip", None).folded(),
+                todo(3, "packing", Some(2)).commented(2),
+                todo(4, "socks", Some(3)).done(),
             ]);
-            let recreate = |key: &str, parent: &str, title: &str, note: &str| Op::Create {
-                key: key.to_owned(),
-                parent: parent.to_owned(),
-                index: 0,
-                title: title.to_owned(),
-                note: Some(note.to_owned()),
-            };
+            let removed = remove(&outline, "t2");
+
+            let undo = undo_for(&outline, &removed.ops);
+
             assert_eq!(
-                undo_for(&outline, &remove(&outline, "t1").ops),
+                undo,
+                [Op::Restore {
+                    key: "t2".to_owned(),
+                    parent: ROOT.to_owned(),
+                    index: 1,
+                    items: vec![
+                        outline.item("t2").clone(),
+                        outline.item("t3").clone(),
+                        outline.item("t4").clone(),
+                    ],
+                }]
+            );
+            assert_eq!(apply_ops(&removed.outline, &undo), outline);
+        }
+
+        #[test]
+        fn undoes_a_join_by_restoring_the_joined_row_and_its_old_title_so_backspace_at_the_start_of_a_row_can_be_taken_back()
+         {
+            let outline = outline_of(&[todo(1, "buy ", None), todo(2, "milk", None)]);
+            let joined = merge_into_previous(&outline, &rows(&outline, true, ""), "t2").unwrap();
+
+            let undo = undo_for(&outline, &joined.ops);
+
+            assert_eq!(
+                undo,
                 [
-                    recreate("t1", ROOT, "trip", ""),
-                    update_op("t1", None, Some(true)),
-                    recreate("t2", "t1", "packing", "check the weather"),
-                    recreate("t3", "t2", "socks", ""),
-                    update_op("t3", Some(true), None),
+                    Op::Restore {
+                        key: "t2".to_owned(),
+                        parent: ROOT.to_owned(),
+                        index: 1,
+                        items: vec![outline.item("t2").clone()],
+                    },
+                    title_op("t1", "buy "),
                 ]
+            );
+            assert_eq!(apply_ops(&joined.outline, &undo), outline);
+        }
+
+        #[test]
+        fn deletes_a_restored_subtree_again_when_the_restore_itself_is_taken_back() {
+            let outline = sample();
+            let removed = remove(&outline, "t2");
+            let undo = undo_for(&outline, &removed.ops);
+
+            assert_eq!(
+                undo_for(&removed.outline, &undo),
+                [delete_op("t2", &["t2", "t3"])]
             );
         }
     }
@@ -1905,21 +1936,17 @@ mod tests {
         }
 
         #[test]
-        fn undoing_a_delete_inside_a_done_todo_recreates_the_todo_open_and_then_completes_only_the_topmost_todo_its_creation_reopened()
+        fn undoing_a_delete_inside_a_done_todo_restores_it_done_so_nothing_above_it_is_reopened_and_completed_again()
          {
             let trip = trip();
             assert_eq!(
                 undo_for(&trip, &remove(&trip, "t3").ops),
-                [
-                    Op::Create {
-                        key: "t3".to_owned(),
-                        parent: "t2".to_owned(),
-                        index: 0,
-                        title: "socks".to_owned(),
-                        note: Some(String::new()),
-                    },
-                    update_op("t1", Some(true), None),
-                ]
+                [Op::Restore {
+                    key: "t3".to_owned(),
+                    parent: "t2".to_owned(),
+                    index: 0,
+                    items: vec![trip.item("t3").clone()],
+                }]
             );
         }
 
@@ -1974,12 +2001,19 @@ mod tests {
         }
 
         #[test]
-        fn finds_a_row_by_its_note_so_details_kept_out_of_the_title_can_still_be_filtered_for() {
-            let noted = outline_of(&[
-                todo(1, "dentist", None).noted("Only weekday mornings"),
-                todo(2, "milk", None),
+        fn shows_rows_the_server_found_by_their_comments_with_their_parents_since_comments_are_not_kept_in_the_outline()
+         {
+            let nested = outline_of(&[
+                todo(1, "health", None),
+                todo(2, "dentist", Some(1)),
+                todo(3, "milk", None),
             ]);
-            assert_eq!(row_keys(&noted, true, "weekday"), ["t1"]);
+            let found = HashSet::from(["t2".to_owned()]);
+            let keys: Vec<Key> = visible_rows(&nested, true, "weekday", &found)
+                .into_iter()
+                .map(|row| row.key)
+                .collect();
+            assert_eq!(keys, ["t1", "t2"]);
         }
 
         #[test]

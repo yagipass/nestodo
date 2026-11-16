@@ -15,6 +15,7 @@ use crate::http::{Call, Http, Response, is_loopback};
 use crate::profile::Profile;
 use crate::stats::Day;
 use crate::store::{Kind, TokenStore};
+use crate::thread::{SearchHit, SearchHits, Timeline, TimelineItem};
 use crate::webhook::{Analytics, WebhookEdit, Webhooks};
 use crate::wire::{Reply, Request, Todo};
 
@@ -149,6 +150,19 @@ impl Client {
 
     pub fn list(&self) -> Result<Vec<Todo>, Error> {
         Ok(self.get::<Many>("/api/v1/todos".into())?.todos)
+    }
+
+    pub fn timeline(&self, id: u64) -> Result<Vec<TimelineItem>, Error> {
+        Ok(self
+            .get::<Timeline>(format!("/api/v1/todos/{id}/timeline"))?
+            .items)
+    }
+
+    pub fn search(&self, query: &str) -> Result<Vec<SearchHit>, Error> {
+        let query: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
+        Ok(self
+            .get::<SearchHits>(format!("/api/v1/search?q={query}"))?
+            .todos)
     }
 
     pub fn stats(&self, time_zone: &str) -> Result<StatsResponse, Error> {
@@ -844,8 +858,8 @@ mod tests {
             .mock("GET", "/api/v1/todos")
             .with_body(
                 r#"{"todos":[
-                    {"id":1,"parentId":null,"position":0,"title":"Groceries","note":"","completedAt":null,"collapsed":true,"createdAt":"2026-11-01T00:00:00.000Z"},
-                    {"id":2,"parentId":1,"position":0,"title":"Milk","note":"2L","completedAt":"2026-11-02T09:00:00.000Z","collapsed":false,"createdAt":"2026-11-01T00:00:00.000Z"}
+                    {"id":1,"parentId":null,"position":0,"title":"Groceries","completedAt":null,"collapsed":true,"createdAt":"2026-11-01T00:00:00.000Z","commentCount":0},
+                    {"id":2,"parentId":1,"position":0,"title":"Milk","completedAt":"2026-11-02T09:00:00.000Z","collapsed":false,"createdAt":"2026-11-01T00:00:00.000Z","commentCount":2}
                 ]}"#,
             )
             .create();
@@ -856,10 +870,77 @@ mod tests {
         assert_eq!(todos[0].parent_id, None);
         assert!(todos[0].collapsed);
         assert_eq!(todos[1].parent_id, Some(1));
-        assert_eq!(todos[1].note, "2L");
+        assert_eq!(todos[1].comment_count, 2);
         assert_eq!(
             todos[1].completed_at.as_deref(),
             Some("2026-11-02T09:00:00.000Z")
+        );
+    }
+
+    #[test]
+    fn reads_a_todos_timeline_oldest_first_so_the_log_reads_top_down_like_the_web_app() {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        server
+            .mock("GET", "/api/v1/todos/7/timeline")
+            .with_body(
+                r#"{"items":[
+                    {"type":"event","kind":"created","at":"2026-11-16T02:19:55Z"},
+                    {"type":"comment","id":3,"body":"asked B","via":"app","at":"2026-11-16T02:20:00.282Z","editedAt":null}
+                ]}"#,
+            )
+            .create();
+
+        let items = signed_in(&server, &store).unwrap().timeline(7).unwrap();
+
+        assert!(matches!(
+            items.as_slice(),
+            [
+                TimelineItem::Event { .. },
+                TimelineItem::Comment(comment)
+            ] if comment.id == 3 && comment.body == "asked B"
+        ));
+    }
+
+    #[test]
+    fn a_timeline_of_a_todo_that_is_gone_is_an_error_so_the_pane_can_offer_to_try_again() {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        server
+            .mock("GET", "/api/v1/todos/7/timeline")
+            .with_status(404)
+            .with_body(r#"{"error":"not_found","message":"Todo not found"}"#)
+            .create();
+
+        let result = signed_in(&server, &store).unwrap().timeline(7);
+
+        assert!(
+            matches!(&result, Err(Error::Server { status: 404, .. })),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn search_encodes_the_query_so_an_ampersand_or_japanese_is_searched_as_typed() {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        server
+            .mock("GET", "/api/v1/search")
+            .match_query(Matcher::UrlEncoded("q".into(), "B&B 京都".into()))
+            .with_body(r#"{"todos":[{"id":4,"comment":"booked the B&B 京都"}]}"#)
+            .create();
+
+        let hits = signed_in(&server, &store)
+            .unwrap()
+            .search("B&B 京都")
+            .unwrap();
+
+        assert_eq!(
+            hits,
+            [SearchHit {
+                id: 4,
+                comment: "booked the B&B 京都".into()
+            }]
         );
     }
 

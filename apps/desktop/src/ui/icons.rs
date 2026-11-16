@@ -13,11 +13,15 @@ pub enum Icon {
     Help,
     SignOut,
     Expand,
-    Note,
+    Comment,
     Done,
     Link,
     Add,
     Tick,
+    Edit,
+    Trash,
+    Reopen,
+    Bot,
 }
 
 impl Icon {
@@ -32,11 +36,15 @@ impl Icon {
             Icon::Help => "icons/help.svg",
             Icon::SignOut => "icons/sign-out.svg",
             Icon::Expand => "icons/expand.svg",
-            Icon::Note => "icons/note.svg",
+            Icon::Comment => "icons/comment.svg",
             Icon::Done => "icons/done.svg",
             Icon::Link => "icons/link.svg",
             Icon::Add => "icons/add.svg",
             Icon::Tick => "icons/tick.svg",
+            Icon::Edit => "icons/edit.svg",
+            Icon::Trash => "icons/trash.svg",
+            Icon::Reopen => "icons/reopen.svg",
+            Icon::Bot => "icons/bot.svg",
         })
     }
 }
@@ -76,14 +84,24 @@ fn svg_for(path: &str) -> Option<String> {
             r#"<path d="M10 4H7.5A3.5 3.5 0 0 0 4 7.5v9A3.5 3.5 0 0 0 7.5 20H10M15 8l4 4-4 4M19 12h-9"/>"#,
         ),
         "icons/expand.svg" => line("2.2", r#"<path d="M9.5 6.5 15 12l-5.5 5.5"/>"#),
-        "icons/note.svg" => line(
+        "icons/comment.svg" => line(
             "2",
-            r#"<rect x="4.5" y="3.5" width="15" height="17" rx="4"/><circle cx="9" cy="9" r=".75" fill="black"/><path d="M12.5 9h3M9 13.5h6.5M9 17h3.5"/>"#,
+            r#"<path d="M8 17.5h8.5A3.5 3.5 0 0 0 20 14V8a3.5 3.5 0 0 0-3.5-3.5h-9A3.5 3.5 0 0 0 4 8v12.5z"/>"#,
         ),
         "icons/done.svg" => line("2", r#"<rect x="4" y="4" width="16" height="16" rx="5"/>"#),
         "icons/link.svg" => line("2.6", r#"<path d="M8 16 16 8M10 8h6v6"/>"#),
         "icons/add.svg" => line("2", r#"<path d="M12 5.5v13M5.5 12h13"/>"#),
         "icons/tick.svg" => line("3.6", r#"<path d="M5 12l5 5 9-10"/>"#),
+        "icons/edit.svg" => line("2", r#"<path d="M14.5 5.5l4 4L9 19H5v-4z"/>"#),
+        "icons/trash.svg" => line("2", r#"<path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"/>"#),
+        "icons/reopen.svg" => line(
+            "3",
+            r#"<path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4v4h4"/>"#,
+        ),
+        "icons/bot.svg" => line(
+            "2",
+            r#"<rect x="5" y="8.5" width="14" height="10.5" rx="3"/><path d="M12 8.5V5"/><circle cx="9.5" cy="13.5" r=".9" fill="black"/><circle cx="14.5" cy="13.5" r=".9" fill="black"/>"#,
+        ),
         APP_ICON => include_str!("../../../web/public/icon.svg").to_string(),
         _ => return None,
     })
