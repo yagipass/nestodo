@@ -6,7 +6,7 @@ import org.junit.Test
 
 class ShareTest {
     @Test
-    fun `a page shared from a browser keeps its title and moves the link to the note so the row reads like the page`() {
+    fun `a page shared from a browser keeps its title and moves the link to the first comment so the row reads like the page`() {
         assertEquals(
             Shared("Pancake recipe", "https://example.com/pancakes"),
             sharedTodo("Pancake recipe", "https://example.com/pancakes"),
@@ -22,7 +22,7 @@ class ShareTest {
     }
 
     @Test
-    fun `a link that starts the text goes to the note too so the title starts with words`() {
+    fun `a link that starts the text goes to the comment too so the title starts with words`() {
         assertEquals(
             Shared("Make these on Sunday", "https://example.com/pancakes"),
             sharedTodo(null, "https://example.com/pancakes Make these on Sunday"),
@@ -46,7 +46,7 @@ class ShareTest {
     }
 
     @Test
-    fun `a link shared alone goes to the note and leaves the title for the user to type`() {
+    fun `a link shared alone goes to the comment and leaves the title for the user to type`() {
         assertEquals(
             Shared("", "https://example.com/pancakes"),
             sharedTodo(null, "https://example.com/pancakes"),
@@ -54,7 +54,7 @@ class ShareTest {
     }
 
     @Test
-    fun `links at both ends go to the note in the order they were shared, above the rest of the text`() {
+    fun `links at both ends go to the comment in the order they were shared, above the rest of the text`() {
         assertEquals(
             Shared("Pancakes", "https://example.com/a\nhttps://example.com/b\nServes 4"),
             sharedTodo(null, "https://example.com/a Pancakes https://example.com/b\n\nServes 4"),
@@ -62,7 +62,7 @@ class ShareTest {
     }
 
     @Test
-    fun `the first line becomes the title and the rest the note so a long memo stays one row in the list`() {
+    fun `the first line becomes the title and the rest the first comment so a long memo stays one row in the list`() {
         assertEquals(
             Shared("Shopping", "Milk\n  Eggs\n\nButter"),
             sharedTodo(null, "\n\n  Shopping  \n\nMilk\n  Eggs\n\nButter\n\n"),
@@ -100,6 +100,6 @@ class ShareTest {
     fun `text longer than a todo allows is cut so the server does not refuse the share`() {
         val shared = sharedTodo(null, "a".repeat(2500) + "\n" + "b".repeat(12000))!!
         assertEquals(MAX_TITLE_LENGTH, shared.title.length)
-        assertEquals(MAX_NOTE_LENGTH, shared.note.length)
+        assertEquals(MAX_COMMENT_LENGTH, shared.comment.length)
     }
 }

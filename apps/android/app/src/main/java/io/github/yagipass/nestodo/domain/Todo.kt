@@ -10,7 +10,7 @@ data class Todo(
     val title: String,
     val completedAt: String? = null,
     val collapsed: Boolean = false,
-    val note: String = "",
+    val commentCount: Int = 0,
 ) {
     val completed: Boolean
         get() = completedAt != null
@@ -18,7 +18,7 @@ data class Todo(
 
 const val MAX_TITLE_LENGTH = 2000
 
-const val MAX_NOTE_LENGTH = 10000
+const val MAX_COMMENT_LENGTH = 10000
 
 const val MAX_DEPTH = 64
 

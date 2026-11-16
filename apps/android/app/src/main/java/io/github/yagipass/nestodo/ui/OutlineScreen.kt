@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -170,7 +171,6 @@ import io.github.yagipass.nestodo.domain.Avatar
 import io.github.yagipass.nestodo.domain.Caret
 import io.github.yagipass.nestodo.domain.Guide
 import io.github.yagipass.nestodo.domain.Link
-import io.github.yagipass.nestodo.domain.MAX_NOTE_LENGTH
 import io.github.yagipass.nestodo.domain.MAX_TITLE_LENGTH
 import io.github.yagipass.nestodo.domain.OutlineRow
 import io.github.yagipass.nestodo.domain.caretIn
@@ -270,7 +270,15 @@ fun OutlineScreen(
         },
         bottomBar = {
             if (editing != null) {
-                EditToolbar(editing, state.inNote, state.canUndo, viewModel) {
+                EditToolbar(
+                    editing,
+                    state.canUndo,
+                    viewModel,
+                    onComments = {
+                        focusManager.clearFocus()
+                        viewModel.openComments(editing.key)
+                    },
+                ) {
                     focusManager.clearFocus()
                 }
             }
@@ -346,6 +354,7 @@ fun OutlineScreen(
     state.moving?.let { MovePicker(state, it.key, viewModel) }
     state.deleting?.let { DeleteDialog(state, it.key, viewModel) }
     state.completing?.let { CompleteDialog(state, it.key, viewModel) }
+    state.comments?.let { CommentSheet(state, it, viewModel, onOpenLink) }
 }
 
 @Composable
@@ -680,7 +689,6 @@ private fun OutlineList(
                 guide = guideOf.getValue(row.key),
                 revision = state.revision,
                 caret = state.caret?.takeIf { it.key == row.key },
-                noteOpen = state.noteOpen == row.key,
                 viewModel = viewModel,
                 onOpenLink = onOpenLink,
             )
@@ -803,20 +811,16 @@ private fun OutlineItem(
     guide: Guide,
     revision: Long,
     caret: Caret?,
-    noteOpen: Boolean,
     viewModel: TodoViewModel,
     onOpenLink: (String) -> Unit,
 ) {
     val key = row.key
     val colors = MaterialTheme.colorScheme
+    val focusManager = LocalFocusManager.current
     val latestRevision by rememberUpdatedState(revision)
     val latestTitle by rememberUpdatedState(row.title)
-    val latestNote by rememberUpdatedState(row.note)
     val title = remember {
         Field(row.title, { latestRevision }, singleLine = true, maxLength = MAX_TITLE_LENGTH)
-    }
-    val note = remember {
-        Field(row.note, { latestRevision }, singleLine = false, maxLength = MAX_NOTE_LENGTH)
     }
     var focused by remember { mutableStateOf(false) }
     val requester = remember { FocusRequester() }
@@ -838,35 +842,20 @@ private fun OutlineItem(
     val shown = remember(row.title, colors.primary) { shownTitle(row.title, colors.primary) }
     val latestShown by rememberUpdatedState(shown)
     val chips = remember { Chips() }
-    var noteFocused by remember { mutableStateOf(false) }
-    val noteRequester = remember { FocusRequester() }
 
-    fun sendNote(select: Boolean = true) {
-        val typed = note.take() ?: return
-        viewModel.setNote(key, typed.text, typed.composition != null)
-        if (select) viewModel.selectNote(key, typed.selection.min)
+    fun openComments() {
+        focusManager.clearFocus()
+        viewModel.openComments(key)
     }
 
-    val shownNote = remember(row.note, colors.primary) { shownTitle(row.note, colors.primary) }
-    val latestShownNote by rememberUpdatedState(shownNote)
-    var noteLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
-
     LaunchedEffect(revision, row.title) { title.follow(row.title) }
-    LaunchedEffect(revision, row.note) { note.follow(row.note) }
     LaunchedEffect(title) { snapshotFlow { title.typed() }.collect { if (focused) sendTitle() } }
     LaunchedEffect(titleScroll) { titleScroll.follow(title.state) { focused } }
-    LaunchedEffect(note) { snapshotFlow { note.typed() }.collect { if (noteFocused) sendNote() } }
     LaunchedEffect(caret) {
         if (caret == null) return@LaunchedEffect
-        if (caret.inNote) {
-            note.follow(latestNote)
-            note.place(caret.position)
-            noteRequester.requestFocus()
-        } else {
-            title.follow(latestTitle)
-            title.place(caret.position)
-            requester.requestFocus()
-        }
+        title.follow(latestTitle)
+        title.place(caret.position)
+        requester.requestFocus()
         viewModel.caretShown(caret)
     }
     DisposableEffect(key) {
@@ -874,10 +863,6 @@ private fun OutlineItem(
             if (focused) {
                 sendTitle(select = false)
                 viewModel.blur(key)
-            }
-            if (noteFocused) {
-                sendNote(select = false)
-                viewModel.blurNote(key)
             }
         }
     }
@@ -894,211 +879,100 @@ private fun OutlineItem(
         Modifier.fillMaxWidth()
             .heightIn(min = RowHeight)
             .background(
-                if (focused || noteFocused) colors.secondaryContainer else Color.Transparent,
+                if (focused) colors.secondaryContainer else Color.Transparent,
                 RoundedCornerShape(12.dp),
             )
             .drawBehind { drawGuide(guide, row.depth, guideColor) }
     ) {
         Spacer(Modifier.width(24.dp * row.depth))
         Bullet(row) { viewModel.toggleCollapsed(key) }
-        Column(Modifier.weight(1f)) {
-            Box(Modifier.fillMaxWidth().height(RowHeight)) {
-                InterceptPlatformTextInput(interceptor) {
-                    BasicTextField(
-                        state = title.state,
-                        modifier =
-                            Modifier.fillMaxSize()
-                                .focusRequester(requester)
-                                .onFocusChanged {
-                                    if (it.isFocused == focused) return@onFocusChanged
-                                    if (it.isFocused) {
-                                        focused = true
-                                        viewModel.select(key, title.state.selection.min)
-                                    } else {
-                                        sendTitle(select = false)
-                                        focused = false
-                                        viewModel.blur(key)
-                                    }
-                                }
-                                .onPreviewKeyEvent {
-                                    sendTitle()
-                                    outlineKey(it, title.state, key, viewModel)
-                                }
-                                .semantics { contentDescription = "Level ${row.depth + 1}" },
-                        inputTransformation = title.input,
-                        textStyle =
-                            style.copy(color = if (focused) textColor else Color.Transparent),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                        onKeyboardAction = {
-                            sendTitle()
-                            viewModel.enter(key, title.state.selection.min)
-                        },
-                        lineLimits = TextFieldLineLimits.SingleLine,
-                        onTextLayout = titleScroll.onTextLayout,
-                        cursorBrush = SolidColor(colors.primary),
-                        scrollState = titleScroll.scroll,
-                        decorator = { inner ->
-                            Box(
-                                Modifier.fillMaxSize().padding(horizontal = 4.dp),
-                                contentAlignment = Alignment.CenterStart,
-                            ) {
-                                inner()
-                                if (!focused) {
-                                    val chipColor = colors.secondaryContainer
-                                    Text(
-                                        shown.text,
-                                        style = style,
-                                        color = textColor,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        inlineContent = LinkIcon,
-                                        onTextLayout = { chips.layout = it },
-                                        modifier =
-                                            Modifier.clearAndSetSemantics {}
-                                                .onGloballyPositioned { chips.text = it }
-                                                .drawBehind {
-                                                    chips.bounds(shown.links).forEach { (box, _) ->
-                                                        drawRoundRect(
-                                                            chipColor,
-                                                            box.topLeft,
-                                                            box.size,
-                                                            CornerRadius(8.dp.toPx()),
-                                                        )
-                                                    }
-                                                },
-                                    )
+        Box(Modifier.weight(1f).height(RowHeight)) {
+            InterceptPlatformTextInput(interceptor) {
+                BasicTextField(
+                    state = title.state,
+                    modifier =
+                        Modifier.fillMaxSize()
+                            .focusRequester(requester)
+                            .onFocusChanged {
+                                if (it.isFocused == focused) return@onFocusChanged
+                                if (it.isFocused) {
+                                    focused = true
+                                    viewModel.select(key, title.state.selection.min)
+                                } else {
+                                    sendTitle(select = false)
+                                    focused = false
+                                    viewModel.blur(key)
                                 }
                             }
-                        },
-                    )
-                }
-                if (!focused) {
-                    Box(
-                        Modifier.matchParentSize()
-                            .onGloballyPositioned { chips.touch = it }
-                            .pointerInput(onOpenLink) {
-                                detectTapGestures { tap ->
-                                    chips.linkAt(tap, latestShown.links)?.let {
-                                        return@detectTapGestures onOpenLink(it)
-                                    }
-                                    title.follow(latestTitle)
-                                    title.place(title.state.text.length)
-                                    requester.requestFocus()
-                                }
+                            .onPreviewKeyEvent {
+                                sendTitle()
+                                outlineKey(it, title.state, key, viewModel, ::openComments)
                             }
-                    )
-                }
-            }
-            if (row.note.isNotEmpty() || noteOpen) {
-                val noteStyle = MaterialTheme.typography.bodyMedium
-                val noteColor = if (noteFocused) colors.onSurface else colors.onSurfaceVariant
-                val chipColor = colors.secondaryContainer
-                Box(
-                    Modifier.fillMaxWidth()
-                        .pullUp(8.dp)
-                        .padding(start = 4.dp, end = 8.dp, bottom = 10.dp)
-                ) {
-                    BasicTextField(
-                        state = note.state,
-                        modifier =
-                            Modifier.fillMaxWidth()
-                                .focusRequester(noteRequester)
-                                .onFocusChanged {
-                                    if (it.isFocused == noteFocused) return@onFocusChanged
-                                    if (it.isFocused) {
-                                        noteFocused = true
-                                        viewModel.selectNote(key, note.state.selection.min)
-                                    } else {
-                                        sendNote(select = false)
-                                        noteFocused = false
-                                        viewModel.blurNote(key)
-                                    }
-                                }
-                                .onPreviewKeyEvent {
-                                    sendNote()
-                                    noteKey(it, note.state, viewModel)
-                                }
-                                .semantics { contentDescription = "Note" },
-                        inputTransformation = note.input,
-                        textStyle =
-                            noteStyle.copy(
-                                color = if (noteFocused) noteColor else Color.Transparent
-                            ),
-                        lineLimits =
-                            TextFieldLineLimits.MultiLine(
-                                maxHeightInLines = if (noteFocused) Int.MAX_VALUE else 2
-                            ),
-                        cursorBrush = SolidColor(colors.primary),
-                        decorator = { inner ->
-                            Box {
-                                inner()
-                                if (!noteFocused) {
-                                    Text(
-                                        shownNote.text,
-                                        style = noteStyle,
-                                        color = noteColor,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                        inlineContent = LinkIcon,
-                                        onTextLayout = { noteLayout = it },
-                                        modifier =
-                                            Modifier.clearAndSetSemantics {}
-                                                .drawBehind {
-                                                    val layout = noteLayout ?: return@drawBehind
-                                                    val end =
-                                                        layout.getLineEnd(
-                                                            layout.lineCount - 1,
-                                                            visibleEnd = true,
-                                                        )
-                                                    shownNote.links
-                                                        .filter { it.start < end }
-                                                        .forEach {
-                                                            drawPath(
-                                                                layout.getPathForRange(
-                                                                    it.start,
-                                                                    minOf(it.end, end),
-                                                                ),
-                                                                chipColor,
-                                                            )
-                                                        }
-                                                },
-                                    )
-                                }
-                            }
-                        },
-                    )
-                    if (!noteFocused) {
+                            .semantics { contentDescription = "Level ${row.depth + 1}" },
+                    inputTransformation = title.input,
+                    textStyle = style.copy(color = if (focused) textColor else Color.Transparent),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                    onKeyboardAction = {
+                        sendTitle()
+                        viewModel.enter(key, title.state.selection.min)
+                    },
+                    lineLimits = TextFieldLineLimits.SingleLine,
+                    onTextLayout = titleScroll.onTextLayout,
+                    cursorBrush = SolidColor(colors.primary),
+                    scrollState = titleScroll.scroll,
+                    decorator = { inner ->
                         Box(
-                            Modifier.matchParentSize().pointerInput(onOpenLink) {
-                                detectTapGestures { tap ->
-                                    val shown = latestShownNote
-                                    val at = noteLayout?.getOffsetForPosition(tap)
-                                    if (at != null) {
-                                        shown.links
-                                            .firstOrNull { at in it.start until it.end }
-                                            ?.let {
-                                                return@detectTapGestures onOpenLink(it.url)
-                                            }
-                                    }
-                                    title.follow(latestTitle)
-                                    title.place(title.state.text.length)
-                                    requester.requestFocus()
-                                    viewModel.select(key, title.state.text.length)
-                                }
+                            Modifier.fillMaxSize().padding(horizontal = 4.dp),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            inner()
+                            if (!focused) {
+                                val chipColor = colors.secondaryContainer
+                                Text(
+                                    shown.text,
+                                    style = style,
+                                    color = textColor,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    inlineContent = LinkIcon,
+                                    onTextLayout = { chips.layout = it },
+                                    modifier =
+                                        Modifier.clearAndSetSemantics {}
+                                            .onGloballyPositioned { chips.text = it }
+                                            .drawBehind {
+                                                chips.bounds(shown.links).forEach { (box, _) ->
+                                                    drawRoundRect(
+                                                        chipColor,
+                                                        box.topLeft,
+                                                        box.size,
+                                                        CornerRadius(8.dp.toPx()),
+                                                    )
+                                                }
+                                            },
+                                )
                             }
-                        )
-                    }
-                }
+                        }
+                    },
+                )
+            }
+            if (!focused) {
+                Box(
+                    Modifier.matchParentSize()
+                        .onGloballyPositioned { chips.touch = it }
+                        .pointerInput(onOpenLink) {
+                            detectTapGestures { tap ->
+                                chips.linkAt(tap, latestShown.links)?.let {
+                                    return@detectTapGestures onOpenLink(it)
+                                }
+                                title.follow(latestTitle)
+                                title.place(title.state.text.length)
+                                requester.requestFocus()
+                            }
+                        }
+                )
             }
         }
-    }
-}
-
-private fun Modifier.pullUp(by: Dp): Modifier = layout { measurable, constraints ->
-    val placeable = measurable.measure(constraints)
-    val shift = by.roundToPx()
-    layout(placeable.width, (placeable.height - shift).coerceAtLeast(0)) {
-        placeable.place(0, -shift)
+        CommentChip(row, onClick = ::openComments)
     }
 }
 
@@ -1177,11 +1051,57 @@ private fun Bullet(row: OutlineRow, onToggle: () -> Unit) {
 }
 
 @Composable
+private fun CommentChip(row: OutlineRow, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val name = row.title.ifEmpty { "empty item" }
+    val count = row.comments
+    val tint =
+        if (count > 0) colors.onSurfaceVariant else colors.onSurfaceVariant.copy(alpha = 0.4f)
+    Row(
+        Modifier.height(RowHeight)
+            .widthIn(min = 48.dp)
+            .focusProperties { canFocus = false }
+            .clickable(
+                interactionSource = null,
+                indication = ripple(bounded = false, radius = 22.dp),
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .semantics {
+                contentDescription =
+                    when (count) {
+                        0 -> "Comment on $name"
+                        1 -> "1 comment on $name"
+                        else -> "$count comments on $name"
+                    }
+            }
+            .padding(horizontal = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            NestodoIcons.Comment,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(18.dp),
+        )
+        if (count > 0) {
+            Text(
+                "$count",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = tint,
+                modifier = Modifier.clearAndSetSemantics {},
+            )
+        }
+    }
+}
+
+@Composable
 private fun EditToolbar(
     row: OutlineRow,
-    inNote: Boolean,
     canUndo: Boolean,
     viewModel: TodoViewModel,
+    onComments: () -> Unit,
     onHideKeyboard: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -1212,12 +1132,7 @@ private fun EditToolbar(
                     enabled = row.hasChildren,
                     onClick = viewModel::toggleCollapsed,
                 )
-                ToolButton(
-                    NestodoIcons.Note,
-                    if (inNote) "Back to title" else "Note",
-                    selected = inNote,
-                    onClick = viewModel::toggleNote,
-                )
+                ToolButton(NestodoIcons.Comment, "Comments", onClick = onComments)
                 ToolButton(NestodoIcons.Delete, "Delete", onClick = viewModel::startDelete)
                 ToolSeparator()
                 ToolButton(NestodoIcons.Undo, "Undo", enabled = canUndo, onClick = viewModel::undo)
@@ -1232,7 +1147,6 @@ private fun RowScope.ToolButton(
     icon: ImageVector,
     label: String,
     enabled: Boolean = true,
-    selected: Boolean = false,
     onClick: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -1241,7 +1155,6 @@ private fun RowScope.ToolButton(
             Modifier.weight(1f)
                 .height(48.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .background(if (selected) colors.secondaryContainer else Color.Transparent)
                 .focusProperties { canFocus = false }
                 .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
                 .semantics { contentDescription = label },
@@ -1250,12 +1163,7 @@ private fun RowScope.ToolButton(
         Icon(
             icon,
             contentDescription = null,
-            tint =
-                when {
-                    !enabled -> colors.onSurface.copy(alpha = 0.38f)
-                    selected -> colors.onSecondaryContainer
-                    else -> colors.onSurface
-                },
+            tint = if (enabled) colors.onSurface else colors.onSurface.copy(alpha = 0.38f),
             modifier = Modifier.size(22.dp),
         )
     }
@@ -1274,6 +1182,7 @@ private fun outlineKey(
     value: TextFieldState,
     key: Long,
     viewModel: TodoViewModel,
+    openComments: () -> Unit,
 ): Boolean {
     val down = event.type == KeyEventType.KeyDown
     val vertical = event.key == Key.DirectionUp || event.key == Key.DirectionDown
@@ -1287,7 +1196,7 @@ private fun outlineKey(
             if (down) {
                 when {
                     event.isCtrlPressed -> viewModel.toggleCompleted()
-                    event.isShiftPressed -> viewModel.toggleNote()
+                    event.isShiftPressed -> openComments()
                     else -> viewModel.enter(key, value.selection.min)
                 }
             }
@@ -1313,47 +1222,11 @@ private fun outlineKey(
     }
 }
 
-private fun noteKey(event: KeyEvent, value: TextFieldState, viewModel: TodoViewModel): Boolean {
-    val down = event.type == KeyEventType.KeyDown
-    val enter = event.key == Key.Enter || event.key == Key.NumPadEnter
-    val vertical = event.key == Key.DirectionUp || event.key == Key.DirectionDown
-    return when {
-        isUndo(event) -> {
-            if (down && value.composition == null) viewModel.undo()
-            true
-        }
-        enter && (event.isShiftPressed || event.isCtrlPressed) -> {
-            if (value.composition != null) return false
-            if (down) {
-                if (event.isCtrlPressed) viewModel.toggleCompleted() else viewModel.toggleNote()
-            }
-            true
-        }
-        event.key == Key.Escape -> {
-            if (down) viewModel.toggleNote()
-            true
-        }
-        event.key == Key.Tab -> {
-            if (down) {
-                if (event.isShiftPressed) viewModel.outdent() else viewModel.indent()
-            }
-            true
-        }
-        vertical && event.isAltPressed && event.isShiftPressed -> {
-            if (down) {
-                if (event.key == Key.DirectionUp) viewModel.moveUp() else viewModel.moveDown()
-            }
-            true
-        }
-        else -> false
-    }
-}
-
-private class ShownTitle(val text: AnnotatedString, val links: List<Link>)
+internal class ShownTitle(val text: AnnotatedString, val links: List<Link>)
 
 internal fun shownText(text: String, accent: Color): AnnotatedString = shownTitle(text, accent).text
 
-private fun shownTitle(title: String, accent: Color): ShownTitle {
+internal fun shownTitle(title: String, accent: Color): ShownTitle {
     val links = mutableListOf<Link>()
     val text = buildAnnotatedString {
         var at = 0

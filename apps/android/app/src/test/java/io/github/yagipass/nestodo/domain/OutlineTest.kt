@@ -147,17 +147,10 @@ class OutlineTest {
     }
 
     @Test
-    fun `undoing a delete inside a done todo brings the todos back done, along with the todos above that recreating them reopened`() {
+    fun `undoing a delete inside a done todo brings the todos back done and leaves the todo above done, as the server's restore does`() {
         val delete = listOf(Change.Delete(2, recursive = true))
         val undo = finished.undoFor(delete)!!
-        assertEquals(
-            listOf(
-                Change.Create(2, 1, 0, "Boxes"),
-                Change.Create(3, 2, 0, "Quotes"),
-                Change.Complete(1, true),
-            ),
-            undo,
-        )
+        assertEquals(listOf(Change.Restore(2, 1, 0, listOf(finished[2]!!, finished[3]!!))), undo)
         assertEquals(finished, undo.fold(delete.fold(finished, Outline::apply), Outline::apply))
     }
 
@@ -200,38 +193,54 @@ class OutlineTest {
     }
 
     @Test
-    fun `undoing a deletion recreates the row under the same key so older undo steps still find it`() {
+    fun `undoing a deletion restores the row under the same key and id so older undo steps and its comments still find it`() {
         val done = outline.apply(Change.Complete(3, true))
         val undo = done.undoFor(listOf(Change.Delete(3)))!!
-        assertEquals(listOf(Change.Create(3, 1, 1, "Eggs"), Change.Complete(3, true)), undo)
+        assertEquals(listOf(Change.Restore(3, 1, 1, listOf(done[3]!!))), undo)
+        assertEquals(done, undo.fold(done.apply(Change.Delete(3)), Outline::apply))
     }
 
     @Test
-    fun `undoing a deletion brings the note back too so Undo restores everything the row held`() {
-        val noted = outline.apply(Change.Annotate(3, "free-range"))
-        val undo = noted.undoFor(listOf(Change.Delete(3)))!!
-        assertEquals(listOf(Change.Create(3, 1, 1, "Eggs", "free-range")), undo)
-        assertEquals(noted, undo.fold(noted.apply(Change.Delete(3)), Outline::apply))
+    fun `undoing a deletion brings the comment count back, since the server restores the comments with the row`() {
+        val logged =
+            outlineOf(
+                listOf(todo(1, "Groceries"), todo(2, "Milk", parent = 1).copy(commentCount = 3))
+            )
+        val undo = logged.undoFor(listOf(Change.Delete(2)))!!
+        assertEquals(3, undo.fold(logged.apply(Change.Delete(2)), Outline::apply)[2]!!.comments)
     }
 
     @Test
-    fun `undoing a deletion recreates every row under it, parents first, with each note, completion and fold`() {
+    fun `undoing a deletion restores the whole subtree in one step with each completion and fold, as the server restores it by the deleted id`() {
         val held =
-            listOf(Change.Collapse(1, true), Change.Annotate(2, "oat"), Change.Complete(3, true))
-                .fold(outline, Outline::apply)
+            listOf(Change.Collapse(1, true), Change.Complete(3, true)).fold(outline, Outline::apply)
         val delete = listOf(Change.Delete(1, recursive = true))
         val undo = held.undoFor(delete)!!
         assertEquals(
-            listOf(
-                Change.Create(1, null, 0, "Groceries"),
-                Change.Collapse(1, true),
-                Change.Create(2, 1, 0, "Milk", "oat"),
-                Change.Create(3, 1, 1, "Eggs"),
-                Change.Complete(3, true),
-            ),
+            listOf(Change.Restore(1, null, 0, listOf(held[1]!!, held[2]!!, held[3]!!))),
             undo,
         )
         assertEquals(held, undo.fold(delete.fold(held, Outline::apply), Outline::apply))
+    }
+
+    @Test
+    fun `an open row restored under a completed todo reopens it, as the server does, so the next reload does not end Undo`() {
+        val milk = outline[2]!!
+        val restored =
+            outline
+                .apply(Change.Delete(2))
+                .apply(Change.Complete(1, true))
+                .apply(Change.Restore(2, 1, 0, listOf(milk)))
+        assertFalse(restored[1]!!.completed)
+        assertEquals(outline.render(), restored.render())
+    }
+
+    @Test
+    fun `a row cannot be restored over one that is still there, so Undo never shows a todo twice`() {
+        assertFalse(outline.accepts(Change.Restore(2, 1, 0, listOf(outline[2]!!))))
+        assertTrue(
+            outline.apply(Change.Delete(2)).accepts(Change.Restore(2, 1, 0, listOf(outline[2]!!)))
+        )
     }
 
     @Test

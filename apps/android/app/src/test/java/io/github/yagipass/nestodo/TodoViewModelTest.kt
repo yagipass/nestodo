@@ -6,13 +6,16 @@ import io.github.yagipass.nestodo.data.ApiException
 import io.github.yagipass.nestodo.data.Screen
 import io.github.yagipass.nestodo.domain.Appearance
 import io.github.yagipass.nestodo.domain.Caret
+import io.github.yagipass.nestodo.domain.Pending
 import io.github.yagipass.nestodo.domain.Profile
+import io.github.yagipass.nestodo.domain.TimelineItem
 import io.github.yagipass.nestodo.domain.Todo
 import io.github.yagipass.nestodo.domain.Webhook
 import io.github.yagipass.nestodo.domain.WebhookEdit
 import io.github.yagipass.nestodo.domain.WebhookForm
 import io.github.yagipass.nestodo.domain.WebhookHeader
 import java.io.IOException
+import java.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -43,6 +46,8 @@ class TodoViewModelTest {
     private val settings = FakeSettings()
     private val backend = FakeBackend(repository)
     private val opened = mutableListOf<HttpUrl>()
+    private val now = Instant.parse("2026-11-16T05:00:00Z")
+    private val created = TimelineItem.Event(TimelineItem.Event.Kind.Created, POSTED)
 
     private fun backendAt(base: HttpUrl) = backend.also { opened += base }
 
@@ -52,6 +57,7 @@ class TodoViewModelTest {
                 settings,
                 timeZone = { "Asia/Tokyo" },
                 timeSource = dispatcher.scheduler.timeSource,
+                now = { now },
             )
             .also { repository.calls.clear() }
 
@@ -59,6 +65,8 @@ class TodoViewModelTest {
         state.value.rows.map { "  ".repeat(it.depth) + it.title }
 
     private fun TodoViewModel.caretKey(): Long = state.value.caret!!.key
+
+    private fun TodoViewModel.comments(): CommentsState = state.value.comments!!
 
     @Before
     fun setUp() {
@@ -139,83 +147,6 @@ class TodoViewModelTest {
         assertEquals(emptyList<String>(), repository.calls)
         dispatcher.scheduler.advanceTimeBy(2)
         assertEquals(listOf("PATCH 2 title \"Milk, oat\""), repository.calls)
-    }
-
-    @Test
-    fun `a note is saved once after a pause, on its own, instead of on every keystroke`() {
-        val viewModel = viewModel()
-        viewModel.selectNote(2, 0)
-        viewModel.setNote(2, "oat")
-        viewModel.setNote(2, "oat, not soy")
-        dispatcher.scheduler.advanceTimeBy(499)
-        assertEquals(emptyList<String>(), repository.calls)
-        dispatcher.scheduler.advanceTimeBy(2)
-        assertEquals(listOf("PATCH 2 note \"oat, not soy\""), repository.calls)
-    }
-
-    @Test
-    fun `the Note button opens the row's note under the cursor and goes back to the end of its title`() {
-        val viewModel = viewModel()
-        viewModel.select(2, 2)
-
-        viewModel.toggleNote()
-        assertEquals(Caret(2, 0, inNote = true), viewModel.state.value.caret)
-        assertEquals(2L, viewModel.state.value.noteOpen)
-        viewModel.blur(2)
-        viewModel.selectNote(2, 0)
-        assertEquals(2L, viewModel.state.value.editing)
-        assertTrue(viewModel.state.value.inNote)
-
-        viewModel.toggleNote()
-        assertEquals(Caret(2, 4), viewModel.state.value.caret)
-        viewModel.blurNote(2)
-        viewModel.select(2, 4)
-        assertEquals(2L, viewModel.state.value.editing)
-        assertFalse(viewModel.state.value.inNote)
-        assertNull(viewModel.state.value.noteOpen)
-    }
-
-    @Test
-    fun `a toolbar action taken while typing a note keeps the cursor in the note`() {
-        val viewModel = viewModel()
-        viewModel.selectNote(3, 0)
-        viewModel.setNote(3, "free-range")
-        viewModel.selectNote(3, 10)
-
-        viewModel.indent()
-
-        assertEquals(listOf("Groceries", "  Milk", "    Eggs", "Dentist"), viewModel.outline())
-        assertEquals(Caret(3, 10, inNote = true), viewModel.state.value.caret)
-        assertEquals(
-            listOf("PATCH 3 note \"free-range\"", "PATCH 3 under 2 at 0"),
-            repository.calls,
-        )
-    }
-
-    @Test
-    fun `leaving a note of only blank lines removes it so no empty note stays under the row`() {
-        val viewModel = viewModel()
-        viewModel.selectNote(4, 0)
-        viewModel.setNote(4, "\n ")
-
-        viewModel.blurNote(4)
-
-        assertEquals("", viewModel.state.value.rows.last().note)
-        assertNull(viewModel.state.value.editing)
-        assertNull(viewModel.state.value.noteOpen)
-        assertEquals(listOf("PATCH 4 note \"\""), repository.calls)
-    }
-
-    @Test
-    fun `leaving a note of only blank lines counts as a new revision, so the screen replaces the blank lines it remembers with the cleared note`() {
-        val viewModel = viewModel()
-        viewModel.selectNote(4, 0)
-        viewModel.setNote(4, "\n\n")
-        val revision = viewModel.state.value.revision
-
-        viewModel.blurNote(4)
-
-        assertTrue(viewModel.state.value.revision > revision)
     }
 
     @Test
@@ -653,13 +584,13 @@ class TodoViewModelTest {
     }
 
     @Test
-    fun `undoing a delete brings the row back with the cursor where it was`() {
+    fun `undoing a delete restores the same todo where it was, so its id and comments come back with it`() {
         val viewModel = viewModel()
         viewModel.select(4, 3)
         viewModel.startDelete()
         viewModel.confirmDelete()
         viewModel.undo()
-        assertEquals(listOf("DELETE 4", "POST \"Dentist\" under null at 1"), repository.calls)
+        assertEquals(listOf("DELETE 4", "RESTORE 4 under null at 1"), repository.calls)
         assertEquals(original, viewModel.outline())
         assertEquals(Caret(4, 3), viewModel.state.value.caret)
     }
@@ -676,7 +607,7 @@ class TodoViewModelTest {
     }
 
     @Test
-    fun `undoing a delete brings back the todos under it too, each saved under its parent's new id`() {
+    fun `undoing a delete brings back the todos under it too in one restore, since the server keeps the subtree together`() {
         val viewModel = viewModel()
         viewModel.select(1, 3)
         viewModel.startDelete()
@@ -685,12 +616,7 @@ class TodoViewModelTest {
         viewModel.undo()
 
         assertEquals(
-            listOf(
-                "DELETE 1 with its subtree",
-                "POST \"Groceries\" under null at 0",
-                "POST \"Milk\" under 100 at 0",
-                "POST \"Eggs\" under 100 at 1",
-            ),
+            listOf("DELETE 1 with its subtree", "RESTORE 1 under null at 0"),
             repository.calls,
         )
         assertEquals(original, viewModel.outline())
@@ -848,19 +774,6 @@ class TodoViewModelTest {
     }
 
     @Test
-    fun `undoing typing in a note puts the cursor back in the note`() {
-        val viewModel = viewModel()
-        viewModel.selectNote(2, 0)
-        viewModel.setNote(2, "oat")
-
-        viewModel.undo()
-
-        assertEquals("", viewModel.state.value.outline[2]!!.note)
-        assertEquals(Caret(2, 0, inNote = true), viewModel.state.value.caret)
-        assertEquals(2L, viewModel.state.value.noteOpen)
-    }
-
-    @Test
     fun `returning to the app keeps what Undo can reverse when nothing changed elsewhere`() {
         val viewModel = viewModel()
         viewModel.select(4, 0)
@@ -872,6 +785,27 @@ class TodoViewModelTest {
         assertTrue(viewModel.state.value.canUndo)
         viewModel.undo()
         assertEquals(original, viewModel.outline())
+    }
+
+    @Test
+    fun `a comment added elsewhere, such as by an assistant over MCP, keeps Undo on returning to the app, since Undo never touches comments`() {
+        val viewModel = viewModel()
+        viewModel.select(4, 0)
+        viewModel.indent()
+        repository.todos =
+            listOf(
+                groceries,
+                milk.copy(commentCount = 1),
+                eggs,
+                dentist.copy(parentId = 1, position = 2),
+            )
+
+        viewModel.onForeground()
+
+        assertTrue(viewModel.state.value.canUndo)
+        viewModel.undo()
+        assertEquals(original, viewModel.outline())
+        assertEquals(1, viewModel.state.value.outline[2]!!.comments)
     }
 
     @Test
@@ -912,7 +846,7 @@ class TodoViewModelTest {
     }
 
     @Test
-    fun `undoing a merge brings the row back, and later edits to it reach the server under its new id`() {
+    fun `undoing a merge brings the row back, and later edits to it reach the server under its own id`() {
         val viewModel = viewModel()
         viewModel.deleteBackward(3)
         viewModel.undo()
@@ -927,12 +861,350 @@ class TodoViewModelTest {
             listOf(
                 "PATCH 2 title \"MilkEggs\"",
                 "DELETE 3",
-                "POST \"Eggs\" under 1 at 1",
+                "RESTORE 3 under 1 at 1",
                 "PATCH 2 title \"Milk\"",
-                "PATCH 100 title \"Eggs!\"",
+                "PATCH 3 title \"Eggs!\"",
             ),
             repository.calls,
         )
+    }
+
+    @Test
+    fun `undoing the delete of a row added here restores it by the id the server gave it, even after returning to the app reloaded the list`() {
+        val viewModel = viewModel()
+        viewModel.enter(2, 4)
+        val key = viewModel.caretKey()
+        viewModel.select(key, 0)
+        viewModel.startDelete()
+        viewModel.confirmDelete()
+        viewModel.onForeground()
+
+        viewModel.undo()
+
+        assertEquals(
+            listOf("POST \"\" under 1 at 1", "DELETE 100", "GET", "RESTORE 100 under 1 at 1"),
+            repository.calls,
+        )
+        assertEquals(listOf("Groceries", "  Milk", "  ", "  Eggs", "Dentist"), viewModel.outline())
+    }
+
+    @Test
+    fun `a comment written on a row whose create is still on its way is posted after it, under the id the server assigned`() {
+        val viewModel = viewModel()
+        repository.gate = CompletableDeferred()
+        viewModel.enter(2, 4)
+        val key = viewModel.caretKey()
+        viewModel.openComments(key)
+
+        assertTrue(viewModel.postComment("Ask for oat"))
+        assertEquals(listOf("POST \"\" under 1 at 1"), repository.calls)
+        repository.gate!!.complete(Unit)
+
+        assertEquals(
+            listOf(
+                "POST \"\" under 1 at 1",
+                "GET 100 timeline",
+                "POST comment on 100 \"Ask for oat\"",
+            ),
+            repository.calls,
+        )
+    }
+
+    @Test
+    fun `a posted comment shows as sending until the server answers and then as posted, trimmed as the server keeps it`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        repository.gate = CompletableDeferred()
+
+        viewModel.postComment("  Call at 9\n")
+        assertEquals(listOf(created, Pending(-1, "Call at 9", now)), viewModel.comments().entries)
+        repository.gate!!.complete(Unit)
+
+        assertEquals(
+            listOf(created, TimelineItem.Comment(500, "Call at 9", at = POSTED)),
+            viewModel.comments().entries,
+        )
+        assertEquals(
+            listOf("GET 4 timeline", "POST comment on 4 \"Call at 9\""),
+            repository.calls,
+        )
+    }
+
+    @Test
+    fun `a blank comment is not posted, since the server refuses it and the log would show a comment that never saves`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+
+        assertFalse(viewModel.postComment(" \n "))
+
+        assertEquals(listOf("GET 4 timeline"), repository.calls)
+        assertEquals(listOf(created), viewModel.comments().entries)
+        assertEquals(0, viewModel.state.value.outline[4]!!.comments)
+    }
+
+    @Test
+    fun `a comment counts on its row at once and keeps Backspace from joining the row away, before the server answers`() {
+        val viewModel = viewModel()
+        viewModel.openComments(3)
+        repository.gate = CompletableDeferred()
+
+        viewModel.postComment("free-range")
+
+        assertEquals(1, viewModel.state.value.rows[2].comments)
+        assertFalse(viewModel.deleteBackward(3))
+        assertEquals(original, viewModel.outline())
+    }
+
+    @Test
+    fun `comments stay out of Undo, so Undo takes back the last outline edit and never what was written in the log`() {
+        val viewModel = viewModel()
+        viewModel.select(4, 0)
+        viewModel.indent()
+        viewModel.openComments(4)
+        viewModel.postComment("Call at 9")
+
+        viewModel.undo()
+
+        assertEquals(
+            listOf(
+                "PATCH 4 under 1 at 2",
+                "GET 4 timeline",
+                "POST comment on 4 \"Call at 9\"",
+                "PATCH 4 under null at 1",
+            ),
+            repository.calls,
+        )
+        assertEquals(1, viewModel.state.value.outline[4]!!.comments)
+        assertFalse(viewModel.state.value.canUndo)
+    }
+
+    @Test
+    fun `a comment that fails to post is reported and the outline and log are reloaded like any failed change, so it never looks saved`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        repository.failure = IOException("offline")
+
+        viewModel.postComment("Call at 9")
+
+        assertEquals(
+            listOf("GET 4 timeline", "POST comment on 4 \"Call at 9\"", "GET", "GET 4 timeline"),
+            repository.calls,
+        )
+        assertEquals("Can't connect. Check your connection.", viewModel.state.value.notice?.text)
+        assertEquals(listOf(created), viewModel.comments().entries)
+        assertEquals(0, viewModel.state.value.outline[4]!!.comments)
+    }
+
+    @Test
+    fun `a comment posted while the log is still loading shows as sending at once, so the text just posted never seems to vanish`() {
+        val viewModel = viewModel()
+        repository.gate = CompletableDeferred()
+        viewModel.openComments(4)
+
+        viewModel.postComment("Call at 9")
+
+        assertEquals(listOf(Pending(-1, "Call at 9", now)), viewModel.comments().entries)
+    }
+
+    @Test
+    fun `a comment posted after the log failed to load reloads the log, so it shows the todo's whole history and not only the new comment`() {
+        val viewModel = viewModel()
+        repository.failure = IOException("offline")
+        viewModel.openComments(4)
+
+        viewModel.postComment("Call at 9")
+
+        assertEquals(
+            listOf("GET 4 timeline", "POST comment on 4 \"Call at 9\"", "GET 4 timeline"),
+            repository.calls,
+        )
+        assertEquals(
+            listOf(created, TimelineItem.Comment(500, "Call at 9", at = POSTED)),
+            viewModel.comments().entries,
+        )
+        assertFalse(viewModel.comments().failed)
+    }
+
+    @Test
+    fun `a comment queued behind one that fails is not sent, like any change after a failure, so the log never holds comments out of the order they were written`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        repository.gate = CompletableDeferred()
+        viewModel.postComment("Call at 9")
+        viewModel.postComment("Booked for Tuesday")
+        repository.failure = IOException("offline")
+
+        repository.gate!!.complete(Unit)
+
+        assertEquals(
+            listOf("GET 4 timeline", "POST comment on 4 \"Call at 9\"", "GET", "GET 4 timeline"),
+            repository.calls,
+        )
+        assertEquals("Can't connect. Check your connection.", viewModel.state.value.notice?.text)
+        assertEquals(listOf(created), viewModel.comments().entries)
+    }
+
+    @Test
+    fun `an edited comment shows the new text at once and then the server's copy marked as edited`() {
+        repository.timelines[4] = listOf(created, TimelineItem.Comment(9, "Call at 9", at = POSTED))
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        viewModel.editComment(9)
+        repository.gate = CompletableDeferred()
+
+        assertTrue(viewModel.saveComment(" Call at 10 "))
+        assertNull(viewModel.comments().editing)
+        assertEquals(
+            TimelineItem.Comment(9, "Call at 10", at = POSTED),
+            viewModel.comments().entries[1],
+        )
+        repository.gate!!.complete(Unit)
+
+        assertEquals(
+            TimelineItem.Comment(9, "Call at 10", at = POSTED, editedAt = POSTED),
+            viewModel.comments().entries[1],
+        )
+        assertEquals(
+            listOf("GET 4 timeline", "PATCH comment 9 \"Call at 10\""),
+            repository.calls,
+        )
+    }
+
+    @Test
+    fun `a comment edited after it was deleted elsewhere says the comment is gone and reloads, so the edit is never taken as saved`() {
+        repository.timelines[4] = listOf(created, TimelineItem.Comment(9, "Call at 9", at = POSTED))
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        viewModel.editComment(9)
+        repository.timelines[4] = listOf(created)
+        repository.failure = ApiException.NotFound(9)
+
+        viewModel.saveComment("Call at 10")
+
+        assertEquals("This comment has been deleted.", viewModel.state.value.notice?.text)
+        assertEquals(listOf(created), viewModel.comments().entries)
+    }
+
+    @Test
+    fun `deleting a comment asks first, then takes it off the log and the row's count at once`() {
+        val logged = TimelineItem.Comment(9, "free-range", at = POSTED)
+        repository.todos = listOf(groceries, milk, eggs.copy(commentCount = 1), dentist)
+        repository.timelines[3] = listOf(created, logged)
+        val viewModel = viewModel()
+        viewModel.openComments(3)
+
+        viewModel.startDeleteComment(logged)
+        assertEquals(logged, viewModel.comments().deleting)
+        assertEquals(listOf("GET 3 timeline"), repository.calls)
+        viewModel.confirmDeleteComment()
+
+        assertEquals(listOf("GET 3 timeline", "DELETE comment 9"), repository.calls)
+        assertEquals(listOf(created), viewModel.comments().entries)
+        assertNull(viewModel.comments().deleting)
+        assertEquals(0, viewModel.state.value.outline[3]!!.comments)
+    }
+
+    @Test
+    fun `deleting a comment already deleted elsewhere counts as done, so nothing is reported or reloaded`() {
+        val logged = TimelineItem.Comment(9, "free-range", at = POSTED)
+        repository.timelines[3] = listOf(created, logged)
+        val viewModel = viewModel()
+        viewModel.openComments(3)
+        repository.failure = ApiException.NotFound(9)
+
+        viewModel.startDeleteComment(logged)
+        viewModel.confirmDeleteComment()
+
+        assertEquals(listOf("GET 3 timeline", "DELETE comment 9"), repository.calls)
+        assertNull(viewModel.state.value.notice)
+    }
+
+    @Test
+    fun `completing or reopening the todo while its log is open adds the event at once, before the server answers`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        repository.gate = CompletableDeferred()
+        viewModel.select(4, 0)
+
+        viewModel.toggleCompleted()
+        viewModel.toggleCompleted()
+
+        assertEquals(
+            listOf(
+                created,
+                TimelineItem.Event(TimelineItem.Event.Kind.Completed, now),
+                TimelineItem.Event(TimelineItem.Event.Kind.Reopened, now),
+            ),
+            viewModel.comments().entries,
+        )
+    }
+
+    @Test
+    fun `completing the todo while its log is still loading keeps Completed in the log, since a log read before the change cannot hold it`() {
+        val viewModel = viewModel()
+        repository.gate = CompletableDeferred()
+        viewModel.openComments(4)
+        viewModel.select(4, 0)
+        viewModel.toggleCompleted()
+
+        repository.gate!!.complete(Unit)
+
+        assertEquals(
+            listOf("GET 4 timeline", "PATCH 4 completed true", "GET 4 timeline"),
+            repository.calls,
+        )
+        assertEquals(
+            listOf(created, TimelineItem.Event(TimelineItem.Event.Kind.Completed, POSTED)),
+            viewModel.comments().entries,
+        )
+    }
+
+    @Test
+    fun `returning to the app reloads the open log, but not while a comment is still on its way`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        viewModel.onForeground()
+        assertEquals(listOf("GET 4 timeline", "GET", "GET 4 timeline"), repository.calls)
+        repository.calls.clear()
+        repository.gate = CompletableDeferred()
+
+        viewModel.postComment("Call at 9")
+        viewModel.onForeground()
+        repository.gate!!.complete(Unit)
+
+        assertEquals(listOf("POST comment on 4 \"Call at 9\""), repository.calls)
+    }
+
+    @Test
+    fun `a log that fails to load says so and loads when tried again, without reloading the outline or ending Undo`() {
+        val viewModel = viewModel()
+        viewModel.select(4, 0)
+        viewModel.indent()
+        repository.failure = IOException("offline")
+
+        viewModel.openComments(4)
+        assertTrue(viewModel.comments().failed)
+        assertNull(viewModel.state.value.notice)
+        assertTrue(viewModel.state.value.canUndo)
+        viewModel.retryComments()
+
+        assertFalse(viewModel.comments().failed)
+        assertEquals(listOf(created), viewModel.comments().entries)
+        assertEquals(
+            listOf("PATCH 4 under 1 at 2", "GET 4 timeline", "GET 4 timeline"),
+            repository.calls,
+        )
+    }
+
+    @Test
+    fun `the open log closes when its todo is gone after a reload, so it never shows a todo that no longer exists`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        repository.todos = listOf(groceries, milk, eggs)
+
+        viewModel.onForeground()
+
+        assertNull(viewModel.state.value.comments)
     }
 
     @Test
@@ -1063,22 +1335,6 @@ class TodoViewModelTest {
     }
 
     @Test
-    fun `a toolbar action after a reload changed the note being typed in keeps the cursor at the end of the new note, where the screen put it, instead of where it was before`() {
-        repository.todos = listOf(groceries, milk, eggs.copy(note = "free-range"), dentist)
-        val viewModel = viewModel()
-        viewModel.selectNote(3, 4)
-        repository.todos = listOf(groceries, milk, eggs.copy(note = "organic, free-range"), dentist)
-        viewModel.onForeground()
-
-        viewModel.indent()
-
-        assertEquals(
-            Caret(3, "organic, free-range".length, inNote = true),
-            viewModel.state.value.caret,
-        )
-    }
-
-    @Test
     fun `a toolbar action after a reload that left the focused title as it was keeps the cursor where the user put it, as the screen does, so the caret never jumps to the end`() {
         val viewModel = viewModel()
         viewModel.select(4, 3)
@@ -1088,20 +1344,6 @@ class TodoViewModelTest {
         viewModel.indent()
 
         assertEquals(Caret(4, 3), viewModel.state.value.caret)
-    }
-
-    @Test
-    fun `a toolbar action after a reload that renamed only the row whose note is being typed in keeps the cursor where the user put it in the note, as the screen does`() {
-        repository.todos = listOf(groceries, milk, eggs.copy(note = "free-range"), dentist)
-        val viewModel = viewModel()
-        viewModel.selectNote(3, 4)
-        repository.todos =
-            listOf(groceries, milk, eggs.copy(title = "Brown eggs", note = "free-range"), dentist)
-        viewModel.onForeground()
-
-        viewModel.indent()
-
-        assertEquals(Caret(3, 4, inNote = true), viewModel.state.value.caret)
     }
 
     @Test

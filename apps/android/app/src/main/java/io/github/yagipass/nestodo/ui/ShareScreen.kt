@@ -142,7 +142,7 @@ private fun Preview(
 ) {
     val colors = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
-    val note = viewModel.shared.note
+    val comment = viewModel.shared.comment
     val titleStyle = typography.bodyLarge.copy(fontSize = 18.sp, fontWeight = FontWeight.Medium)
     val input = remember(title) { title.typing(singleLine = true, maxLength = MAX_TITLE_LENGTH) }
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -179,9 +179,9 @@ private fun Preview(
                     }
                 },
             )
-            if (note.isNotEmpty()) {
+            if (comment.isNotEmpty()) {
                 Text(
-                    remember(note, colors.primary) { shownText(note, colors.primary) },
+                    remember(comment, colors.primary) { shownText(comment, colors.primary) },
                     style = typography.bodyMedium,
                     color = colors.onSurfaceVariant,
                     maxLines = if (expanded) Int.MAX_VALUE else PREVIEW_LINES,

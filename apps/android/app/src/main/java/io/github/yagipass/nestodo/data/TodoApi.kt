@@ -5,6 +5,7 @@ import io.github.yagipass.nestodo.access.fetch
 import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.Profile
+import io.github.yagipass.nestodo.domain.TimelineItem
 import io.github.yagipass.nestodo.domain.Todo
 import io.github.yagipass.nestodo.domain.WebhookEdit
 import io.github.yagipass.nestodo.domain.Webhooks
@@ -43,11 +44,9 @@ sealed class ApiException(message: String) : Exception(message) {
 interface TodoRepository {
     suspend fun list(): List<Todo>
 
-    suspend fun create(title: String, parentId: Long?, index: Int, note: String = ""): Todo
+    suspend fun create(title: String, parentId: Long?, index: Int, comment: String = ""): Todo
 
     suspend fun rename(id: Long, title: String): Todo
-
-    suspend fun setNote(id: Long, note: String): Todo
 
     suspend fun setCompleted(id: Long, completed: Boolean): Todo
 
@@ -56,6 +55,16 @@ interface TodoRepository {
     suspend fun move(id: Long, parentId: Long?, index: Int): Todo
 
     suspend fun delete(id: Long, recursive: Boolean)
+
+    suspend fun restore(id: Long, parentId: Long?, index: Int): Todo
+
+    suspend fun timeline(id: Long): List<TimelineItem>
+
+    suspend fun comment(todoId: Long, body: String): TimelineItem.Comment
+
+    suspend fun editComment(id: Long, body: String): TimelineItem.Comment
+
+    suspend fun deleteComment(id: Long)
 
     suspend fun stats(timeZone: String): List<Day>
 
@@ -91,6 +100,10 @@ class TodoApi(
 
     @Serializable private data class Stats(val days: List<Day>)
 
+    @Serializable private data class Timeline(val items: List<TimelineItem>)
+
+    @Serializable private data class Written(val comment: TimelineItem.Comment)
+
     @Serializable private data class Consent(val enabled: Boolean)
 
     @Serializable
@@ -105,21 +118,18 @@ class TodoApi(
 
     override suspend fun list(): List<Todo> = parse<Many>(call("GET", url(COLLECTION))).todos
 
-    override suspend fun create(title: String, parentId: Long?, index: Int, note: String): Todo {
+    override suspend fun create(title: String, parentId: Long?, index: Int, comment: String): Todo {
         val body = buildJsonObject {
             put("title", title)
             put("parentId", parentId)
             put("index", index)
-            if (note.isNotEmpty()) put("note", note)
+            if (comment.isNotBlank()) put("comment", comment)
         }
         return parse<One>(call("POST", url(COLLECTION), body)).todo
     }
 
     override suspend fun rename(id: Long, title: String): Todo =
         patch(id, buildJsonObject { put("title", title) })
-
-    override suspend fun setNote(id: Long, note: String): Todo =
-        patch(id, buildJsonObject { put("note", note) })
 
     override suspend fun setCompleted(id: Long, completed: Boolean): Todo =
         patch(id, buildJsonObject { put("completed", completed) })
@@ -143,6 +153,28 @@ class TodoApi(
                 .apply { if (recursive) addQueryParameter("recursive", "true") }
                 .build()
         call("DELETE", url, id = id)
+    }
+
+    override suspend fun restore(id: Long, parentId: Long?, index: Int): Todo {
+        val body = buildJsonObject {
+            put("parentId", parentId)
+            put("index", index)
+        }
+        return parse<One>(call("POST", url("${item(id)}/restore"), body, id)).todo
+    }
+
+    override suspend fun timeline(id: Long): List<TimelineItem> =
+        parse<Timeline>(call("GET", url("${item(id)}/timeline"), id = id)).items
+
+    override suspend fun comment(todoId: Long, body: String): TimelineItem.Comment =
+        parse<Written>(call("POST", url("${item(todoId)}/comments"), commentBody(body), todoId))
+            .comment
+
+    override suspend fun editComment(id: Long, body: String): TimelineItem.Comment =
+        parse<Written>(call("PATCH", url(commentItem(id)), commentBody(body), id)).comment
+
+    override suspend fun deleteComment(id: Long) {
+        call("DELETE", url(commentItem(id)), id = id)
     }
 
     override suspend fun stats(timeZone: String): List<Day> {
@@ -193,6 +225,8 @@ class TodoApi(
             } ?: throw IllegalArgumentException("$url is not an avatar on the server")
         return call("GET", target).body
     }
+
+    private fun commentBody(body: String): JsonObject = buildJsonObject { put("body", body) }
 
     private suspend fun patch(id: Long, body: JsonObject): Todo =
         parse<One>(call("PATCH", url(item(id)), body, id)).todo
@@ -267,6 +301,7 @@ class TodoApi(
 
     private companion object {
         const val COLLECTION = "/api/v1/todos"
+        const val COMMENTS = "/api/v1/comments"
         const val STATS = "/api/v1/stats"
         const val WEBHOOK = "/api/v1/webhook"
         const val ANALYTICS = "/api/v1/analytics"
@@ -278,5 +313,7 @@ class TodoApi(
         val json = Json { ignoreUnknownKeys = true }
 
         fun item(id: Long) = "$COLLECTION/$id"
+
+        fun commentItem(id: Long) = "$COMMENTS/$id"
     }
 }

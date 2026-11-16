@@ -80,7 +80,7 @@ class ShareViewModel(
         viewModelScope.launch {
             try {
                 val index = ready.outline.children(parent).size
-                repository.create(title, parent, index, shared.note)
+                repository.create(title, parent, index, shared.comment)
                 settings.setShareParent(parent)
                 _state.value = ShareState.Added(parent?.let { ready.outline[it]?.title })
             } catch (e: CancellationException) {
