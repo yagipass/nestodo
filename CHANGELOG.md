@@ -1,5 +1,20 @@
 # Changelog
 
+## [v0.12.1](https://github.com/yagipass/nestodo/compare/v0.12.0...v0.12.1) - 2026-11-16
+
+### Web
+- feat(web): join labels and MCP descriptions with words, not punctuation by @yagipass in https://github.com/yagipass/nestodo/pull/139
+- feat(web): show the stats in the conversation through MCP Apps by @yagipass in https://github.com/yagipass/nestodo/pull/145
+### Android
+- feat(android): show the todos from last time as soon as the app opens by @yagipass in https://github.com/yagipass/nestodo/pull/136
+- feat(android): join stats and comment times with words, not middle dots by @yagipass in https://github.com/yagipass/nestodo/pull/140
+### CLI
+- feat(cli): join errors and mv output with words, not punctuation by @yagipass in https://github.com/yagipass/nestodo/pull/142
+### Desktop
+- feat(desktop): join labels and errors with words, not punctuation by @yagipass in https://github.com/yagipass/nestodo/pull/141
+### Documentation
+- docs: join sentences with words, not semicolons, colons and arrows by @yagipass in https://github.com/yagipass/nestodo/pull/143
+
 ## [v0.12.0](https://github.com/yagipass/nestodo/compare/v0.11.3...v0.12.0) - 2026-11-16
 
 ### Web
