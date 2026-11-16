@@ -74,7 +74,7 @@ impl Outline {
                 self.place(id, Some(above), None)
             }
             _ => Err(Error::Invalid(format!(
-                "{id} is the first todo under {}; there is nothing above to nest under",
+                "{id} is the first todo under {}, so there is nothing above to nest under",
                 self.path(parent)
             ))),
         }
@@ -143,7 +143,7 @@ impl Outline {
                     ("todos", "them")
                 };
                 return Err(Error::Invalid(format!(
-                    "{id} has {under} {todos} under it; pass -r to delete {them} too"
+                    "{id} has {under} {todos} under it, so pass -r to delete {them} too"
                 )));
             }
             self.remove(id);
@@ -172,7 +172,7 @@ impl Outline {
                     ("todos", "them")
                 };
                 return Err(Error::Invalid(format!(
-                    "{id} has {open} open {todos} under it; pass -r to mark {them} done too"
+                    "{id} has {open} open {todos} under it, so pass -r to mark {them} done too"
                 )));
             }
         }
@@ -420,11 +420,11 @@ mod tests {
     fn cannot_indent_the_first_todo_because_there_is_nothing_above_it() {
         assert_eq!(
             sample().indent(7).unwrap_err().to_string(),
-            "7 is the first todo under Home › Work › v2 release; there is nothing above to nest under"
+            "7 is the first todo under Home › Work › v2 release, so there is nothing above to nest under"
         );
         assert_eq!(
             sample().indent(1).unwrap_err().to_string(),
-            "1 is the first todo under Home; there is nothing above to nest under"
+            "1 is the first todo under Home, so there is nothing above to nest under"
         );
     }
 
@@ -448,11 +448,11 @@ mod tests {
     fn refuses_to_delete_a_todo_with_todos_under_it_unless_recursive() {
         assert_eq!(
             sample().plan_removals(&[1], false).unwrap_err().to_string(),
-            "1 has 6 todos under it; pass -r to delete them too"
+            "1 has 6 todos under it, so pass -r to delete them too"
         );
         assert_eq!(
             sample().plan_removals(&[2], false).unwrap_err().to_string(),
-            "2 has 1 todo under it; pass -r to delete it too"
+            "2 has 1 todo under it, so pass -r to delete it too"
         );
         assert_eq!(
             sample().plan_removals(&[1], true).unwrap(),
@@ -468,14 +468,14 @@ mod tests {
                 .check_completions(&[4], false)
                 .unwrap_err()
                 .to_string(),
-            "4 has 4 open todos under it; pass -r to mark them done too"
+            "4 has 4 open todos under it, so pass -r to mark them done too"
         );
         assert_eq!(
             sample()
                 .check_completions(&[18, 2], false)
                 .unwrap_err()
                 .to_string(),
-            "2 has 1 open todo under it; pass -r to mark it done too"
+            "2 has 1 open todo under it, so pass -r to mark it done too"
         );
         assert!(sample().check_completions(&[4], true).is_ok());
         assert!(matches!(

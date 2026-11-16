@@ -45,7 +45,7 @@ fn tree_under(id: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "needs a running `vp dev` server; run with NESTODO_E2E_BASE_URL=... cargo test -- --ignored"]
+#[ignore = "needs a running `vp dev` server, so run with NESTODO_E2E_BASE_URL=... cargo test -- --ignored"]
 fn an_outline_can_be_built_rearranged_completed_and_pruned_against_the_real_server() {
     let title = format!("cli e2e {}", std::process::id());
     let root = id_of(&ok(&["add", &title]));
@@ -78,7 +78,7 @@ fn an_outline_can_be_built_rearranged_completed_and_pruned_against_the_real_serv
 
     assert_eq!(
         failure(&["done", &a]),
-        format!("error: {a} has 2 open todos under it; pass -r to mark them done too\n")
+        format!("error: {a} has 2 open todos under it, so pass -r to mark them done too\n")
     );
     ok(&["done", "-r", &a]);
     assert_eq!(
@@ -107,7 +107,7 @@ fn an_outline_can_be_built_rearranged_completed_and_pruned_against_the_real_serv
 
     assert_eq!(
         failure(&["rm", &a]),
-        format!("error: {a} has 2 todos under it; pass -r to delete them too\n")
+        format!("error: {a} has 2 todos under it, so pass -r to delete them too\n")
     );
     assert_eq!(
         ok(&["rm", "-r", &a]),
@@ -118,7 +118,7 @@ fn an_outline_can_be_built_rearranged_completed_and_pruned_against_the_real_serv
 }
 
 #[test]
-#[ignore = "needs a running `vp dev` server; run with NESTODO_E2E_BASE_URL=... cargo test -- --ignored"]
+#[ignore = "needs a running `vp dev` server, so run with NESTODO_E2E_BASE_URL=... cargo test -- --ignored"]
 fn blank_titles_are_refused_here_and_long_ones_by_the_server() {
     assert_eq!(failure(&["add", "   "]), "error: Enter a title\n");
     let long = "x".repeat(2001);

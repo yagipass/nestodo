@@ -282,7 +282,7 @@ export function ThreadPane({
                         <Icon name={EVENT_ICONS[entry.kind]} size={12} strokeWidth={3} />
                       </span>
                       <span>
-                        <strong>{EVENT_LABELS[entry.kind]}</strong> · <time dateTime={entry.at}>{time}</time>
+                        <strong>{EVENT_LABELS[entry.kind]}</strong> at <time dateTime={entry.at}>{time}</time>
                       </span>
                     </li>
                   );
@@ -312,7 +312,7 @@ export function ThreadPane({
                       <p className="thread-comment-meta">
                         {entry.via === "mcp" && <span className="thread-via">via MCP</span>}
                         <time dateTime={entry.at}>{time}</time>
-                        {entry.editedAt && <span>· edited</span>}
+                        {entry.editedAt && <span>(edited)</span>}
                         {editable && !edit && (
                           <span className="thread-actions">
                             <button
@@ -388,7 +388,7 @@ export function ThreadPane({
         <div className="thread-compose-foot">
           <span className="thread-hint">
             <kbd>⇧</kbd>
-            <kbd>Enter</kbd> to post · <kbd>Esc</kbd> back to the item
+            <kbd>Enter</kbd> to post, <kbd>Esc</kbd> back to the item
           </span>
           <button type="submit" className="pill primary" disabled={!editable || draft.trim() === ""}>
             Post

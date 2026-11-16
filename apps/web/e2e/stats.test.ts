@@ -39,7 +39,7 @@ describe("the stats page", () => {
     await client.createTodo("still open");
     await client.patch(done.id, { completed: true });
 
-    expect(await statsHtml(client)).toContain("2 added · 1 completed in the past 26 weeks");
+    expect(await statsHtml(client)).toContain("2 added and 1 completed in the past 26 weeks");
   });
 
   it("does not count a todo as done twice when it is completed again", async () => {

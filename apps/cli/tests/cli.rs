@@ -122,7 +122,7 @@ fn points_to_todo_list_when_an_id_does_not_exist() {
 
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        stderr(&output).contains("todo 42 not found; run `nestodo list`"),
+        stderr(&output).contains("todo 42 not found, so run `nestodo list`"),
         "{}",
         stderr(&output)
     );
@@ -291,7 +291,7 @@ fn moves_several_todos_behind_an_anchor_in_the_order_given() {
     second.assert();
     assert_eq!(
         stdout(&output),
-        "Moved 10 → Home › Work › v2 release\nMoved 7 → Home › Work › v2 release\n"
+        "Moved 10 to Home › Work › v2 release\nMoved 7 to Home › Work › v2 release\n"
     );
 }
 
@@ -336,7 +336,7 @@ fn moving_to_the_current_parent_sends_the_end_index_since_a_bare_parent_id_moves
     new_parent.assert();
     assert_eq!(
         stdout(&output),
-        "Moved 7 → Home › Work › v2 release\nMoved 5 → Home › Work › v2 release\n"
+        "Moved 7 to Home › Work › v2 release\nMoved 5 to Home › Work › v2 release\n"
     );
 }
 
@@ -359,11 +359,11 @@ fn moves_into_a_todo_by_appending_and_to_the_top_level_by_following_a_top_level_
 
     let output = nestodo(&server, &["mv", "18", "--to", "2"]);
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(stdout(&output), "Moved 18 → Home › Chores\n");
+    assert_eq!(stdout(&output), "Moved 18 to Home › Chores\n");
 
     let output = nestodo(&server, &["mv", "9", "--after", "2"]);
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(stdout(&output), "Moved 9 → Home\n");
+    assert_eq!(stdout(&output), "Moved 9 to Home\n");
 
     into.assert();
     out.assert();
@@ -481,7 +481,7 @@ fn refuses_to_complete_open_todos_under_a_todo_unless_told_to_with_r() {
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         stderr(&output),
-        "error: 4 has 3 open todos under it; pass -r to mark them done too\n"
+        "error: 4 has 3 open todos under it, so pass -r to mark them done too\n"
     );
     none.assert();
 }
@@ -587,7 +587,7 @@ fn refuses_to_delete_todos_under_a_todo_unless_told_to_with_r() {
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         stderr(&output),
-        "error: 1 has 6 todos under it; pass -r to delete them too\n"
+        "error: 1 has 6 todos under it, so pass -r to delete them too\n"
     );
     none.assert();
 }
