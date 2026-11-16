@@ -1,8 +1,9 @@
 package io.github.yagipass.nestodo.ui
 
 import androidx.compose.foundation.text.input.TextFieldBuffer
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.ui.text.TextRange
-import io.github.yagipass.nestodo.domain.MAX_NOTE_LENGTH
+import io.github.yagipass.nestodo.domain.MAX_COMMENT_LENGTH
 import io.github.yagipass.nestodo.domain.MAX_TITLE_LENGTH
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -14,11 +15,16 @@ class OutlineScreenTest {
     private fun title(text: String) =
         Field(text, { revision }, singleLine = true, maxLength = MAX_TITLE_LENGTH)
 
-    private fun note(text: String) =
-        Field(text, { revision }, singleLine = false, maxLength = MAX_NOTE_LENGTH)
-
     private fun Field.type(edit: TextFieldBuffer.() -> Unit) {
         state.edit {
+            edit()
+            with(input) { transformInput() }
+        }
+    }
+
+    private fun TextFieldState.typeComment(edit: TextFieldBuffer.() -> Unit) {
+        val input = typing(singleLine = false, maxLength = MAX_COMMENT_LENGTH)
+        edit {
             edit()
             with(input) { transformInput() }
         }
@@ -65,23 +71,22 @@ class OutlineScreenTest {
     }
 
     @Test
-    fun `a note keeps the line breaks typed into it, so a list written in the note stays a list`() {
-        val field = note("")
+    fun `a comment keeps the line breaks typed into it, so a list written in the log stays a list`() {
+        val composer = TextFieldState()
 
-        field.type { replace(0, 0, "Buy\nmilk") }
+        composer.typeComment { replace(0, 0, "Buy\nmilk") }
 
-        assertEquals("Buy\nmilk", field.typed().text)
+        assertEquals("Buy\nmilk", composer.text.toString())
     }
 
     @Test
-    fun `blank lines remembered from before the note was cleared give way to the empty note, so the reopened note neither shows them nor saves them with the next text typed`() {
-        val field = note("")
-        field.type { replace(0, 0, "\n\n") }
-        revision = 5
+    fun `a comment longer than the server keeps is refused whole, so the composer never holds text that the server would reject`() {
+        val full = "a".repeat(MAX_COMMENT_LENGTH)
+        val composer = TextFieldState(full)
 
-        field.follow("")
+        composer.typeComment { replace(length, length, "b") }
 
-        assertEquals(Typed("", TextRange(0), null), field.typed())
+        assertEquals(full, composer.text.toString())
     }
 
     @Test

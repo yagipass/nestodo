@@ -44,13 +44,13 @@ class ShareViewModelTest {
     }
 
     @Test
-    fun `a tap adds the shared todo at the end of that todo's children with its note in the same request`() {
+    fun `a tap adds the shared todo at the end of that todo's children with its first comment in the same request`() {
         val viewModel = viewModel()
         viewModel.add(1)
         assertEquals(
             listOf(
                 "GET",
-                "POST \"Pancakes https://example.com/pancakes\" under 1 at 2 with note \"Serves 4\"",
+                "POST \"Pancakes https://example.com/pancakes\" under 1 at 2 with comment \"Serves 4\"",
             ),
             repository.calls,
         )
@@ -63,7 +63,7 @@ class ShareViewModelTest {
         viewModel.setTitle(" Pancakes for Sunday ")
         viewModel.add(1)
         assertEquals(
-            "POST \"Pancakes for Sunday\" under 1 at 2 with note \"Serves 4\"",
+            "POST \"Pancakes for Sunday\" under 1 at 2 with comment \"Serves 4\"",
             repository.calls.last(),
         )
     }
@@ -81,7 +81,7 @@ class ShareViewModelTest {
         viewModel.setTitle("Pancakes")
         viewModel.add(1)
         assertEquals(
-            "POST \"Pancakes\" under 1 at 2 with note \"https://example.com/pancakes\"",
+            "POST \"Pancakes\" under 1 at 2 with comment \"https://example.com/pancakes\"",
             repository.calls.last(),
         )
     }
@@ -148,7 +148,7 @@ class ShareViewModelTest {
         assertEquals(
             listOf(
                 "GET",
-                "POST \"Pancakes https://example.com/pancakes\" under 4 at 0 with note \"Serves 4\"",
+                "POST \"Pancakes https://example.com/pancakes\" under 4 at 0 with comment \"Serves 4\"",
                 "GET",
             ),
             repository.calls,

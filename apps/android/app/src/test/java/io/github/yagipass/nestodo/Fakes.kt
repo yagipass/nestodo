@@ -17,11 +17,13 @@ import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Appearance
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.Profile
+import io.github.yagipass.nestodo.domain.TimelineItem
 import io.github.yagipass.nestodo.domain.Todo
 import io.github.yagipass.nestodo.domain.Webhook
 import io.github.yagipass.nestodo.domain.WebhookEdit
 import io.github.yagipass.nestodo.domain.Webhooks
 import java.io.IOException
+import java.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.TestScope
 import okhttp3.HttpUrl
@@ -43,7 +45,9 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
     var analyticsFailure: Exception? = null
     var analyticsGate: CompletableDeferred<Unit>? = null
     var gate: CompletableDeferred<Unit>? = null
+    val timelines = mutableMapOf<Long, List<TimelineItem>>()
     private var nextId = 100L
+    private var nextComment = 500L
 
     private suspend fun answer(call: String) {
         calls += call
@@ -61,19 +65,20 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
         return todos
     }
 
-    override suspend fun create(title: String, parentId: Long?, index: Int, note: String): Todo {
-        val withNote = if (note.isEmpty()) "" else " with note \"$note\""
-        answer("POST \"$title\" under $parentId at $index$withNote")
-        return Todo(nextId++, parentId, index, title, note = note)
+    override suspend fun create(title: String, parentId: Long?, index: Int, comment: String): Todo {
+        val withComment = if (comment.isEmpty()) "" else " with comment \"$comment\""
+        answer("POST \"$title\" under $parentId at $index$withComment")
+        return Todo(
+            nextId++,
+            parentId,
+            index,
+            title,
+            commentCount = if (comment.isEmpty()) 0 else 1,
+        )
     }
 
     override suspend fun rename(id: Long, title: String): Todo {
         answer("PATCH $id title \"$title\"")
-        return find(id)
-    }
-
-    override suspend fun setNote(id: Long, note: String): Todo {
-        answer("PATCH $id note \"$note\"")
         return find(id)
     }
 
@@ -106,6 +111,30 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
 
     override suspend fun delete(id: Long, recursive: Boolean) {
         answer(if (recursive) "DELETE $id with its subtree" else "DELETE $id")
+    }
+
+    override suspend fun restore(id: Long, parentId: Long?, index: Int): Todo {
+        answer("RESTORE $id under $parentId at $index")
+        return find(id)
+    }
+
+    override suspend fun timeline(id: Long): List<TimelineItem> {
+        answer("GET $id timeline")
+        return timelines[id] ?: listOf(TimelineItem.Event(TimelineItem.Event.Kind.Created, POSTED))
+    }
+
+    override suspend fun comment(todoId: Long, body: String): TimelineItem.Comment {
+        answer("POST comment on $todoId \"$body\"")
+        return TimelineItem.Comment(nextComment++, body, at = POSTED)
+    }
+
+    override suspend fun editComment(id: Long, body: String): TimelineItem.Comment {
+        answer("PATCH comment $id \"$body\"")
+        return TimelineItem.Comment(id, body, at = POSTED, editedAt = POSTED)
+    }
+
+    override suspend fun deleteComment(id: Long) {
+        answer("DELETE comment $id")
     }
 
     override suspend fun stats(timeZone: String): List<Day> {
@@ -181,6 +210,8 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
         return avatars[url] ?: throw ApiException.Server(404)
     }
 }
+
+val POSTED: Instant = Instant.parse("2026-11-16T02:19:55Z")
 
 class FakeBackend(private val repository: TodoRepository, var signedIn: Boolean = true) : Backend {
     var failure: Exception? = null

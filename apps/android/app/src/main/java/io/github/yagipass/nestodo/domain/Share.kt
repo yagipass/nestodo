@@ -1,6 +1,6 @@
 package io.github.yagipass.nestodo.domain
 
-data class Shared(val title: String, val note: String)
+data class Shared(val title: String, val comment: String)
 
 fun sharedTodo(subject: String?, text: String?): Shared? {
     val body = text.orEmpty().let { encodePastedUrl(it) ?: it }
@@ -21,7 +21,7 @@ fun sharedTodo(subject: String?, text: String?): Shared? {
     val last = afterLeading.takeLastWhile { !it.isWhitespace() }
     val trailing = encodePastedUrl(last)
     val title = if (trailing == null) afterLeading else afterLeading.dropLast(last.length).trimEnd()
-    val note = (listOfNotNull(leading, trailing) + rest).joinToString("\n")
-    if (title.isEmpty() && note.isEmpty()) return null
-    return Shared(title.take(MAX_TITLE_LENGTH), note.take(MAX_NOTE_LENGTH))
+    val comment = (listOfNotNull(leading, trailing) + rest).joinToString("\n")
+    if (title.isEmpty() && comment.isEmpty()) return null
+    return Shared(title.take(MAX_TITLE_LENGTH), comment.take(MAX_COMMENT_LENGTH))
 }

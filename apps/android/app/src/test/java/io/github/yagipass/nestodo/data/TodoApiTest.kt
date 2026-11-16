@@ -3,11 +3,14 @@ package io.github.yagipass.nestodo.data
 import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.Profile
+import io.github.yagipass.nestodo.domain.TimelineItem
 import io.github.yagipass.nestodo.domain.Todo
+import io.github.yagipass.nestodo.domain.Via
 import io.github.yagipass.nestodo.domain.Webhook
 import io.github.yagipass.nestodo.domain.WebhookEdit
 import io.github.yagipass.nestodo.domain.WebhookHeader
 import io.github.yagipass.nestodo.domain.Webhooks
+import java.time.Instant
 import java.util.Base64
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -93,14 +96,25 @@ class TodoApiTest {
         }
 
     @Test
-    fun `a shared todo is created with its note in one request so it never exists without it`() =
+    fun `a shared todo is created with its first comment in one request so it never exists without it`() =
         runTest {
             respond(201, """{"todo":$todoJson}""")
-            api().create("Pancakes", parentId = null, index = 0, note = "Serves 4")
+            api().create("Pancakes", parentId = null, index = 0, comment = "Serves 4")
             assertEquals(
                 Json.parseToJsonElement(
-                    """{"title":"Pancakes","parentId":null,"index":0,"note":"Serves 4"}"""
+                    """{"title":"Pancakes","parentId":null,"index":0,"comment":"Serves 4"}"""
                 ),
+                server.takeRequest().json(),
+            )
+        }
+
+    @Test
+    fun `a todo created with a blank comment sends none, because the server refuses a blank comment and would lose the todo`() =
+        runTest {
+            respond(201, """{"todo":$todoJson}""")
+            api().create("Pancakes", parentId = null, index = 0, comment = " \n ")
+            assertEquals(
+                Json.parseToJsonElement("""{"title":"Pancakes","parentId":null,"index":0}"""),
                 server.takeRequest().json(),
             )
         }
@@ -132,27 +146,120 @@ class TodoApiTest {
         }
 
     @Test
-    fun `a note is sent on its own with its line breaks so it never overwrites a title edited elsewhere`() =
-        runTest {
-            respond(200, """{"todo":$todoJson}""")
-            api().setNote(3, "oat\nnot soy")
-            assertEquals(
-                mapOf("note" to JsonPrimitive("oat\nnot soy")),
-                server.takeRequest().json(),
-            )
-        }
-
-    @Test
-    fun `a todo's note is read from the server, and a server without notes gives an empty one`() =
+    fun `a todo's comment count is read from the server, and a todo sent without one counts none`() =
         runTest {
             respond(
                 200,
                 """{"todos":[
-                    {"id":1,"parentId":null,"position":0,"title":"milk","note":"oat\nnot soy","completedAt":null,"collapsed":false},
+                    {"id":1,"parentId":null,"position":0,"title":"milk","completedAt":null,"collapsed":false,"commentCount":2},
                     {"id":2,"parentId":null,"position":1,"title":"eggs","completedAt":null,"collapsed":false}
                 ]}""",
             )
-            assertEquals(listOf("oat\nnot soy", ""), api().list().map { it.note })
+            assertEquals(listOf(2, 0), api().list().map { it.commentCount })
+        }
+
+    @Test
+    fun `a deleted todo is brought back by its id at the place it was, so it returns with the same id and its comments`() =
+        runTest {
+            respond(200, """{"todo":$todoJson}""")
+            assertEquals(3L, api().restore(3, parentId = null, index = 2).id)
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals("/api/v1/todos/3/restore", request.url.encodedPath)
+            assertEquals(
+                Json.parseToJsonElement("""{"parentId":null,"index":2}"""),
+                request.json(),
+            )
+        }
+
+    @Test
+    fun `the log is read oldest first, with times sent with or without milliseconds, since the server sends both`() =
+        runTest {
+            respond(
+                200,
+                """{"items":[
+                    {"type":"event","kind":"created","at":"2026-11-16T02:19:55Z"},
+                    {"type":"comment","id":7,"body":"Called\nthem","via":"mcp","at":"2026-11-16T02:20:01.282Z","editedAt":null},
+                    {"type":"comment","id":8,"body":"Booked","via":"app","at":"2026-11-16T03:00:00Z","editedAt":"2026-11-16T03:05:00.5Z"},
+                    {"type":"event","kind":"completed","at":"2026-11-16T03:10:00.000Z"}
+                ]}""",
+            )
+            assertEquals(
+                listOf(
+                    TimelineItem.Event(
+                        TimelineItem.Event.Kind.Created,
+                        Instant.parse("2026-11-16T02:19:55Z"),
+                    ),
+                    TimelineItem.Comment(
+                        7,
+                        "Called\nthem",
+                        Via.Mcp,
+                        Instant.parse("2026-11-16T02:20:01.282Z"),
+                    ),
+                    TimelineItem.Comment(
+                        8,
+                        "Booked",
+                        Via.App,
+                        Instant.parse("2026-11-16T03:00:00Z"),
+                        Instant.parse("2026-11-16T03:05:00.500Z"),
+                    ),
+                    TimelineItem.Event(
+                        TimelineItem.Event.Kind.Completed,
+                        Instant.parse("2026-11-16T03:10:00Z"),
+                    ),
+                ),
+                api().timeline(3),
+            )
+            assertEquals("/api/v1/todos/3/timeline", server.takeRequest().url.encodedPath)
+        }
+
+    @Test
+    fun `a log with a time the phone cannot read is reported as a server error instead of crashing the app`() =
+        runTest {
+            respond(
+                200,
+                """{"items":[{"type":"event","kind":"created","at":"2026-11-16 02:19:55"}]}""",
+            )
+            failsWith<ApiException.Server> { api().timeline(3) }
+        }
+
+    @Test
+    fun `a comment is posted to its todo and edited and deleted by its own id, so a comment never lands on the wrong todo`() =
+        runTest {
+            val comment =
+                """{"id":7,"body":"Called them","via":"app","at":"2026-11-16T02:20:01Z","editedAt":null}"""
+            respond(201, """{"comment":$comment}""")
+            respond(200, """{"comment":${comment.replace("null", "\"2026-11-16T02:21:00Z\"")}}""")
+            respond(204)
+
+            assertEquals(7L, api().comment(3, "Called them").id)
+            assertEquals(
+                Instant.parse("2026-11-16T02:21:00Z"),
+                api().editComment(7, "Called them twice").editedAt,
+            )
+            api().deleteComment(7)
+
+            val posted = server.takeRequest()
+            assertEquals(
+                "POST /api/v1/todos/3/comments",
+                "${posted.method} ${posted.url.encodedPath}",
+            )
+            assertEquals(mapOf("body" to JsonPrimitive("Called them")), posted.json())
+            val edited = server.takeRequest()
+            assertEquals("PATCH /api/v1/comments/7", "${edited.method} ${edited.url.encodedPath}")
+            assertEquals(mapOf("body" to JsonPrimitive("Called them twice")), edited.json())
+            val deleted = server.takeRequest()
+            assertEquals(
+                "DELETE /api/v1/comments/7",
+                "${deleted.method} ${deleted.url.encodedPath}",
+            )
+        }
+
+    @Test
+    fun `a comment already deleted elsewhere is reported as not found, so deleting it again can count as done`() =
+        runTest {
+            respond(404, """{"error":"not_found","message":"Comment not found"}""")
+            assertEquals(7L, failsWith<ApiException.NotFound> { api().deleteComment(7) }.id)
         }
 
     @Test

@@ -30,11 +30,14 @@ import io.github.yagipass.nestodo.domain.Caret
 import io.github.yagipass.nestodo.domain.Change
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.Edit
-import io.github.yagipass.nestodo.domain.MAX_NOTE_LENGTH
+import io.github.yagipass.nestodo.domain.Entry
+import io.github.yagipass.nestodo.domain.MAX_COMMENT_LENGTH
 import io.github.yagipass.nestodo.domain.MAX_TITLE_LENGTH
 import io.github.yagipass.nestodo.domain.Outline
 import io.github.yagipass.nestodo.domain.OutlineRow
+import io.github.yagipass.nestodo.domain.Pending
 import io.github.yagipass.nestodo.domain.Profile
+import io.github.yagipass.nestodo.domain.TimelineItem
 import io.github.yagipass.nestodo.domain.Todo
 import io.github.yagipass.nestodo.domain.Viewport
 import io.github.yagipass.nestodo.domain.WebhookEdit
@@ -54,6 +57,7 @@ import io.github.yagipass.nestodo.domain.singleLine
 import io.github.yagipass.nestodo.domain.toggleCollapsed
 import io.github.yagipass.nestodo.domain.toggleCompleted
 import java.io.IOException
+import java.time.Instant
 import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
@@ -126,6 +130,22 @@ sealed interface SettingsState {
     data class Failed(val message: String) : SettingsState
 }
 
+data class CommentsState(
+    val key: Long,
+    val done: Boolean,
+    val items: List<TimelineItem>? = null,
+    val local: List<Entry> = emptyList(),
+    val failed: Boolean = false,
+    val editing: Long? = null,
+    val deleting: TimelineItem.Comment? = null,
+) {
+    val entries: List<Entry>
+        get() = items?.let { it + local }.orEmpty()
+
+    val written: Boolean
+        get() = entries.any { it !is TimelineItem.Event }
+}
+
 data class TodoUiState(
     val auth: AuthState = AuthState.Checking,
     val loginError: String? = null,
@@ -139,12 +159,11 @@ data class TodoUiState(
     val showCompleted: Boolean = true,
     val appearance: Appearance = Appearance.System,
     val editing: Long? = null,
-    val inNote: Boolean = false,
-    val noteOpen: Long? = null,
     val caret: Caret? = null,
     val moving: Caret? = null,
     val deleting: Caret? = null,
     val completing: Caret? = null,
+    val comments: CommentsState? = null,
     val revision: Long = 0,
     val canUndo: Boolean = false,
     val notice: Notice? = null,
@@ -173,6 +192,7 @@ class TodoViewModel(
     private val cleartextAllowed: (String) -> Boolean = { false },
     private val timeZone: () -> String = { ZoneId.systemDefault().id },
     private val timeSource: TimeSource = TimeSource.Monotonic,
+    private val now: () -> Instant = Instant::now,
     private val usage: UsageAnalytics? = null,
     private val applyAppearance: (Appearance) -> Unit = {},
 ) : ViewModel() {
@@ -186,6 +206,14 @@ class TodoViewModel(
         data class Settings(val request: Long, val call: SettingsCall) : Task
 
         data object LoadProfile : Task
+
+        data class LoadComments(val key: Long, val request: Long) : Task
+
+        data class PostComment(val key: Long, val pending: Long, val body: String) : Task
+
+        data class EditComment(val id: Long, val body: String) : Task
+
+        data class DeleteComment(val id: Long) : Task
     }
 
     private sealed interface SettingsCall {
@@ -208,7 +236,6 @@ class TodoViewModel(
 
     private data class Typing(
         val key: Long,
-        val inNote: Boolean,
         val original: String,
         val at: TimeMark,
         val composing: Boolean,
@@ -241,11 +268,11 @@ class TodoViewModel(
     private var cursor = 0
     private val serverIds = mutableMapOf<Long, Long>()
     private val unsavedTitles = linkedSetOf<Long>()
-    private val unsavedNotes = linkedSetOf<Long>()
     private val history = ArrayDeque<Undo>()
     private var noticeId = 0L
     private var statsRequest = 0L
     private var settingsRequest = 0L
+    private var commentsRequest = 0L
 
     init {
         usage?.let { usage ->
@@ -448,7 +475,7 @@ class TodoViewModel(
     fun setTitle(key: Long, title: String, composing: Boolean = false) {
         val text = singleLine(title).take(MAX_TITLE_LENGTH)
         val node = current.outline[key] ?: return
-        type(key, inNote = false, node.title, text, composing)
+        type(key, node.title, text, composing)
         if (node.title == text) return
         _state.update {
             it.copy(outline = it.outline.apply(Change.Rename(key, text)), canUndo = true)
@@ -457,62 +484,117 @@ class TodoViewModel(
         saveTypingLater()
     }
 
-    fun setNote(key: Long, note: String, composing: Boolean = false) {
-        val text = note.take(MAX_NOTE_LENGTH)
-        val node = current.outline[key] ?: return
-        type(key, inNote = true, node.note, text, composing)
-        if (node.note == text) return
-        _state.update {
-            it.copy(outline = it.outline.apply(Change.Annotate(key, text)), canUndo = true)
-        }
-        unsavedNotes += key
-        saveTypingLater()
-    }
-
     fun select(key: Long, cursor: Int) {
         this.cursor = cursor
-        if (current.editing != key || current.inNote) {
-            _state.update { it.copy(editing = key, inNote = false) }
-        }
-    }
-
-    fun selectNote(key: Long, cursor: Int) {
-        this.cursor = cursor
-        if (current.editing != key || !current.inNote) {
-            _state.update { it.copy(editing = key, inNote = true, noteOpen = key) }
-        }
+        if (current.editing != key) _state.update { it.copy(editing = key) }
     }
 
     fun blur(key: Long) {
-        if (current.editing == key && !current.inNote) _state.update { it.copy(editing = null) }
+        if (current.editing == key) _state.update { it.copy(editing = null) }
         endTyping()
         saveTyping()
     }
 
-    fun blurNote(key: Long) {
-        val cleared = current.outline[key]?.note?.let { it.isNotEmpty() && it.isBlank() } == true
-        if (cleared) setNote(key, "")
-        endTyping()
-        _state.update {
-            val leaving = it.editing == key && it.inNote
-            it.copy(
-                editing = if (leaving) null else it.editing,
-                inNote = it.inNote && !leaving,
-                noteOpen = it.noteOpen.takeUnless { open -> open == key },
-                revision = if (cleared) it.revision + 1 else it.revision,
+    fun openComments(key: Long) {
+        val node = current.outline[key] ?: return
+        _state.update { it.copy(comments = CommentsState(key, done = node.completed)) }
+        loadComments(key)
+    }
+
+    fun closeComments() {
+        commentsRequest += 1
+        _state.update { it.copy(comments = null) }
+    }
+
+    fun retryComments() {
+        val comments = current.comments ?: return
+        updateComments { it.copy(failed = false) }
+        loadComments(comments.key)
+    }
+
+    fun postComment(body: String): Boolean {
+        val comments = current.comments ?: return false
+        val text = body.trim().take(MAX_COMMENT_LENGTH)
+        if (text.isEmpty()) return false
+        val pending = Pending(newKey(), text, now())
+        _state.update { state ->
+            state.copy(
+                outline = state.outline.recount(comments.key, 1),
+                comments = state.comments?.let { it.copy(local = it.local + pending) },
             )
         }
-        saveTyping()
+        enqueue(Task.PostComment(comments.key, pending.key, text))
+        return true
     }
 
-    fun toggleNote() {
-        val state = current
-        val key = state.editing ?: return
-        val node = state.outline[key] ?: return
-        _state.update {
-            if (state.inNote) it.copy(caret = Caret(key, node.title.length))
-            else it.copy(noteOpen = key, caret = Caret(key, node.note.length, inNote = true))
+    fun editComment(id: Long) = updateComments { it.copy(editing = id) }
+
+    fun cancelEditComment() = updateComments { it.copy(editing = null) }
+
+    fun saveComment(body: String): Boolean {
+        val id = current.comments?.editing ?: return false
+        val text = body.trim().take(MAX_COMMENT_LENGTH)
+        if (text.isEmpty()) return false
+        updateComments { comments ->
+            comments.copy(
+                editing = null,
+                items = comments.items?.replacing(id) { it.copy(body = text) },
+            )
         }
+        enqueue(Task.EditComment(id, text))
+        return true
+    }
+
+    fun startDeleteComment(comment: TimelineItem.Comment) = updateComments {
+        it.copy(deleting = comment)
+    }
+
+    fun cancelDeleteComment() = updateComments { it.copy(deleting = null) }
+
+    fun confirmDeleteComment() {
+        val comments = current.comments ?: return
+        val id = comments.deleting?.id ?: return
+        _state.update { state ->
+            state.copy(
+                outline = state.outline.recount(comments.key, -1),
+                comments =
+                    state.comments?.let {
+                        it.copy(
+                            deleting = null,
+                            editing = it.editing.takeUnless { editing -> editing == id },
+                            items =
+                                it.items?.filterNot { item ->
+                                    item is TimelineItem.Comment && item.id == id
+                                },
+                        )
+                    },
+            )
+        }
+        enqueue(Task.DeleteComment(id))
+    }
+
+    private fun loadComments(key: Long) {
+        commentsRequest += 1
+        enqueue(Task.LoadComments(key, commentsRequest))
+    }
+
+    private fun updateComments(change: (CommentsState) -> CommentsState) {
+        _state.update { state ->
+            state.comments?.let { state.copy(comments = change(it)) } ?: state
+        }
+    }
+
+    private fun showComments(request: Long, change: (CommentsState) -> CommentsState) {
+        if (request != commentsRequest) return
+        updateComments(change)
+    }
+
+    private fun CommentsState.following(outline: Outline): CommentsState {
+        val completed = outline[key]?.completed ?: return this
+        if (completed == done) return this
+        val kind =
+            if (completed) TimelineItem.Event.Kind.Completed else TimelineItem.Event.Kind.Reopened
+        return copy(done = completed, local = local + TimelineItem.Event(kind, now()))
     }
 
     fun caretShown(caret: Caret) {
@@ -541,7 +623,7 @@ class TodoViewModel(
 
     fun startMove() {
         val key = current.editing ?: return
-        _state.update { it.copy(moving = Caret(key, cursor, it.inNote)) }
+        _state.update { it.copy(moving = Caret(key, cursor)) }
     }
 
     fun moveTo(target: Long) {
@@ -559,7 +641,7 @@ class TodoViewModel(
 
     fun startDelete() {
         val key = current.editing ?: return
-        _state.update { it.copy(deleting = Caret(key, cursor, it.inNote)) }
+        _state.update { it.copy(deleting = Caret(key, cursor)) }
     }
 
     fun confirmDelete() {
@@ -579,13 +661,10 @@ class TodoViewModel(
         val state = current
         val key = state.editing ?: return
         if (state.outline[key]?.completed == false && state.outline.openUnder(key) > 0) {
-            _state.update { it.copy(completing = Caret(key, cursor, it.inNote)) }
+            _state.update { it.copy(completing = Caret(key, cursor)) }
             return
         }
-        act(
-            Caret(key, cursor, state.inNote),
-            state.outline.toggleCompleted(state.viewport, key, cursor),
-        )
+        perform(state.outline.toggleCompleted(state.viewport, key, cursor), Caret(key, cursor))
     }
 
     fun confirmComplete() {
@@ -593,9 +672,9 @@ class TodoViewModel(
         val completing = state.completing ?: return
         if (state.outline[completing.key]?.completed != false) return cancelComplete()
         _state.update { it.copy(completing = null) }
-        act(
-            completing,
+        perform(
             state.outline.toggleCompleted(state.viewport, completing.key, completing.position),
+            completing,
         )
     }
 
@@ -609,7 +688,7 @@ class TodoViewModel(
     fun toggleCollapsed(key: Long) {
         val state = current
         val edit = state.outline.toggleCollapsed(key, cursor) ?: return
-        perform(edit.copy(caret = null), state.editing?.let { Caret(it, cursor, state.inNote) })
+        perform(edit.copy(caret = null), state.editing?.let { Caret(it, cursor) })
     }
 
     fun add() {
@@ -732,19 +811,7 @@ class TodoViewModel(
     private fun act(edit: (TodoUiState, Long) -> Edit?) {
         val state = current
         val key = state.editing ?: return
-        act(Caret(key, cursor, state.inNote), edit(state, key))
-    }
-
-    private fun act(before: Caret, edit: Edit?) {
-        val done = edit?.let { done ->
-            done.copy(
-                caret =
-                    done.caret?.let {
-                        if (it.key == before.key) it.copy(inNote = before.inNote) else it
-                    }
-            )
-        }
-        perform(done, before)
+        perform(edit(state, key), Caret(key, cursor))
     }
 
     private fun perform(edit: Edit?, before: Caret?) {
@@ -755,15 +822,9 @@ class TodoViewModel(
         commit(edit.changes, edit.caret)
     }
 
-    private fun type(
-        key: Long,
-        inNote: Boolean,
-        before: String,
-        after: String,
-        composing: Boolean,
-    ) {
+    private fun type(key: Long, before: String, after: String, composing: Boolean) {
         val last = history.lastOrNull()
-        val typing = last?.typing?.takeIf { it.key == key && it.inNote == inNote }
+        val typing = last?.typing?.takeIf { it.key == key }
         if (before == after) {
             if (typing != null && typing.composing && !composing) {
                 val settled = typing.copy(at = timeSource.markNow(), composing = false)
@@ -775,11 +836,9 @@ class TodoViewModel(
         val original = open?.original ?: before
         val undo =
             Undo(
-                listOf(
-                    if (inNote) Change.Annotate(key, original) else Change.Rename(key, original)
-                ),
-                Caret(key, editEnd(original, after), inNote),
-                Typing(key, inNote, original, timeSource.markNow(), composing),
+                listOf(Change.Rename(key, original)),
+                Caret(key, editEnd(original, after)),
+                Typing(key, original, timeSource.markNow(), composing),
             )
         if (open != null) history[history.lastIndex] = undo else push(undo)
     }
@@ -804,7 +863,7 @@ class TodoViewModel(
                 outline = outline,
                 caret = target,
                 editing = target?.key ?: state.editing?.takeIf { e -> rows.any { it.key == e } },
-                noteOpen = target?.takeIf { it.inNote }?.key ?: state.noteOpen,
+                comments = state.comments?.following(outline),
                 revision = state.revision + 1,
                 canUndo = history.isNotEmpty(),
             )
@@ -826,20 +885,12 @@ class TodoViewModel(
         typingJob = null
         val outline = current.outline
         val titles = unsavedTitles.toList()
-        val notes = unsavedNotes.toList()
         unsavedTitles.clear()
-        unsavedNotes.clear()
         for (key in titles) {
             if (changes.any { it.key == key && (it is Change.Rename || it is Change.Delete) })
                 continue
             val node = outline[key] ?: continue
             enqueue(Task.Send(Change.Rename(key, node.title)))
-        }
-        for (key in notes) {
-            if (changes.any { it.key == key && (it is Change.Annotate || it is Change.Delete) })
-                continue
-            val node = outline[key] ?: continue
-            enqueue(Task.Send(Change.Annotate(key, node.note)))
         }
     }
 
@@ -848,8 +899,7 @@ class TodoViewModel(
         return lastKey
     }
 
-    private fun isIdle(queued: Int): Boolean =
-        pending == queued && unsavedTitles.isEmpty() && unsavedNotes.isEmpty()
+    private fun isIdle(queued: Int): Boolean = pending == queued && unsavedTitles.isEmpty()
 
     private fun enqueue(task: Task) {
         val channel = tasks ?: return
@@ -895,7 +945,8 @@ class TodoViewModel(
                         queued.generation == generation ||
                             queued.task is Task.Stats ||
                             queued.task is Task.Settings ||
-                            queued.task is Task.LoadProfile
+                            queued.task is Task.LoadProfile ||
+                            queued.task is Task.LoadComments
                     ) {
                         execute(repository, queued.task)
                     }
@@ -928,7 +979,6 @@ class TodoViewModel(
         typingJob?.cancel()
         typingJob = null
         unsavedTitles.clear()
-        unsavedNotes.clear()
     }
 
     private suspend fun execute(repository: TodoRepository, task: Task) {
@@ -942,6 +992,42 @@ class TodoViewModel(
                 showStats(task.request, StatsState.Loaded(repository.stats(timeZone())))
             is Task.Settings -> settle(repository, task)
             Task.LoadProfile -> showProfile(repository, repository.profile())
+            is Task.LoadComments -> {
+                val id = serverIds[task.key] ?: task.key.takeIf { it > 0 } ?: return
+                val items = repository.timeline(id)
+                showComments(task.request) { comments ->
+                    comments.copy(
+                        items = items,
+                        failed = false,
+                        local = comments.local.filterIsInstance<Pending>(),
+                    )
+                }
+            }
+            is Task.PostComment -> {
+                val comment = repository.comment(idOf(task.key), task.body)
+                _state.update { state ->
+                    val comments =
+                        state.comments?.takeIf { it.key == task.key } ?: return@update state
+                    state.copy(
+                        comments =
+                            comments.copy(
+                                items = comments.items.orEmpty() + comment,
+                                local =
+                                    comments.local.filterNot {
+                                        it is Pending && it.key == task.pending
+                                    },
+                            )
+                    )
+                }
+            }
+            is Task.EditComment -> {
+                val comment = repository.editComment(task.id, task.body)
+                updateComments { it.copy(items = it.items?.replacing(task.id) { comment }) }
+            }
+            is Task.DeleteComment ->
+                try {
+                    repository.deleteComment(task.id)
+                } catch (_: ApiException.NotFound) {}
         }
     }
 
@@ -1044,52 +1130,53 @@ class TodoViewModel(
         }
     }
 
+    private fun idOf(key: Long): Long = serverIds[key] ?: key
+
     private suspend fun send(repository: TodoRepository, change: Change) {
-        fun id(key: Long): Long = serverIds[key] ?: key
         when (change) {
             is Change.Create ->
                 serverIds[change.key] =
-                    repository
-                        .create(change.title, change.parent?.let(::id), change.index, change.note)
-                        .id
-            is Change.Rename -> repository.rename(id(change.key), change.title)
-            is Change.Annotate -> repository.setNote(id(change.key), change.note)
-            is Change.Complete -> repository.setCompleted(id(change.key), change.completed)
-            is Change.Collapse -> repository.setCollapsed(id(change.key), change.collapsed)
+                    repository.create(change.title, change.parent?.let(::idOf), change.index).id
+            is Change.Rename -> repository.rename(idOf(change.key), change.title)
+            is Change.Complete -> repository.setCompleted(idOf(change.key), change.completed)
+            is Change.Collapse -> repository.setCollapsed(idOf(change.key), change.collapsed)
             is Change.Move ->
-                repository.move(id(change.key), change.parent?.let(::id), change.index)
+                repository.move(idOf(change.key), change.parent?.let(::idOf), change.index)
             is Change.Delete ->
                 try {
-                    repository.delete(id(change.key), change.recursive)
+                    repository.delete(idOf(change.key), change.recursive)
                 } catch (_: ApiException.NotFound) {}
+            is Change.Restore ->
+                repository.restore(idOf(change.key), change.parent?.let(::idOf), change.index)
         }
     }
 
     private fun show(todos: List<Todo>) {
         discardPending()
         val keys = serverIds.entries.associate { (key, id) -> id to key }
-        serverIds.clear()
-        todos.forEach { todo -> keys[todo.id]?.let { serverIds[it] = todo.id } }
         val outline = outlineOf(todos) { keys[it] ?: it }
-        if (outline != current.outline) history.clear()
+        if (!outline.sameAs(current.outline)) history.clear()
         current.editing?.let { key ->
-            fun edited(of: Outline) = of[key]?.let { if (current.inNote) it.note else it.title }
-            val text = edited(outline)
-            if (text != null && text != edited(current.outline)) cursor = text.length
+            val title = outline[key]?.title
+            if (title != null && title != current.outline[key]?.title) cursor = title.length
         }
         _state.update { state ->
             state.copy(
                 outline = outline,
                 loaded = true,
                 editing = state.editing?.takeIf { it in outline },
-                inNote = state.inNote && state.editing?.let { it in outline } == true,
-                noteOpen = state.noteOpen?.takeIf { it in outline },
                 caret = null,
+                comments =
+                    state.comments
+                        ?.takeIf { it.key in outline }
+                        ?.let { it.copy(local = it.local.filterNot { entry -> entry is Pending }) }
+                        ?.following(outline),
                 revision = state.revision + 1,
                 canUndo = history.isNotEmpty(),
                 notice = state.notice?.takeIf { it.retry == null },
             )
         }
+        current.comments?.let { loadComments(it.key) }
     }
 
     private fun showStats(request: Long, stats: StatsState) {
@@ -1126,10 +1213,19 @@ class TodoViewModel(
             if (error is ApiException.NotSignedIn) fail(error, retry = null)
             return
         }
+        if (task is Task.LoadComments) {
+            if (error is ApiException.NotSignedIn) fail(error, retry = null)
+            else showComments(task.request) { it.copy(failed = true) }
+            return
+        }
         discardPending()
         history.clear()
         _state.update { it.copy(canUndo = false) }
-        fail(error, retry = null)
+        if (task is Task.EditComment && error is ApiException.NotFound) {
+            notify("This comment has been deleted.")
+        } else {
+            fail(error, retry = null)
+        }
         enqueue(Task.Load(force = true))
     }
 
@@ -1238,6 +1334,11 @@ private fun usageAnalytics(settings: Settings): UsageAnalytics? {
         PostHogCapture(http, PostHogCapture.ENDPOINT, BuildConfig.VERSION_NAME),
     )
 }
+
+private fun List<TimelineItem>.replacing(
+    id: Long,
+    change: (TimelineItem.Comment) -> TimelineItem.Comment,
+): List<TimelineItem> = map { if (it is TimelineItem.Comment && it.id == id) change(it) else it }
 
 private fun editEnd(before: String, after: String): Int {
     val prefix = before.commonPrefixWith(after).length

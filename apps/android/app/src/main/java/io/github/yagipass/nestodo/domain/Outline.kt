@@ -7,7 +7,7 @@ data class Node(
     val completed: Boolean = false,
     val collapsed: Boolean = false,
     val children: List<Long> = emptyList(),
-    val note: String = "",
+    val comments: Int = 0,
 )
 
 sealed interface Change {
@@ -18,12 +18,9 @@ sealed interface Change {
         val parent: Long?,
         val index: Int,
         val title: String,
-        val note: String = "",
     ) : Change
 
     data class Rename(override val key: Long, val title: String) : Change
-
-    data class Annotate(override val key: Long, val note: String) : Change
 
     data class Complete(override val key: Long, val completed: Boolean) : Change
 
@@ -32,6 +29,13 @@ sealed interface Change {
     data class Move(override val key: Long, val parent: Long?, val index: Int) : Change
 
     data class Delete(override val key: Long, val recursive: Boolean = false) : Change
+
+    data class Restore(
+        override val key: Long,
+        val parent: Long?,
+        val index: Int,
+        val nodes: List<Node>,
+    ) : Change
 }
 
 data class Viewport(val showCompleted: Boolean = true)
@@ -44,7 +48,7 @@ data class OutlineRow(
     val dimmed: Boolean,
     val hasChildren: Boolean,
     val collapsed: Boolean,
-    val note: String = "",
+    val comments: Int = 0,
 )
 
 data class Guide(val through: List<Boolean>, val stem: Boolean)
@@ -102,7 +106,7 @@ data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long
                         dimmed = dimmed,
                         hasChildren = node.children.isNotEmpty(),
                         collapsed = node.collapsed,
-                        note = node.note,
+                        comments = node.comments,
                     )
                 )
                 if (!node.collapsed) walk(key, depth + 1, dimmed || node.completed)
@@ -119,6 +123,9 @@ data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long
                 change.key in nodes &&
                     (change.parent == null ||
                         (change.parent in nodes && change.parent !in subtree(change.key)))
+            is Change.Restore ->
+                change.nodes.none { it.key in nodes } &&
+                    (change.parent == null || change.parent in nodes)
             else -> change.key in nodes
         }
 
@@ -134,13 +141,9 @@ data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long
     fun apply(change: Change): Outline =
         when (change) {
             is Change.Create ->
-                attach(
-                        Node(change.key, change.parent, change.title, note = change.note),
-                        change.index,
-                    )
+                attach(Node(change.key, change.parent, change.title), change.index)
                     .reopenAbove(change.key)
             is Change.Rename -> update(change.key) { it.copy(title = change.title) }
-            is Change.Annotate -> update(change.key) { it.copy(note = change.note) }
             is Change.Complete ->
                 if (change.completed) complete(change.key)
                 else update(change.key) { it.copy(completed = false) }.reopenAbove(change.key)
@@ -154,6 +157,13 @@ data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long
                 val node = nodes.getValue(change.key)
                 val detached = detach(node)
                 detached.copy(nodes = detached.nodes - subtree(change.key).toSet())
+            }
+            is Change.Restore -> {
+                val root = change.nodes.first { it.key == change.key }
+                val restored =
+                    copy(nodes = nodes + change.nodes.associateBy { it.key })
+                        .attach(root.copy(parent = change.parent), change.index)
+                if (restored.isOpen(change.key)) restored.reopenAbove(change.key) else restored
             }
         }
 
@@ -169,6 +179,13 @@ data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long
     }
 
     fun openUnder(key: Long): Int = subtree(key).drop(1).count { nodes[it]?.completed == false }
+
+    fun recount(key: Long, by: Int): Outline =
+        update(key) { it.copy(comments = (it.comments + by).coerceAtLeast(0)) }
+
+    fun sameAs(other: Outline): Boolean = uncounted() == other.uncounted()
+
+    private fun uncounted(): Outline = copy(nodes = nodes.mapValues { it.value.copy(comments = 0) })
 
     private fun isOpen(key: Long): Boolean = subtree(key).any { nodes[it]?.completed == false }
 
@@ -194,20 +211,23 @@ data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long
         return when (change) {
             is Change.Create -> listOf(Change.Delete(change.key))
             is Change.Rename -> node?.let { listOf(Change.Rename(it.key, it.title)) }
-            is Change.Annotate -> node?.let { listOf(Change.Annotate(it.key, it.note)) }
             is Change.Complete -> node?.let { emptyList() }
             is Change.Collapse -> node?.let { listOf(Change.Collapse(it.key, it.collapsed)) }
             is Change.Move -> node?.let { listOf(Change.Move(it.key, it.parent, indexOf(it.key))) }
-            is Change.Delete -> node?.let { subtree(it.key).flatMap(::recreate) }
+            is Change.Delete ->
+                node?.let {
+                    listOf(
+                        Change.Restore(
+                            it.key,
+                            it.parent,
+                            indexOf(it.key),
+                            subtree(it.key).map(nodes::getValue),
+                        )
+                    )
+                }
+            is Change.Restore ->
+                listOf(Change.Delete(change.key, recursive = change.nodes.size > 1))
         }
-    }
-
-    private fun recreate(key: Long): List<Change> {
-        val node = nodes.getValue(key)
-        return listOfNotNull(
-            Change.Create(key, node.parent, indexOf(key), node.title, node.note),
-            Change.Collapse(key, true).takeIf { node.collapsed },
-        )
     }
 
     private fun complete(key: Long): Outline =
@@ -256,7 +276,7 @@ fun outlineOf(todos: List<Todo>, keyOf: (Long) -> Long = { it }): Outline {
                 completed = todo.completed,
                 collapsed = todo.collapsed,
                 children = childrenOf(todo.id),
-                note = todo.note,
+                comments = todo.commentCount,
             )
     }
     return Outline(nodes, childrenOf(null))

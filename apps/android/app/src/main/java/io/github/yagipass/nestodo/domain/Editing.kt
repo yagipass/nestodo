@@ -1,6 +1,6 @@
 package io.github.yagipass.nestodo.domain
 
-data class Caret(val key: Long, val position: Int, val inNote: Boolean = false)
+data class Caret(val key: Long, val position: Int)
 
 data class Edit(val changes: List<Change>, val caret: Caret?)
 
@@ -37,7 +37,7 @@ fun Outline.enter(viewport: Viewport, key: Long, cursor: Int, newKey: Long): Edi
 
 fun Outline.deleteBackward(viewport: Viewport, key: Long): Edit? {
     val node = this[key] ?: return null
-    if (node.children.isNotEmpty() || node.note.isNotEmpty()) return null
+    if (node.children.isNotEmpty() || node.comments > 0) return null
     val rows = rows(viewport)
     val at = rows.indexOfFirst { it.key == key }
     if (at < 0) return null

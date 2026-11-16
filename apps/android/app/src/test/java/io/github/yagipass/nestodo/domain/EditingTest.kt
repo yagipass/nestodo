@@ -116,10 +116,10 @@ class EditingTest {
     }
 
     @Test
-    fun `Backspace never deletes or joins a row with a note so what was written under it is never lost`() {
-        val noted = with(groceries, milk, eggs.copy(note = "free-range"), dentist)
-        assertNull(noted.deleteBackward(all, 3))
-        val untitled = todo(5, "", parent = 1, position = 2).copy(note = "for the cake")
+    fun `Backspace never deletes or joins a row with comments so its work log is never thrown away by a keystroke`() {
+        val logged = with(groceries, milk, eggs.copy(commentCount = 1), dentist)
+        assertNull(logged.deleteBackward(all, 3))
+        val untitled = todo(5, "", parent = 1, position = 2).copy(commentCount = 2)
         assertNull(with(groceries, milk, eggs, untitled, dentist).deleteBackward(all, 5))
     }
 
