@@ -299,8 +299,8 @@ private fun AddedCompleted(days: List<Day>, dates: List<LocalDate>) {
             }
         }
         Readout(
-            caption = if (selected == days.lastIndex) "Today · $date" else date,
-            text = "${day.added} added · ${day.completed} completed · ${day.open} open",
+            caption = if (selected == days.lastIndex) "Today, $date" else date,
+            text = "${day.added} added, ${day.completed} completed, ${day.open} open",
         )
         Row(Modifier.height(168.dp)) {
             MirroredBars(
@@ -600,10 +600,10 @@ private fun Calendar(days: List<Day>, dates: List<LocalDate>) {
         }
         Text(
             if (picked != null) {
-                "${picked.added} added · ${picked.completed} completed · " +
+                "${picked.added} added and ${picked.completed} completed on " +
                     LongDate.format(dates[selected!!])
             } else {
-                "${days.sumOf { it.added }} added · ${days.sumOf { it.completed }} completed " +
+                "${days.sumOf { it.added }} added and ${days.sumOf { it.completed }} completed " +
                     "in the past 26 weeks"
             },
             Modifier.semantics { liveRegion = LiveRegionMode.Polite },
