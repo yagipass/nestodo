@@ -1,5 +1,23 @@
 # Changelog
 
+## [v0.12.0](https://github.com/yagipass/nestodo/compare/v0.11.3...v0.12.0) - 2026-11-16
+
+### Web
+- feat(web): choose light, dark or system appearance in Settings by @yagipass in https://github.com/yagipass/nestodo/pull/125
+- build(web): bump the minor-and-patch group with 3 updates by @dependabot[bot] in https://github.com/yagipass/nestodo/pull/118
+- feat(web)!: keep a work log of comments on each todo instead of a note by @yagipass in https://github.com/yagipass/nestodo/pull/129
+### Android
+- feat(android): choose light, dark or system appearance in Settings by @yagipass in https://github.com/yagipass/nestodo/pull/126
+- feat(android): keep a work log of comments on each todo instead of a note by @yagipass in https://github.com/yagipass/nestodo/pull/131
+### Desktop
+- fix(desktop): scroll to the row with the caret when moving between rows by @yagipass in https://github.com/yagipass/nestodo/pull/121
+- feat(desktop): choose light, dark or system appearance in Settings by @yagipass in https://github.com/yagipass/nestodo/pull/127
+- feat(desktop): keep a work log of comments on each todo instead of a note by @yagipass in https://github.com/yagipass/nestodo/pull/130
+### Dependencies
+- build(android): bump gradle-wrapper from 9.8.2 to 9.9.0 in /apps/android in the minor-and-patch group by @dependabot[bot] in https://github.com/yagipass/nestodo/pull/117
+### Maintenance
+- build(web): move to Void 1.9.1 ahead of the 7-day release age by @yagipass in https://github.com/yagipass/nestodo/pull/134
+
 ## [v0.11.3](https://github.com/yagipass/nestodo/compare/v0.11.2...v0.11.3) - 2026-11-13
 
 ### Maintenance
