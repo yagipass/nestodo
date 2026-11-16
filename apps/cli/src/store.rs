@@ -77,7 +77,7 @@ impl TokenStore for SystemStore {
         }
         match self.keychain.get(&Self::account(host, kind)) {
             Ok(secret) => String::from_utf8(secret).map(Some).map_err(|_| {
-                Error::Storage("the saved login is corrupted; run `nestodo logout`".into())
+                Error::Storage("the saved login is corrupted, so run `nestodo logout`".into())
             }),
             Err(_) => file,
         }
