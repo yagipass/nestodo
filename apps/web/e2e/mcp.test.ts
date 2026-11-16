@@ -52,11 +52,13 @@ function propertiesOf(tools: Awaited<ReturnType<Client["listTools"]>>["tools"], 
   return tools.find((tool) => tool.name === name)?.inputSchema.properties as Record<string, { description?: string; maxLength?: number }> | undefined;
 }
 
+const protocols = [
+  { protocol: "2025 initialize", versionNegotiation: { mode: "legacy" } },
+  { protocol: "2026-07-28", versionNegotiation: { mode: { pin: "2026-07-28" } } },
+] satisfies { protocol: string; versionNegotiation: VersionNegotiationOptions }[];
+
 describe("MCP endpoint that Claude reaches through its own Access app", () => {
-  it.each([
-    { protocol: "2025 initialize", versionNegotiation: { mode: "legacy" } },
-    { protocol: "2026-07-28", versionNegotiation: { mode: { pin: "2026-07-28" } } },
-  ] satisfies { protocol: string; versionNegotiation: VersionNegotiationOptions }[])(
+  it.each(protocols)(
     "shows Claude the same todos the family member sees on the web, over the $protocol protocol",
     async ({ versionNegotiation }) => {
       const email = `${randomUUID()}@e2e.test`;
@@ -253,6 +255,23 @@ describe("MCP endpoint that Claude reaches through its own Access app", () => {
     expect(fromWeb.days.at(-1)).toMatchObject({ date: new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date()), added: 1 });
     expect((await call(claude, "get_stats", { timeZone: "Mars/Olympus_Mons" })).isError).toBe(true);
   });
+
+  it.each(protocols)(
+    "hands Claude a view that draws the stats as the stats page does, whole in one document since the conversation showing it loads nothing from Nestodo, over the $protocol protocol",
+    async ({ versionNegotiation }) => {
+      const claude = await connect(`${randomUUID()}@e2e.test`, versionNegotiation);
+      const { tools } = await claude.listTools();
+      const { resourceUri } = tools.find((tool) => tool.name === "get_stats")?._meta?.ui as { resourceUri: string };
+
+      const { contents } = await claude.readResource({ uri: resourceUri });
+      expect(contents).toHaveLength(1);
+      const [view] = contents;
+      if (!("text" in view)) throw new Error(`${resourceUri} is not text`);
+      expect(view.mimeType).toBe("text/html;profile=mcp-app");
+      expect(view.text).toContain("Past 26 weeks");
+      expect(view.text.slice(0, view.text.indexOf("<script"))).not.toMatch(/src=|href=|url\(|@import/);
+    },
+  );
 
   it("offers Claude no way to delete a todo, so it finishes todos by completing them and the outline never loses one", async () => {
     const { claude } = await member();

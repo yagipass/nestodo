@@ -1,5 +1,7 @@
+import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { HTTPException } from "hono/http-exception";
+import statsApp from "virtual:stats-app";
 import { z } from "zod";
 import { isTimeZone } from "./stats";
 import { activityOf } from "./stats-service";
@@ -9,6 +11,8 @@ import { addComment, createTodo, getTodo, listTodos, timelineOf, updateTodo } fr
 import { KEEP_COMPLETED_DAYS, MAX_COMMENT_LENGTH, MAX_DEPTH, MAX_TITLE_LENGTH } from "./todos";
 
 const notFound = { error: "not_found", message: "Todo not found" };
+
+const STATS_APP_URI = "ui://nestodo/stats.html";
 
 const id = z.number().int().positive().describe("The todo's id, as list_todos shows it");
 
@@ -145,7 +149,8 @@ export function nestodoMcpServer(userId: string) {
     },
   );
 
-  server.registerTool(
+  registerAppTool(
+    server,
     "get_stats",
     {
       title: "Show daily stats",
@@ -158,9 +163,14 @@ export function nestodoMcpServer(userId: string) {
           .describe("The user's IANA time zone, such as Asia/Tokyo, which the assistant's requests do not carry"),
       }),
       annotations: { readOnlyHint: true },
+      _meta: { ui: { resourceUri: STATS_APP_URI } },
     },
     async ({ timeZone }) => reply({ timeZone, days: await activityOf(userId, timeZone, new Date()) }),
   );
+
+  registerAppResource(server, "Stats", STATS_APP_URI, {}, () => ({
+    contents: [{ uri: STATS_APP_URI, mimeType: RESOURCE_MIME_TYPE, text: statsApp }],
+  }));
 
   return server;
 }

@@ -20,6 +20,7 @@
     "preview": "vp preview"
   },
   "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^2.0.4",
     "@modelcontextprotocol/server": "^2.4.0",
     "hono": "^4.13.18",
     "jose": "^6.2.15",

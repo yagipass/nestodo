@@ -3,6 +3,7 @@ import { Link, useRouter, useShared } from "@void/react";
 import { startAnalytics } from "../src/analytics";
 import { Icon } from "../src/icons";
 import type { Profile } from "../src/profiles";
+import "../src/fonts.css";
 import "../src/styles.css";
 
 type Shortcut = [action: string, keys: string, note?: string];
