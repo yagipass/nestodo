@@ -3,7 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { and, db, eq, gt, gte, inArray, isNotNull, isNull, lte, ne, notInArray, sql } from "void/db";
 import { archivedTodos, todoComments, todoEvents, todos, trashedTodos } from "@schema";
 import { DAY, inUtc, sqliteTime } from "./time";
-import { awaitingCommentWindow, clampIndex, depthOf, heightOf, isWithin, KEEP_COMPLETED_DAYS, MAX_DEPTH, outlineOrder, type Placed } from "./todos";
+import { awaitingCommentWindow, clampIndex, depthOf, heightOf, isWithin, KEEP_COMPLETED_DAYS, MAX_COMMENT_LENGTH, MAX_DEPTH, outlineOrder, type Placed } from "./todos";
 
 export type TodoChanges = {
   title?: string;
@@ -335,11 +335,19 @@ export async function addComment(userId: string, todoId: number, body: string, v
   return presentComment(comment);
 }
 
+function onListedTodo(userId: string, id: number) {
+  return and(
+    eq(todoComments.id, id),
+    eq(todoComments.userId, userId),
+    inArray(todoComments.todoId, db.select({ id: todos.id }).from(todos).where(eq(todos.userId, userId))),
+  );
+}
+
 export async function editComment(userId: string, id: number, body: string) {
   const [comment] = await db
     .update(todoComments)
     .set({ body, editedAt: sql`CASE WHEN ${todoComments.body} = ${body} THEN ${todoComments.editedAt} ELSE strftime('%Y-%m-%d %H:%M:%f', 'now') END` })
-    .where(and(eq(todoComments.id, id), eq(todoComments.userId, userId)))
+    .where(onListedTodo(userId, id))
     .returning(commentColumns);
   return comment ? presentComment(comment) : null;
 }
@@ -347,14 +355,14 @@ export async function editComment(userId: string, id: number, body: string) {
 export async function deleteComment(userId: string, id: number) {
   const deleted = await db
     .delete(todoComments)
-    .where(and(eq(todoComments.id, id), eq(todoComments.userId, userId)))
+    .where(onListedTodo(userId, id))
     .returning({ id: todoComments.id });
   return deleted.length > 0;
 }
 
 export async function searchComments(userId: string, query: string) {
   const text = query.trim();
-  if (text === "") return [];
+  if (text === "" || text.length > MAX_COMMENT_LENGTH) return [];
   const pattern = `%${text.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
   const { results } = await primary().prepare(searchSql).bind(userId, pattern).all<{ id: number; comment: string }>();
   return results.map(({ id, comment }) => ({ id, comment }));

@@ -23,8 +23,9 @@ describe("byDay", () => {
     expect(days.map((day) => day.label)).toEqual(["Dec 31, 2025", "Nov 12"]);
   });
 
-  it("shows times on a 24-hour clock, the same width for every entry", () => {
-    expect(byDay([event("2026-11-16T05:02:00Z")], now, "UTC")[0].entries[0].time).toBe("05:02");
+  it("shows times on a 24-hour clock with two-digit hours, so morning and evening entries line up", () => {
+    const [today] = byDay([event("2026-11-16T05:02:00Z"), event("2026-11-16T21:05:00Z")], now, "UTC");
+    expect(today.entries.map((entry) => entry.time)).toEqual(["05:02", "21:05"]);
   });
 });
 
@@ -53,6 +54,15 @@ describe("snippet", () => {
     expect(shown.startsWith("…")).toBe(true);
     expect(shown).toContain("the quote from B");
     expect(shown.length).toBeLessThan(40);
+  });
+
+  it("marks a comment cut before its end, so a shortened snippet does not read as the whole comment", () => {
+    expect(snippet(`the quote from B ${"z".repeat(100)}`, "quote", 10)).toMatch(/^the quote from B z+…$/);
+  });
+
+  it("never cuts an emoji in half at either edge, so the row shows no broken character", () => {
+    const shown = snippet(`${"😀".repeat(20)}quote${"😀".repeat(20)}`, "quote", 3);
+    expect(shown).toBe("…😀😀😀quote😀😀😀…");
   });
 
   it("puts a multi-line comment on one line, since the row has room for one", () => {

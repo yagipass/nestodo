@@ -105,10 +105,10 @@ describe("todosAwaitingComment", () => {
     expect(awaiting([todo(1, null, { title: "\u00a0Side projects\u3000", age: 60 }), todo(2, 1)])).toEqual([2]);
   });
 
-  it("still waits on a todo whose comments are each just a URL, so links shared for later get a comment about them too", () => {
-    const logs = [[" https://example.com/a?b=c#d \n"], ["HTTP://EXAMPLE.COM"], ["https://a.example", "https://b.example"]];
+  it("still waits on a todo whose comments are each just a URL or blank, so links shared for later get a comment about them too", () => {
+    const logs = [[" https://example.com/a?b=c#d \n"], ["HTTP://EXAMPLE.COM"], ["https://a.example", "https://b.example"], ["\u3000"], ["\u00a0", "https://a.example"]];
     const rows = [root, ...logs.map((comments, i) => todo(i + 2, 1, { comments }))];
-    expect(awaiting(rows)).toEqual([2, 3, 4]);
+    expect(awaiting(rows)).toEqual([2, 3, 4, 5, 6]);
   });
 
   it("stops waiting once any comment says more than a single URL, so a todo the member already wrote about is left to them", () => {

@@ -27,9 +27,9 @@ CREATE TABLE `trashed_todos` (
 CREATE INDEX `trashed_todos_user_id_batch_idx` ON `trashed_todos` (`user_id`,`batch`);--> statement-breakpoint
 CREATE INDEX `todo_events_user_id_todo_id_idx` ON `todo_events` (`user_id`,`todo_id`);--> statement-breakpoint
 INSERT INTO `todo_comments` (`user_id`, `todo_id`, `body`, `via`, `created_at`)
-SELECT `user_id`, `id`, `note`, 'app', `created_at` FROM `todos` WHERE trim(`note`, char(32, 9, 10, 13)) <> '' ORDER BY `id`;--> statement-breakpoint
+SELECT `user_id`, `id`, `note`, 'app', `created_at` FROM `todos` WHERE trim(`note`, char(32, 9, 10, 11, 12, 13, 160, 12288, 65279)) <> '' ORDER BY `id`;--> statement-breakpoint
 INSERT INTO `todo_comments` (`user_id`, `todo_id`, `body`, `via`, `created_at`)
-SELECT `user_id`, `id`, `note`, 'app', `created_at` FROM `archived_todos` WHERE trim(`note`, char(32, 9, 10, 13)) <> '' ORDER BY `id`;--> statement-breakpoint
+SELECT `user_id`, `id`, `note`, 'app', `created_at` FROM `archived_todos` WHERE trim(`note`, char(32, 9, 10, 11, 12, 13, 160, 12288, 65279)) <> '' ORDER BY `id`;--> statement-breakpoint
 ALTER TABLE `archived_todos` DROP COLUMN `note`;--> statement-breakpoint
 ALTER TABLE `todos` DROP COLUMN `note`;--> statement-breakpoint
 DROP TRIGGER `todo_events_created`;--> statement-breakpoint

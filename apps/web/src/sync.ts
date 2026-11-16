@@ -29,6 +29,7 @@ export class Sync {
     ids: Iterable<[string, number]>,
     private readonly send: Send,
     private readonly onFail: () => void = () => {},
+    private readonly onTrack: () => void = () => {},
   ) {
     this.track(ids);
   }
@@ -165,6 +166,7 @@ export class Sync {
         );
         const { todo } = (await res.json()) as { todo: { id: number } };
         this.track([[job.key, todo.id]]);
+        this.onTrack();
         return;
       }
       case "comment": {

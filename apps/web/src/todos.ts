@@ -121,7 +121,7 @@ export function todosAwaitingComment<T extends Commented>(rows: readonly T[], ro
       !parents.has(row.id) &&
       since < row.createdAt &&
       row.createdAt <= until &&
-      row.comments.every(isLinkOnly) &&
+      row.comments.every((comment) => comment.trim() === "" || isLinkOnly(comment)) &&
       row.title.trim() !== "" &&
       underRoot.get(row.id) === true,
   );

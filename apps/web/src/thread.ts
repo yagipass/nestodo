@@ -45,10 +45,18 @@ export function isPostKey({ key, shiftKey, ctrlKey, metaKey, altKey, isComposing
   return key === "Enter" && !isComposing && !altKey && (shiftKey || ctrlKey || metaKey);
 }
 
+function indexOfChars(chars: readonly string[], query: readonly string[]) {
+  for (let i = 0; i + query.length <= chars.length; i++) {
+    if (query.every((char, j) => chars[i + j] === char)) return i;
+  }
+  return -1;
+}
+
 export function snippet(body: string, query: string, room = 60) {
-  const q = query.trim().toLowerCase();
-  const at = q ? body.toLowerCase().indexOf(q) : -1;
+  const chars = Array.from(body.replace(/\s+/g, " ").trim());
+  const q = Array.from(query.trim().toLowerCase());
+  const at = q.length === 0 ? -1 : indexOfChars(chars.map((char) => char.toLowerCase()), q);
   const start = at < 0 ? 0 : Math.max(0, at - room);
-  const text = body.slice(start, start + room * 2 + q.length).replace(/\s+/g, " ").trim();
-  return start > 0 ? `…${text}` : text;
+  const end = Math.min(chars.length, start + room * 2 + q.length);
+  return `${start > 0 ? "…" : ""}${chars.slice(start, end).join("")}${end < chars.length ? "…" : ""}`;
 }

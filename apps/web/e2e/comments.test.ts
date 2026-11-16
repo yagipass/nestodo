@@ -141,7 +141,7 @@ describe("undoing a delete", () => {
     expect((await client.todos()).map((todo) => todo.id)).toEqual([first.id, middle.id, last.id]);
   });
 
-  it("reopens the todo it goes back under when it is still open, since a completed todo never has open todos under it", async () => {
+  it("reopens a completed todo it goes back under when it comes back open, since a completed todo never has open todos under it", async () => {
     const client = await signedInUser();
     const errands = await client.createTodo("errands");
     const letter = await client.createTodo("post letter", { parentId: errands.id });
@@ -182,6 +182,19 @@ describe("undoing a delete", () => {
     expect((await client.restore(letter.id, { parentId: errands.id })).status).toBe(200);
   });
 
+  it("leaves the comments of a deleted todo as they were, so undoing the delete brings back the same log", async () => {
+    const client = await signedInUser();
+    const todo = await client.createTodo("dentist", { comment: "call on Monday" });
+    const [, comment] = await client.timeline(todo.id);
+    await client.request(`/api/v1/todos/${todo.id}`, { method: "DELETE" });
+
+    expect((await client.editComment((comment as Comment).id, "changed while deleted")).status).toBe(404);
+    expect((await client.deleteComment((comment as Comment).id)).status).toBe(404);
+
+    await client.restore(todo.id);
+    expect((await client.timeline(todo.id)).filter((item) => item.type === "comment")).toMatchObject([{ body: "call on Monday" }]);
+  });
+
   it("forgets a deleted todo and its comments 8 days after the delete, once no undo can reach it", async () => {
     const email = `${randomUUID()}@e2e.test`;
     const client = await signedInUser(email);
@@ -218,6 +231,7 @@ describe("searching comments", () => {
     const sale = await client.createTodo("sale", { comment: "50% off" });
     await client.createTodo("other", { comment: "500 yen" });
     await client.createTodo("file", { comment: "a_b.txt" });
+    await client.createTodo("letters", { comment: "abc" });
 
     expect((await client.search("0%")).map((todo) => todo.id)).toEqual([sale.id]);
     expect(await client.search("a_c")).toEqual([]);
@@ -232,5 +246,6 @@ describe("searching comments", () => {
 
     expect(await client.search("   ")).toEqual([]);
     expect(await client.search("dentist")).toEqual([]);
+    expect(await client.search("d".repeat(10001))).toEqual([]);
   });
 });

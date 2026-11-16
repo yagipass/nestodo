@@ -1,7 +1,7 @@
 import { Icon } from "./icons";
 import { tokens } from "./title";
 
-export function Tokens({ text, query }: { text: string; query: string }) {
+export function Tokens({ text, query, focusable = false }: { text: string; query: string; focusable?: boolean }) {
   return (
     <>
       {tokens(text, query).map((part, index) =>
@@ -12,7 +12,7 @@ export function Tokens({ text, query }: { text: string; query: string }) {
             href={part.href}
             target="_blank"
             rel="noreferrer"
-            tabIndex={-1}
+            tabIndex={focusable ? undefined : -1}
             data-from={part.from}
             data-to={part.to}
           >

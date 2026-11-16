@@ -85,6 +85,7 @@ describe("the migration that moves notes into comments", () => {
     migrate(database, migrations.slice(0, latest));
     noted(database, "a@example.com", 1, "", "2026-11-01 09:00:00");
     noted(database, "a@example.com", 2, " \n\t\r ", "2026-11-01 09:00:00");
+    noted(database, "a@example.com", 3, "\u3000\u00a0", "2026-11-01 09:00:00");
 
     migrate(database, migrations.slice(latest));
 

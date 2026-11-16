@@ -23,7 +23,10 @@ type Props = {
   editable: boolean;
   avatar: ReactNode;
   focusRequest: number;
+  draft: string;
+  onDraft: (key: string, update: (current: string) => string) => void;
   onCount: (key: string, delta: number) => void;
+  onChanged: () => void;
   onBack: () => void;
   onClose: () => void;
 };
@@ -80,14 +83,16 @@ export function ThreadPane({
   editable,
   avatar,
   focusRequest,
+  draft,
+  onDraft,
   onCount,
+  onChanged,
   onBack,
   onClose,
 }: Props) {
   const [items, setItems] = useState<TimelineItem[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [local, setLocal] = useState<Entry[]>([]);
-  const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState<{ id: number; body: string } | null>(null);
   const [deleting, setDeleting] = useState<Comment | null>(null);
   const [reload, setReload] = useState(0);
@@ -95,28 +100,34 @@ export function ThreadPane({
   const composer = useRef<HTMLTextAreaElement>(null);
   const shownDone = useRef(done);
   const counter = useRef(0);
+  const mutations = useRef(0);
 
   useEffect(() => {
     if (serverId === null) {
       setItems([{ type: "event", kind: "created", at: new Date().toISOString() }]);
       return;
     }
-    let current = true;
+    const stale = new AbortController();
     const timer = setTimeout(() => {
+      const seen = mutations.current;
       timelineOf(serverId).then(
         (latest) => {
-          if (!current) return;
+          if (stale.signal.aborted) return;
+          if (mutations.current !== seen) {
+            setReload((n) => n + 1);
+            return;
+          }
           setItems(latest);
           setLoadFailed(false);
           setLocal((entries) => entries.filter((entry) => entry.type === "pending"));
         },
         () => {
-          if (current) setLoadFailed(true);
+          if (!stale.signal.aborted) setLoadFailed(true);
         },
       );
     }, FETCH_DELAY);
     return () => {
-      current = false;
+      stale.abort();
       clearTimeout(timer);
     };
   }, [serverId, reload]);
@@ -160,15 +171,23 @@ export function ThreadPane({
     if (!editable || body === "") return;
     counter.current += 1;
     const key = `pending${counter.current}`;
+    const settled = () => setLocal((current) => current.filter((entry) => !(entry.type === "pending" && entry.key === key)));
     setLocal((current) => [...current, { type: "pending", key, body, at: new Date().toISOString() }]);
-    setDraft("");
+    onDraft(todoKey, () => "");
     onCount(todoKey, 1);
+    mutations.current += 1;
     sync.comment(todoKey, body).then(
       (comment) => {
-        setLocal((current) => current.filter((entry) => !(entry.type === "pending" && entry.key === key)));
+        mutations.current += 1;
+        settled();
         setItems((current) => [...(current ?? []), { type: "comment", ...comment }]);
+        onChanged();
       },
-      () => {},
+      () => {
+        settled();
+        onCount(todoKey, -1);
+        onDraft(todoKey, (current) => (current === "" ? body : current));
+      },
     );
   }
 
@@ -179,8 +198,13 @@ export function ThreadPane({
     const { id } = editing;
     setEditing(null);
     setItems((current) => current?.map((item) => (item.type === "comment" && item.id === id ? { ...item, body } : item)) ?? null);
+    mutations.current += 1;
     sync.editComment(id, body).then(
-      (comment) => setItems((current) => current?.map((item) => (item.type === "comment" && item.id === id ? { type: "comment", ...comment } : item)) ?? null),
+      (comment) => {
+        mutations.current += 1;
+        setItems((current) => current?.map((item) => (item.type === "comment" && item.id === id ? { type: "comment", ...comment } : item)) ?? null);
+        onChanged();
+      },
       () => {},
     );
   }
@@ -189,7 +213,14 @@ export function ThreadPane({
     setDeleting(null);
     setItems((current) => current?.filter((item) => !(item.type === "comment" && item.id === comment.id)) ?? null);
     onCount(todoKey, -1);
-    void sync.deleteComment(comment.id).catch(() => {});
+    mutations.current += 1;
+    sync.deleteComment(comment.id).then(
+      () => {
+        mutations.current += 1;
+        onChanged();
+      },
+      () => {},
+    );
   }
 
   function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -265,7 +296,7 @@ export function ThreadPane({
                       <div className="thread-comment-body">
                         <p className="thread-comment-meta">Sending…</p>
                         <p className="thread-text">
-                          <Tokens text={entry.body} query={query} />
+                          <Tokens text={entry.body} query={query} focusable />
                         </p>
                       </div>
                     </li>
@@ -320,7 +351,7 @@ export function ThreadPane({
                         </div>
                       ) : (
                         <p className="thread-text">
-                          <Tokens text={entry.body} query={query} />
+                          <Tokens text={entry.body} query={query} focusable />
                         </p>
                       )}
                     </div>
@@ -348,7 +379,10 @@ export function ThreadPane({
           readOnly={!editable}
           maxLength={MAX_COMMENT_LENGTH}
           rows={3}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            const value = event.target.value;
+            onDraft(todoKey, () => value);
+          }}
           onKeyDown={onComposerKeyDown}
         />
         <div className="thread-compose-foot">

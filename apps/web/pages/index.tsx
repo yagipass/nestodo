@@ -262,10 +262,19 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
   const [thread, setThread] = useState<string | null>(null);
   const [threadFocus, setThreadFocus] = useState<{ key: string; request: number } | null>(null);
   const [commentHits, setCommentHits] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const [searchRevision, setSearchRevision] = useState(0);
+  const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const [, setTracked] = useState(0);
   const [moving, setMoving] = useState<Focus | null>(null);
   const [confirming, setConfirming] = useState<Confirming | null>(null);
   const [sync] = useState(
-    () => new Sync(todos.map((todo) => [keyFor(todo.id), todo.id] as [string, number]), send, () => setFailed(true)),
+    () =>
+      new Sync(
+        todos.map((todo) => [keyFor(todo.id), todo.id] as [string, number]),
+        send,
+        () => setFailed(true),
+        () => setTracked((n) => n + 1),
+      ),
   );
   const [history] = useState(() => new UndoHistory());
   const counter = useRef(0);
@@ -275,6 +284,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
   const refreshing = useRef(false);
   const reloading = useRef(false);
   const filterInput = useRef<HTMLInputElement>(null);
+  const searchedFor = useRef("");
   const filterButton = useRef<HTMLButtonElement>(null);
 
   const rows = visibleRows(outline, showDone, query, commentHits.size === 0 ? kept : new Set([...kept, ...commentHits.keys()]));
@@ -286,10 +296,11 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
 
   useEffect(() => {
     const text = query.trim();
-    if (text === "") {
+    if (searchedFor.current !== text) {
+      searchedFor.current = text;
       setCommentHits(new Map());
-      return;
     }
+    if (text === "") return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
       fetch(`/api/v1/search?q=${encodeURIComponent(text)}`, { headers: { Accept: "application/json" }, signal: controller.signal })
@@ -303,7 +314,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [query, sync]);
+  }, [query, searchRevision, sync]);
 
   useEffect(() => {
     const refresh = async () => {
@@ -525,6 +536,16 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     if (thread === null || thread === key) return;
     setThread(key);
     setThreadFocus(null);
+  }
+
+  function editDraft(key: string, update: (current: string) => string) {
+    setDrafts((current) => {
+      const text = update(current.get(key) ?? "");
+      const next = new Map(current);
+      if (text === "") next.delete(key);
+      else next.set(key, text);
+      return next;
+    });
   }
 
   function countComments(key: string, delta: number) {
@@ -801,7 +822,10 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
           editable={!failed}
           avatar={<Avatar url={avatarUrl} size={28} />}
           focusRequest={threadFocus?.key === thread ? threadFocus.request : 0}
+          draft={drafts.get(thread) ?? ""}
+          onDraft={editDraft}
           onCount={countComments}
+          onChanged={() => setSearchRevision((n) => n + 1)}
           onBack={() => focusRow({ key: thread, pos: -1 })}
           onClose={() => {
             setThread(null);
