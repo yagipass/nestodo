@@ -642,7 +642,7 @@ impl OutlineView {
                             .text_color(colors.text)
                             .child(kind.label()),
                     )
-                    .child("\u{00b7}")
+                    .child("at")
                     .child(time.to_string()),
             )
             .into_any_element()
@@ -732,9 +732,7 @@ impl OutlineView {
                 )
             })
             .child(time.to_string())
-            .when(comment.edited_at.is_some(), |meta| {
-                meta.child("\u{00b7} edited")
-            })
+            .when(comment.edited_at.is_some(), |meta| meta.child("(edited)"))
             .children(actions);
         let body = if editing {
             let can_save = !self.comment_field.read(cx).text().trim().is_empty();
@@ -1065,7 +1063,7 @@ impl OutlineView {
                             .text_color(colors.muted)
                             .child(kbd("\u{21e7}", cx))
                             .child(kbd("Enter", cx))
-                            .child("to post \u{00b7}")
+                            .child("to post,")
                             .child(kbd("Esc", cx))
                             .child("back to the item"),
                     )

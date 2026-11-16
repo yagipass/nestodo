@@ -20,7 +20,7 @@ impl fmt::Display for Error {
             Error::Network { url, reason } => write!(f, "could not reach {url}: {reason}"),
             Error::NotSignedIn => write!(
                 f,
-                "you are not signed in or your session has expired; sign in again"
+                "you are not signed in or your session has expired, so sign in again"
             ),
             Error::Unauthorized { status } => write!(
                 f,
@@ -36,7 +36,7 @@ impl fmt::Display for Error {
             Error::Refused(fields) => {
                 let messages: Vec<&str> =
                     fields.iter().map(|(_, message)| message.as_str()).collect();
-                write!(f, "{}", messages.join("; "))
+                write!(f, "{}", messages.join(". "))
             }
             Error::Server { status, message } => {
                 write!(f, "the server returned {status}: {message}")

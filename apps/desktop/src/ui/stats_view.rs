@@ -197,13 +197,13 @@ impl StatsView {
         let height = px(18.) + (cell + gap) * 7.;
         let foot = match hovered.and_then(|index| days.get(index)) {
             Some(day) => format!(
-                "{} added \u{00b7} {} completed \u{00b7} {}",
+                "{} added and {} completed on {}",
                 day.added,
                 day.completed,
                 long_date(&day.date)
             ),
             None => format!(
-                "{} added \u{00b7} {} completed in the past 26 weeks",
+                "{} added and {} completed in the past 26 weeks",
                 total_added(days),
                 total_completed(days)
             ),
@@ -397,7 +397,7 @@ impl StatsView {
                     .line_height(px(17.))
                     .whitespace_nowrap()
                     .child(div().font_weight(FontWeight::BOLD).child(format!(
-                        "{} added \u{00b7} {} completed",
+                        "{} added and {} completed",
                         day.added, day.completed
                     )))
                     .child(div().text_color(colors.muted).child(long_date(&day.date))),
