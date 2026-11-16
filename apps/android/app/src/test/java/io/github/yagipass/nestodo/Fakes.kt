@@ -10,12 +10,14 @@ import io.github.yagipass.nestodo.data.Backend
 import io.github.yagipass.nestodo.data.Capture
 import io.github.yagipass.nestodo.data.Connection
 import io.github.yagipass.nestodo.data.LoginFlow
+import io.github.yagipass.nestodo.data.OutlineCache
 import io.github.yagipass.nestodo.data.Screen
 import io.github.yagipass.nestodo.data.Settings
 import io.github.yagipass.nestodo.data.TodoRepository
 import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Appearance
 import io.github.yagipass.nestodo.domain.Day
+import io.github.yagipass.nestodo.domain.Outline
 import io.github.yagipass.nestodo.domain.Profile
 import io.github.yagipass.nestodo.domain.TimelineItem
 import io.github.yagipass.nestodo.domain.Todo
@@ -231,9 +233,11 @@ val POSTED: Instant = Instant.parse("2026-11-16T02:19:55Z")
 class FakeBackend(private val repository: TodoRepository, var signedIn: Boolean = true) : Backend {
     var failure: Exception? = null
     var loggedOut = false
+    var connectGate: CompletableDeferred<Unit>? = null
     var logoutGate: CompletableDeferred<Unit>? = null
 
     override suspend fun connect(): Connection {
+        connectGate?.await()
         failure?.let { throw it }
         return if (signedIn) Connection.Ready(repository, "family@example.com")
         else Connection.SignedOut
@@ -284,6 +288,30 @@ class FakeSettings : Settings {
 
     override suspend fun setAppearance(value: Appearance) {
         appearance = value
+    }
+}
+
+class FakeOutlineCache : OutlineCache {
+    var server: String? = null
+    var outline: Outline? = null
+    var locked = false
+    var gate: CompletableDeferred<Unit>? = null
+
+    override suspend fun load(server: String): Outline? {
+        gate?.await()
+        return outline.takeIf { this.server == server }
+    }
+
+    override suspend fun save(server: String, outline: Outline): Boolean {
+        if (locked) return false
+        this.server = server
+        this.outline = outline
+        return true
+    }
+
+    override suspend fun clear() {
+        server = null
+        outline = null
     }
 }
 

@@ -67,6 +67,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.IconToggleButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Scaffold
@@ -164,6 +165,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
+import io.github.yagipass.nestodo.AuthState
 import io.github.yagipass.nestodo.R
 import io.github.yagipass.nestodo.TodoUiState
 import io.github.yagipass.nestodo.TodoViewModel
@@ -254,6 +256,7 @@ fun OutlineScreen(
                         email = state.email ?: state.profile?.email,
                         avatar = state.avatar,
                         server = state.server,
+                        enabled = state.auth == AuthState.SignedIn,
                         onStats = viewModel::openStats,
                         onSettings = viewModel::openSettings,
                         onSignOut = viewModel::signOut,
@@ -343,8 +346,11 @@ fun OutlineScreen(
                 }
                 .padding(bottom = bottom - underNavigation)
         ) {
-            if (state.loaded) {
+            if (state.loaded || state.restored) {
                 OutlineList(rows, state, viewModel, onOpenLink, underNavigation, underStatus)
+                if (!state.loaded) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+                }
             } else {
                 CircularProgressIndicator(Modifier.align(Alignment.Center))
             }
@@ -563,13 +569,14 @@ private fun AccountMenu(
     email: String?,
     avatar: Avatar?,
     server: String?,
+    enabled: Boolean,
     onStats: () -> Unit,
     onSettings: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { expanded = true }) {
+        IconButton(onClick = { expanded = true }, enabled = enabled) {
             AccountPicture(avatar, size = 28.dp, iconSize = 24.dp, contentDescription = "Account")
         }
         DropdownMenu(
@@ -689,6 +696,7 @@ private fun OutlineList(
                 guide = guideOf.getValue(row.key),
                 revision = state.revision,
                 caret = state.caret?.takeIf { it.key == row.key },
+                readOnly = !state.loaded,
                 viewModel = viewModel,
                 onOpenLink = onOpenLink,
             )
@@ -811,6 +819,7 @@ private fun OutlineItem(
     guide: Guide,
     revision: Long,
     caret: Caret?,
+    readOnly: Boolean,
     viewModel: TodoViewModel,
     onOpenLink: (String) -> Unit,
 ) {
@@ -885,7 +894,7 @@ private fun OutlineItem(
             .drawBehind { drawGuide(guide, row.depth, guideColor) }
     ) {
         Spacer(Modifier.width(24.dp * row.depth))
-        Bullet(row) { viewModel.toggleCollapsed(key) }
+        Bullet(row, enabled = !readOnly) { viewModel.toggleCollapsed(key) }
         Box(Modifier.weight(1f).height(RowHeight)) {
             InterceptPlatformTextInput(interceptor) {
                 BasicTextField(
@@ -909,6 +918,7 @@ private fun OutlineItem(
                                 outlineKey(it, title.state, key, viewModel, ::openComments)
                             }
                             .semantics { contentDescription = "Level ${row.depth + 1}" },
+                    enabled = !readOnly,
                     inputTransformation = title.input,
                     textStyle = style.copy(color = if (focused) textColor else Color.Transparent),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
@@ -959,11 +969,12 @@ private fun OutlineItem(
                 Box(
                     Modifier.matchParentSize()
                         .onGloballyPositioned { chips.touch = it }
-                        .pointerInput(onOpenLink) {
+                        .pointerInput(onOpenLink, readOnly) {
                             detectTapGestures { tap ->
                                 chips.linkAt(tap, latestShown.links)?.let {
                                     return@detectTapGestures onOpenLink(it)
                                 }
+                                if (readOnly) return@detectTapGestures
                                 title.follow(latestTitle)
                                 title.place(title.state.text.length)
                                 requester.requestFocus()
@@ -972,7 +983,7 @@ private fun OutlineItem(
                 )
             }
         }
-        CommentChip(row, onClick = ::openComments)
+        CommentChip(row, enabled = !readOnly, onClick = ::openComments)
     }
 }
 
@@ -1001,7 +1012,7 @@ private fun DrawScope.drawGuide(guide: Guide, depth: Int, color: Color) {
 }
 
 @Composable
-private fun Bullet(row: OutlineRow, onToggle: () -> Unit) {
+private fun Bullet(row: OutlineRow, enabled: Boolean, onToggle: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val accent = colors.primary
     val onAccent = colors.onPrimary
@@ -1014,6 +1025,7 @@ private fun Bullet(row: OutlineRow, onToggle: () -> Unit) {
                 .clickable(
                     interactionSource = null,
                     indication = ripple(bounded = false, radius = 20.dp),
+                    enabled = enabled,
                     role = Role.Button,
                     onClick = onToggle,
                 )
@@ -1051,7 +1063,7 @@ private fun Bullet(row: OutlineRow, onToggle: () -> Unit) {
 }
 
 @Composable
-private fun CommentChip(row: OutlineRow, onClick: () -> Unit) {
+private fun CommentChip(row: OutlineRow, enabled: Boolean, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val name = row.title.ifEmpty { "empty item" }
     val count = row.comments
@@ -1064,6 +1076,7 @@ private fun CommentChip(row: OutlineRow, onClick: () -> Unit) {
             .clickable(
                 interactionSource = null,
                 indication = ripple(bounded = false, radius = 22.dp),
+                enabled = enabled,
                 role = Role.Button,
                 onClick = onClick,
             )

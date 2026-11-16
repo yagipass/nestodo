@@ -8,7 +8,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.github.yagipass.nestodo.AuthState
 import io.github.yagipass.nestodo.TodoViewModel
 
 @Composable
@@ -29,7 +28,9 @@ fun NestodoApp(viewModel: TodoViewModel, openInBrowser: (String) -> Unit) {
         if (result == SnackbarResult.ActionPerformed) notice.retry?.invoke()
     }
 
-    if (state.auth != AuthState.SignedIn) {
+    if (state.starting) return
+
+    if (!state.showsOutline) {
         LoginScreen(
             auth = state.auth,
             error = state.loginError,

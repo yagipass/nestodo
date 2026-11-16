@@ -26,7 +26,7 @@ import kotlinx.coroutines.flow.first
 class DeviceLockedException :
     IOException("the saved sign-in cannot be used until the phone is unlocked")
 
-internal interface TokenCipher {
+internal interface StorageCipher {
     fun seal(plain: String): String
 
     fun open(sealed: String): String
@@ -42,7 +42,7 @@ private val Context.tokenStore by
 class KeystoreTokenStore
 internal constructor(
     private val store: DataStore<Preferences>,
-    private val cipher: TokenCipher,
+    private val cipher: StorageCipher,
     private val isDeviceLocked: () -> Boolean,
 ) : TokenStore {
     constructor(
@@ -83,12 +83,12 @@ internal constructor(
     private fun key(host: String, kind: TokenKind) = stringPreferencesKey("$host/${kind.name}")
 }
 
-private fun Exception.isKeystoreFailure() =
+internal fun Exception.isKeystoreFailure() =
     this is GeneralSecurityException ||
         this is ProviderException ||
         this is IllegalArgumentException
 
-private object KeystoreCipher : TokenCipher {
+internal object KeystoreCipher : StorageCipher {
     private const val KEYSTORE = "AndroidKeyStore"
     private const val ALIAS = "access-tokens-unlocked"
     private const val OLD_ALIAS = "access-tokens"

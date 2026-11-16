@@ -1,5 +1,8 @@
 package io.github.yagipass.nestodo.domain
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class Node(
     val key: Long,
     val parent: Long?,
@@ -75,6 +78,7 @@ private fun MutableList<Boolean>.resize(size: Int) {
     while (this.size < size) add(false)
 }
 
+@Serializable
 data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long> = emptyList()) {
     operator fun get(key: Long): Node? = nodes[key]
 
@@ -184,6 +188,19 @@ data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long
         update(key) { it.copy(comments = (it.comments + by).coerceAtLeast(0)) }
 
     fun sameAs(other: Outline): Boolean = uncounted() == other.uncounted()
+
+    fun rekeyed(keyOf: (Long) -> Long): Outline =
+        Outline(
+            nodes.values.associate { node ->
+                keyOf(node.key) to
+                    node.copy(
+                        key = keyOf(node.key),
+                        parent = node.parent?.let(keyOf),
+                        children = node.children.map(keyOf),
+                    )
+            },
+            roots.map(keyOf),
+        )
 
     private fun uncounted(): Outline = copy(nodes = nodes.mapValues { it.value.copy(comments = 0) })
 

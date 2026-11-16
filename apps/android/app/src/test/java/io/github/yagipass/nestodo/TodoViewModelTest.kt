@@ -44,6 +44,7 @@ class TodoViewModelTest {
     private val repository = FakeRepository(listOf(groceries, milk, eggs, dentist))
     private val original = listOf("Groceries", "  Milk", "  Eggs", "Dentist")
     private val settings = FakeSettings()
+    private val cache = FakeOutlineCache()
     private val backend = FakeBackend(repository)
     private val opened = mutableListOf<HttpUrl>()
     private val now = Instant.parse("2026-11-16T05:00:00Z")
@@ -55,6 +56,7 @@ class TodoViewModelTest {
         TodoViewModel(
                 ::backendAt,
                 settings,
+                cache,
                 timeZone = { "Asia/Tokyo" },
                 timeSource = dispatcher.scheduler.timeSource,
                 now = { now },
@@ -80,7 +82,7 @@ class TodoViewModelTest {
 
     @Test
     fun `a saved login opens straight to the outline in the order the server keeps`() {
-        val state = TodoViewModel(::backendAt, settings).state.value
+        val state = TodoViewModel(::backendAt, settings, cache).state.value
         assertEquals(AuthState.SignedIn, state.auth)
         assertTrue(state.loaded)
         assertEquals(listOf(0, 1, 1, 0), state.rows.map { it.depth })
@@ -476,7 +478,8 @@ class TodoViewModelTest {
     @Test
     fun `choosing an appearance switches the app to it at once and is still chosen when the app is opened again`() {
         val applied = mutableListOf<Appearance>()
-        val viewModel = TodoViewModel(::backendAt, settings, applyAppearance = { applied += it })
+        val viewModel =
+            TodoViewModel(::backendAt, settings, cache, applyAppearance = { applied += it })
 
         viewModel.setAppearance(Appearance.Dark)
 
@@ -510,7 +513,9 @@ class TodoViewModelTest {
         val applied = mutableListOf<Appearance>()
 
         val state =
-            TodoViewModel(::backendAt, settings, applyAppearance = { applied += it }).state.value
+            TodoViewModel(::backendAt, settings, cache, applyAppearance = { applied += it })
+                .state
+                .value
 
         assertEquals(Appearance.Dark, state.appearance)
         assertEquals(emptyList<Appearance>(), applied)
@@ -1591,7 +1596,7 @@ class TodoViewModelTest {
     fun `a debug build reaches the dev server over http on a host its network config allows`() {
         settings.baseUrl = null
         val viewModel =
-            TodoViewModel(::backendAt, settings, cleartextAllowed = { it == "10.0.2.2" })
+            TodoViewModel(::backendAt, settings, cache, cleartextAllowed = { it == "10.0.2.2" })
 
         viewModel.setServer("http://10.0.2.2:5173")
 
@@ -2265,5 +2270,212 @@ class TodoViewModelTest {
 
         assertNull(viewModel.state.value.profile)
         assertNull(viewModel.state.value.avatar)
+    }
+
+    @Test
+    fun `opening the app shows the todos saved on the phone while the server is still being checked, so the list never waits for the network`() {
+        viewModel()
+        backend.connectGate = CompletableDeferred()
+
+        val reopened = viewModel()
+
+        assertEquals(AuthState.Checking, reopened.state.value.auth)
+        assertTrue(reopened.state.value.showsOutline)
+        assertEquals(original, reopened.outline())
+    }
+
+    @Test
+    fun `the server's list replaces the saved todos as soon as it arrives, so a change made elsewhere while the app was closed shows without a refresh`() {
+        viewModel()
+        backend.connectGate = CompletableDeferred()
+        val reopened = viewModel()
+        repository.todos = listOf(groceries, milk, dentist)
+
+        backend.connectGate!!.complete(Unit)
+
+        assertEquals(listOf("Groceries", "  Milk", "Dentist"), reopened.outline())
+        assertTrue(reopened.state.value.loaded)
+        assertFalse(reopened.state.value.restored)
+    }
+
+    @Test
+    fun `the saved todos can only be read until the server's list arrives, so no edit is made to an old copy and then dropped`() {
+        viewModel()
+        backend.connectGate = CompletableDeferred()
+        repository.gate = CompletableDeferred()
+        val reopened = viewModel()
+        fun edit() {
+            reopened.select(2, 4)
+            reopened.setTitle(2, "Oat milk")
+            reopened.enter(2, 4)
+            reopened.toggleCollapsed(1)
+            reopened.add()
+            reopened.openComments(2)
+        }
+
+        edit()
+        backend.connectGate!!.complete(Unit)
+        assertEquals(AuthState.SignedIn, reopened.state.value.auth)
+        edit()
+
+        assertEquals(original, reopened.outline())
+        assertNull(reopened.state.value.editing)
+        assertNull(reopened.state.value.comments)
+        assertFalse(reopened.state.value.canUndo)
+
+        repository.gate!!.complete(Unit)
+        reopened.select(2, 4)
+        reopened.setTitle(2, "Oat milk")
+        reopened.blur(2)
+
+        assertEquals(listOf("GET", "GET profile", "PATCH 2 title \"Oat milk\""), repository.calls)
+    }
+
+    @Test
+    fun `saved todos stay readable when the server's list fails to load, so a bad connection leaves something to read and a Retry instead of a spinner`() {
+        viewModel()
+        repository.failure = IOException("offline")
+
+        val reopened = viewModel()
+
+        assertEquals(original, reopened.outline())
+        assertTrue(reopened.state.value.showsOutline)
+        assertFalse(reopened.state.value.loaded)
+        assertNotNull(reopened.state.value.notice?.retry)
+    }
+
+    @Test
+    fun `a server that can't be reached is reported instead of leaving the saved todos up as if they were current, and they show again while the next try checks`() {
+        viewModel()
+        backend.failure = IOException("offline")
+        val reopened = viewModel()
+        assertEquals(AuthState.Unavailable, reopened.state.value.auth)
+        assertFalse(reopened.state.value.showsOutline)
+        assertNotNull(reopened.state.value.loginError)
+
+        backend.failure = null
+        backend.connectGate = CompletableDeferred()
+        reopened.connect()
+
+        assertTrue(reopened.state.value.showsOutline)
+        assertEquals(original, reopened.outline())
+    }
+
+    @Test
+    fun `nothing is drawn until the phone has looked for saved todos, so the sign-in screen never flashes before them`() {
+        viewModel()
+        cache.gate = CompletableDeferred()
+
+        val reopened = viewModel()
+        assertTrue(reopened.state.value.starting)
+
+        cache.gate!!.complete(Unit)
+        assertFalse(reopened.state.value.starting)
+        assertTrue(reopened.state.value.showsOutline)
+    }
+
+    @Test
+    fun `a phone with no server yet goes straight to asking for one, since there are no saved todos to wait for`() {
+        settings.baseUrl = null
+
+        assertFalse(viewModel().state.value.starting)
+    }
+
+    @Test
+    fun `a change is saved on the phone only once the server has it, so the next launch never opens on todos the server lost`() {
+        val viewModel = viewModel()
+        repository.gate = CompletableDeferred()
+        viewModel.select(2, 4)
+        viewModel.toggleCompleted()
+        assertTrue(viewModel.state.value.outline[2]!!.completed)
+        assertFalse(cache.outline!![2]!!.completed)
+
+        repository.gate!!.complete(Unit)
+        assertTrue(cache.outline!![2]!!.completed)
+
+        val lost = CompletableDeferred<Unit>()
+        repository.gate = lost
+        viewModel.select(3, 0)
+        viewModel.toggleCompleted()
+        repository.failure = IOException("offline")
+        repository.gate = CompletableDeferred()
+        lost.complete(Unit)
+        assertTrue(viewModel.state.value.outline[3]!!.completed)
+        assertFalse(cache.outline!![3]!!.completed)
+    }
+
+    @Test
+    fun `todos the locked phone could not save are saved on returning to the app, so the next launch does not open on the list from before the last change`() {
+        val viewModel = viewModel()
+        cache.locked = true
+        viewModel.select(2, 4)
+        viewModel.toggleCompleted()
+        assertFalse(cache.outline!![2]!!.completed)
+
+        cache.locked = false
+        viewModel.onForeground()
+
+        assertTrue(cache.outline!![2]!!.completed)
+    }
+
+    @Test
+    fun `a row added here is saved under the id the server gave it, so it stays the same row when the server's list replaces the saved one on the next launch`() {
+        viewModel().enter(4, 7)
+        repository.todos = listOf(groceries, milk, eggs, dentist, Todo(100, null, 2, ""))
+        backend.connectGate = CompletableDeferred()
+
+        val reopened = viewModel()
+        val saved = reopened.state.value.rows.map { it.key }
+        backend.connectGate!!.complete(Unit)
+
+        assertEquals(listOf(1L, 2L, 3L, 4L, 100L), saved)
+        assertEquals(saved, reopened.state.value.rows.map { it.key })
+    }
+
+    @Test
+    fun `signing out removes the saved todos from the phone, so whoever opens the app next never sees them`() {
+        viewModel().signOut()
+        backend.connectGate = CompletableDeferred()
+
+        val reopened = viewModel()
+
+        assertFalse(reopened.state.value.showsOutline)
+        assertTrue(reopened.state.value.rows.isEmpty())
+    }
+
+    @Test
+    fun `a sign-in that ran out while the app was closed takes the saved todos off the screen and the phone, so they are not left readable after the sign-in is gone`() {
+        viewModel()
+        backend.signedIn = false
+
+        val reopened = viewModel()
+
+        assertEquals(AuthState.SignedOut, reopened.state.value.auth)
+        assertTrue(reopened.state.value.rows.isEmpty())
+        assertNull(cache.outline)
+    }
+
+    @Test
+    fun `a sign-in that runs out while the app is open removes the saved todos too, so the next launch does not show them before asking to sign in`() {
+        val viewModel = viewModel()
+        repository.failure = ApiException.NotSignedIn()
+
+        viewModel.refresh()
+
+        assertEquals(AuthState.SignedOut, viewModel.state.value.auth)
+        assertNull(cache.outline)
+    }
+
+    @Test
+    fun `switching to another server removes the todos saved from the old one before its sign-in is deleted, so they are never left on the phone without it`() {
+        val viewModel = viewModel()
+        viewModel.changeServer()
+        backend.logoutGate = CompletableDeferred()
+
+        viewModel.setServer("other.example.com")
+        assertNull(cache.outline)
+
+        backend.logoutGate!!.complete(Unit)
+        assertEquals("other.example.com", cache.server)
     }
 }

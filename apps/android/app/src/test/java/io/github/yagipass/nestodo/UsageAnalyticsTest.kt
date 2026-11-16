@@ -39,7 +39,12 @@ class UsageAnalyticsTest {
     private val agreed = Analytics(available = true, enabled = true, token = "phc_test")
 
     private fun viewModel(capture: Capture = this.capture) =
-        TodoViewModel({ backend }, settings, usage = UsageAnalytics(settings, capture))
+        TodoViewModel(
+            { backend },
+            settings,
+            FakeOutlineCache(),
+            usage = UsageAnalytics(settings, capture),
+        )
 
     private fun screens() = capture.sent.map { it.screen }
 

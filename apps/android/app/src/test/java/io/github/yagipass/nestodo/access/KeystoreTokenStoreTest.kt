@@ -16,7 +16,7 @@ class KeystoreTokenStoreTest {
     @get:Rule val folder = TemporaryFolder()
     private var locked = false
     private val keystore =
-        object : TokenCipher {
+        object : StorageCipher {
             var readable = true
 
             override fun seal(plain: String): String {
