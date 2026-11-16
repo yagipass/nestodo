@@ -1,17 +1,3 @@
-@font-face {
-  font-family: Figtree;
-  font-weight: 700;
-  font-display: swap;
-  src: url("./fonts/Figtree-Bold.woff2") format("woff2");
-}
-
-@font-face {
-  font-family: Figtree;
-  font-weight: 800;
-  font-display: swap;
-  src: url("./fonts/Figtree-ExtraBold.woff2") format("woff2");
-}
-
 :root {
   color-scheme: light dark;
   --bg: light-dark(#f1edfa, #17122a);
@@ -1266,6 +1252,10 @@ kbd {
   margin: 0 4px;
   font-size: 1.75rem;
   line-height: 1.3;
+}
+
+.stats.embedded {
+  padding: 16px;
 }
 
 .settings {

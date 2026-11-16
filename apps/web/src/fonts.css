@@ -1,0 +1,13 @@
+@font-face {
+  font-family: Figtree;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./fonts/Figtree-Bold.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: Figtree;
+  font-weight: 800;
+  font-display: swap;
+  src: url("./fonts/Figtree-ExtraBold.woff2") format("woff2");
+}
