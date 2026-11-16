@@ -3,9 +3,7 @@ import { applyOps, sameOutline, splitsPair, undoFor, type Change, type Focus, ty
 const LIMIT = 50;
 const TYPING_PAUSE = 1000;
 
-type Field = "title" | "note";
-
-type Typing = { key: string; field: Field; original: string; at: number; composing: boolean };
+type Typing = { key: string; original: string; at: number; composing: boolean };
 
 type Step = { ops: Op[]; focus?: Focus; after: Outline; typing?: Typing };
 
@@ -29,19 +27,16 @@ export class UndoHistory {
     this.push({ ops: undoFor(before, change.ops), focus, after: change.outline });
   }
 
-  type(before: Outline, after: Outline, key: string, field: Field, composing = false) {
+  type(before: Outline, after: Outline, key: string, composing = false) {
     const now = this.now();
     const top = this.steps.at(-1);
     const typing = top?.typing;
-    const going = typing && typing.key === key && typing.field === field && (typing.composing || now - typing.at <= TYPING_PAUSE);
-    const original = going ? typing.original : before[key][field];
-    const step =
-      top && going
-        ? top
-        : this.push({ ops: [field === "title" ? { type: "title", key, title: original } : { type: "note", key, note: original }], after });
+    const going = typing && typing.key === key && (typing.composing || now - typing.at <= TYPING_PAUSE);
+    const original = going ? typing.original : before[key].title;
+    const step = top && going ? top : this.push({ ops: [{ type: "title", key, title: original }], after });
     step.after = after;
-    step.focus = { key, pos: editEnd(original, after[key][field]), note: field === "note" };
-    step.typing = { key, field, original, at: now, composing };
+    step.focus = { key, pos: editEnd(original, after[key].title) };
+    step.typing = { key, original, at: now, composing };
   }
 
   composed() {

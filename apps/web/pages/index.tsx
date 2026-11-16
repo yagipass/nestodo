@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
-import { AppHeader, useBackdropClose } from "./layout";
+import { useShared } from "@void/react";
+import { AppHeader, Avatar, useBackdropClose } from "./layout";
 import { Icon } from "../src/icons";
 import type { Props } from "./index.server";
 import {
@@ -17,10 +18,11 @@ import {
   moveTo,
   openUnder,
   outdent,
+  parentOf,
   remove,
   rename,
   setCollapsed,
-  setNote,
+  setComments,
   split,
   subtree,
   toggleDone,
@@ -30,8 +32,11 @@ import {
   type Outline,
 } from "../src/outline";
 import { Sync } from "../src/sync";
+import { snippet } from "../src/thread";
+import { ThreadPane } from "../src/thread-pane";
 import { encodePastedUrl, findLinks, tokens } from "../src/title";
-import { MAX_NOTE_LENGTH, MAX_TITLE_LENGTH, SHOW_DONE_COOKIE } from "../src/todos";
+import { MAX_TITLE_LENGTH, SHOW_DONE_COOKIE } from "../src/todos";
+import { Tokens } from "../src/tokens";
 import { UndoHistory } from "../src/undo";
 
 function send(method: string, path: string, body?: unknown) {
@@ -94,39 +99,6 @@ function arrowStep(event: KeyboardEvent) {
 
 function rememberShowDone(shown: boolean) {
   document.cookie = `${SHOW_DONE_COOKIE}=${shown}; Path=/; Max-Age=${400 * 24 * 60 * 60}; SameSite=Lax`;
-}
-
-function fitNote(area: HTMLTextAreaElement) {
-  area.style.height = "auto";
-  area.style.height = `${area.scrollHeight}px`;
-}
-
-function Tokens({ text, query }: { text: string; query: string }) {
-  return (
-    <>
-      {tokens(text, query).map((part, index) =>
-        part.href ? (
-          <a
-            key={index}
-            className={part.className}
-            href={part.href}
-            target="_blank"
-            rel="noreferrer"
-            tabIndex={-1}
-            data-from={part.from}
-            data-to={part.to}
-          >
-            {part.text}
-            <Icon name="link" size={12} strokeWidth={2.6} />
-          </a>
-        ) : (
-          <span key={index} className={part.className} data-from={part.from} data-to={part.to}>
-            {part.text}
-          </span>
-        ),
-      )}
-    </>
-  );
 }
 
 function MovePicker({
@@ -287,7 +259,9 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
   const [filtering, setFiltering] = useState(false);
   const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set());
   const [failed, setFailed] = useState(false);
-  const [noteKey, setNoteKey] = useState<string | null>(null);
+  const [thread, setThread] = useState<string | null>(null);
+  const [threadFocus, setThreadFocus] = useState<{ key: string; request: number } | null>(null);
+  const [commentHits, setCommentHits] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [moving, setMoving] = useState<Focus | null>(null);
   const [confirming, setConfirming] = useState<Confirming | null>(null);
   const [sync] = useState(
@@ -296,7 +270,6 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
   const [history] = useState(() => new UndoHistory());
   const counter = useRef(0);
   const inputs = useRef(new Map<string, HTMLInputElement>());
-  const notes = useRef(new Map<string, HTMLTextAreaElement>());
   const pendingFocus = useRef<Focus | null>(null);
   const clickCaret = useRef<number | null>(null);
   const refreshing = useRef(false);
@@ -304,10 +277,33 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
   const filterInput = useRef<HTMLInputElement>(null);
   const filterButton = useRef<HTMLButtonElement>(null);
 
-  const rows = visibleRows(outline, showDone, query, kept);
+  const rows = visibleRows(outline, showDone, query, commentHits.size === 0 ? kept : new Set([...kept, ...commentHits.keys()]));
   const lines = guides(rows);
   const shownKeys = new Set(rows.map((row) => row.key));
   const match = query.trim().toLowerCase();
+  const threadItem = thread === null ? undefined : outline[thread];
+  const avatarUrl = useShared()?.auth?.profile?.avatarUrl ?? null;
+
+  useEffect(() => {
+    const text = query.trim();
+    if (text === "") {
+      setCommentHits(new Map());
+      return;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      fetch(`/api/v1/search?q=${encodeURIComponent(text)}`, { headers: { Accept: "application/json" }, signal: controller.signal })
+        .then((res) => (res.ok ? (res.json() as Promise<{ todos: { id: number; comment: string }[] }>) : null))
+        .then((found) => {
+          if (found && !controller.signal.aborted) setCommentHits(new Map(found.todos.map(({ id, comment }) => [sync.keyOf(id) ?? keyFor(id), comment])));
+        })
+        .catch(() => {});
+    }, 300);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [query, sync]);
 
   useEffect(() => {
     const refresh = async () => {
@@ -345,8 +341,8 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     return `new${counter.current}`;
   }
 
-  function focusRow({ key, pos, note }: Focus) {
-    const input = note ? notes.current.get(key) : inputs.current.get(key);
+  function focusRow({ key, pos }: Focus) {
+    const input = inputs.current.get(key);
     if (!input) return;
     input.focus();
     const at = caretIn(input.value, pos);
@@ -356,9 +352,6 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
   function focused(): Focus | undefined {
     for (const [key, input] of inputs.current) {
       if (input === document.activeElement) return { key, pos: input.selectionStart ?? 0 };
-    }
-    for (const [key, area] of notes.current) {
-      if (area === document.activeElement) return { key, pos: area.selectionStart, note: true };
     }
   }
 
@@ -384,9 +377,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     setOutline(change.outline);
     sync.apply(change.ops);
     keep(change.ops.map((op) => op.key));
-    const next = focus ?? change.focus ?? null;
-    if (next?.note) setNoteKey(next.key);
-    pendingFocus.current = next;
+    pendingFocus.current = focus ?? change.focus ?? null;
   }
 
   function reload() {
@@ -519,39 +510,33 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
 
   function onTitle(key: string, title: string, composing = false) {
     const next = rename(outline, key, title);
-    history.type(outline, next, key, "title", composing);
+    history.type(outline, next, key, composing);
     setOutline(next);
     sync.title(key, title);
     keep([key]);
   }
 
-  function onNote(key: string, note: string, composing = false) {
-    const next = setNote(outline, key, note);
-    history.type(outline, next, key, "note", composing);
-    setOutline(next);
-    sync.note(key, note);
-    keep([key]);
+  function openThread(key: string) {
+    setThread(key);
+    setThreadFocus((current) => ({ key, request: (current?.request ?? 0) + 1 }));
   }
 
-  function openNote(key: string) {
-    flushSync(() => setNoteKey(key));
-    const area = notes.current.get(key);
-    if (!area) return;
-    area.focus();
-    area.setSelectionRange(area.value.length, area.value.length);
+  function followCaret(key: string) {
+    if (thread === null || thread === key) return;
+    setThread(key);
+    setThreadFocus(null);
   }
 
-  function closeNote(key: string) {
-    const note = outline[key]?.note ?? "";
-    if (note !== "" && note.trim() === "") onNote(key, "");
-    history.end();
-    sync.flush();
-    setNoteKey((open) => (open === key ? null : open));
+  function countComments(key: string, delta: number) {
+    setOutline((current) => (current[key] ? setComments(current, key, Math.max(0, current[key].comments + delta)) : current));
   }
 
-  function onNoteClick(event: MouseEvent<HTMLElement>, key: string) {
-    if ((event.target as Element).closest("a") || !window.getSelection()?.isCollapsed) return;
-    focusRow({ key, pos: -1 });
+  function pathOf(key: string) {
+    const path: string[] = [];
+    for (let parent = parentOf(outline, key); parent !== null && parent !== ROOT; parent = parentOf(outline, parent)) {
+      path.unshift(outline[parent].title || "Untitled");
+    }
+    return path;
   }
 
   function onPointerDown(event: PointerEvent<HTMLInputElement>, title: string) {
@@ -599,7 +584,8 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     if (k === "Backspace" && mod && event.shiftKey) return handle(() => removeRow(key, index));
     if ((k === "m" || k === "M") && mod && event.shiftKey) return handle(() => openMove(here));
     if (k === "Enter" && mod) return handle(() => complete(key, index, pos));
-    if (k === "Enter" && event.shiftKey && !event.altKey) return handle(() => openNote(key));
+    if (k === "Enter" && event.shiftKey && !event.altKey) return handle(() => openThread(key));
+    if (k === "Escape" && thread !== null && !mod && !event.shiftKey) return handle(() => setThread(null));
     if (k === "Enter" && !event.shiftKey && !event.altKey) return handle(() => apply(split(outline, key, pos, fresh(), shownKeys)));
     if (k === "Tab") return handle(() => apply(event.shiftKey ? outdent(outline, key) : indent(outline, key, shownKeys), here));
     if ((k === "ArrowUp" || k === "ArrowDown") && event.shiftKey && (event.altKey || mod)) {
@@ -610,32 +596,9 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     if (step !== 0 && !event.shiftKey && rows[index + step]) return handle(() => focusRow({ key: rows[index + step].key, pos }));
     if (k === "Backspace" && atStart) {
       const item = outline[key];
-      if (item.title === "" && item.note === "" && item.children.length === 0) return handle(() => removeRow(key, index));
+      if (item.title === "" && item.comments === 0 && item.children.length === 0) return handle(() => removeRow(key, index));
       const merged = mergeIntoPrevious(outline, rows, key);
       if (merged) return handle(() => apply(merged));
-    }
-  }
-
-  function onNoteKeyDown(event: KeyboardEvent<HTMLTextAreaElement>, key: string) {
-    if (composingKey(event.nativeEvent)) return;
-    const area = event.currentTarget;
-    const caret = area.selectionStart === area.selectionEnd ? area.selectionStart : null;
-    const mod = event.metaKey || event.ctrlKey;
-    const index = rows.findIndex((row) => row.key === key);
-    const k = event.key;
-    const handle = (action: () => unknown) => {
-      event.preventDefault();
-      action();
-    };
-
-    if (isUndo(event)) return handle(undo);
-    if (k === "Escape" || (k === "Enter" && event.shiftKey && !mod && !event.altKey)) return handle(() => focusRow({ key, pos: -1 }));
-    if ((k === "m" || k === "M") && mod && event.shiftKey) return handle(() => openMove({ key, pos: -1 }));
-    if (k === "Enter" && mod) return handle(() => complete(key, index, -1));
-    const step = arrowStep(event);
-    if (step === -1 && !event.shiftKey && caret === 0) return handle(() => focusRow({ key, pos: -1 }));
-    if (step === 1 && !event.shiftKey && caret === area.value.length && index < rows.length - 1) {
-      return handle(() => focusRow({ key: rows[index + 1].key, pos: 0 }));
     }
   }
 
@@ -716,7 +679,10 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
             const { through, stem } = lines[index];
             const toggle = () => apply(setCollapsed(outline, row.key, !item.collapsed));
             return (
-              <li key={row.key} className={["row", hasChildren && "parent", item.done ? "done" : row.under && "under"].filter(Boolean).join(" ")}>
+              <li
+                key={row.key}
+                className={["row", hasChildren && "parent", item.done ? "done" : row.under && "under", thread === row.key && "threaded"].filter(Boolean).join(" ")}
+              >
                 {through.map((continues, level) => (
                   <span key={level} className={["guide", continues && "continues", level === row.depth - 1 && "branch"].filter(Boolean).join(" ")} aria-hidden="true" />
                 ))}
@@ -765,6 +731,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
                       onChange={(event) => onTitle(row.key, event.target.value, composing(event.nativeEvent))}
                       onCompositionEnd={() => history.composed()}
                       onKeyDown={(event) => onKeyDown(event, row.key)}
+                      onFocus={() => followCaret(row.key)}
                       onPointerDown={(event) => onPointerDown(event, item.title)}
                       onClick={onClick}
                       onPaste={(event) => onPaste(event, MAX_TITLE_LENGTH)}
@@ -777,55 +744,26 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
                       <Tokens text={item.title} query={query} />
                     </span>
                   </span>
-                  {noteKey === row.key ? (
-                    <>
-                      <textarea
-                        ref={(area) => {
-                          if (!area) {
-                            notes.current.delete(row.key);
-                            return;
-                          }
-                          notes.current.set(row.key, area);
-                          fitNote(area);
-                        }}
-                        className="note-input"
-                        value={item.note}
-                        readOnly={failed}
-                        rows={1}
-                        aria-label={`Note of ${name}`}
-                        maxLength={MAX_NOTE_LENGTH}
-                        spellCheck={false}
-                        onChange={(event) => onNote(row.key, event.target.value, composing(event.nativeEvent))}
-                        onCompositionEnd={() => history.composed()}
-                        onKeyDown={(event) => onNoteKeyDown(event, row.key)}
-                        onPaste={(event) => onPaste(event, MAX_NOTE_LENGTH)}
-                        onBlur={() => closeNote(row.key)}
-                      />
-                      <span className="note-hint" aria-hidden="true">
-                        <kbd>Enter</kbd> new line · <kbd>⇧</kbd>
-                        <kbd>Enter</kbd> or <kbd>Esc</kbd> back to the title
+                  {match && commentHits.has(row.key) && (
+                    <span className="comment-match">
+                      <Icon name="comment" size={13} />
+                      <span>
+                        <Tokens text={snippet(commentHits.get(row.key)!, match)} query={query} />
                       </span>
-                    </>
-                  ) : (
-                    item.note !== "" && (
-                      <span
-                        className={match && item.note.toLowerCase().includes(match) ? "note whole" : "note"}
-                        onClick={(event) => onNoteClick(event, row.key)}
-                      >
-                        <Tokens text={item.note} query={query} />
-                      </span>
-                    )
+                    </span>
                   )}
                 </span>
                 <button
                   type="button"
-                  className="note-button"
-                  aria-label={`${item.note === "" ? "Add a note to" : "Edit the note of"} ${name}`}
-                  data-tip="Note (⇧ Enter)"
+                  className={["comment-button", item.comments > 0 && "has-comments", thread === row.key && "open"].filter(Boolean).join(" ")}
+                  aria-label={`${item.comments === 0 ? "Comment on" : `${item.comments} ${item.comments === 1 ? "comment" : "comments"} on`} ${name}`}
+                  aria-expanded={thread === row.key}
+                  data-tip="Comments (⇧ Enter)"
                   onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => (noteKey === row.key ? focusRow({ key: row.key, pos: -1 }) : openNote(row.key))}
+                  onClick={() => openThread(row.key)}
                 >
-                  <Icon name="note" size={18} />
+                  <Icon name="comment" size={18} />
+                  {item.comments > 0 && <span>{item.comments}</span>}
                 </button>
                 <button
                   type="button"
@@ -849,6 +787,28 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
         </button>
       </main>
 
+      {thread !== null && threadItem && (
+        <ThreadPane
+          key={thread}
+          todoKey={thread}
+          title={threadItem.title}
+          path={pathOf(thread)}
+          done={threadItem.done}
+          count={threadItem.comments}
+          serverId={sync.idOf(thread)}
+          query={query}
+          sync={sync}
+          editable={!failed}
+          avatar={<Avatar url={avatarUrl} size={28} />}
+          focusRequest={threadFocus?.key === thread ? threadFocus.request : 0}
+          onCount={countComments}
+          onBack={() => focusRow({ key: thread, pos: -1 })}
+          onClose={() => {
+            setThread(null);
+            focusRow({ key: thread, pos: -1 });
+          }}
+        />
+      )}
       {moving && outline[moving.key] && (
         <MovePicker outline={outline} moving={moving.key} showDone={showDone} onMove={moveRow} onClose={closeMove} />
       )}

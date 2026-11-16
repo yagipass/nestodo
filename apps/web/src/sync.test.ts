@@ -11,7 +11,8 @@ function server(status = (_call: Call) => 200) {
     const call = { method, path, body };
     calls.push(call);
     const code = status(call);
-    const payload = method === "POST" ? { todo: { id: nextId++ } } : {};
+    const comment = { id: nextId++, body: (body as { body?: string })?.body, via: "app", at: "2026-11-16T01:00:00.000Z", editedAt: null };
+    const payload = path.endsWith("/comments") || path.startsWith("/api/v1/comments/") ? { comment } : method === "POST" ? { todo: { id: comment.id } } : {};
     return new Response(code === 204 ? null : JSON.stringify(payload), { status: code });
   };
   return { calls, send };
@@ -43,15 +44,18 @@ describe("Sync", () => {
     expect(sync.keyOf(101)).toBe("new2");
   });
 
-  it("brings back a deleted row's note in the request that recreates it, so undoing a delete loses nothing written under it", async () => {
+  it("asks the server to bring a deleted row back under its old id, so undoing a delete keeps the comments written on it", async () => {
     const { calls, send } = server();
-    const sync = new Sync([], send);
+    const sync = new Sync([["t1", 1], ["t2", 2]], send);
+    const item = { key: "t2", title: "dentist", comments: 3, done: false, collapsed: false, children: [] };
 
-    sync.apply([{ type: "create", key: "t1", parent: ROOT, index: 0, title: "dentist", note: "weekday mornings" }]);
+    sync.apply([{ type: "delete", key: "t2", removed: ["t2"] }]);
+    sync.apply([{ type: "restore", key: "t2", parent: "t1", index: 0, items: [item] }]);
     await vi.runAllTimersAsync();
 
     expect(calls).toEqual([
-      { method: "POST", path: "/api/v1/todos", body: { title: "dentist", note: "weekday mornings", parentId: null, index: 0 } },
+      { method: "DELETE", path: "/api/v1/todos/2", body: undefined },
+      { method: "POST", path: "/api/v1/todos/2/restore", body: { parentId: 1, index: 0 } },
     ]);
   });
 
@@ -83,33 +87,50 @@ describe("Sync", () => {
     expect(calls).toEqual([{ method: "PATCH", path: "/api/v1/todos/1", body: { title: "Buy milk" } }]);
   });
 
-  it("sends a burst of note typing as one update of its own, so it never overwrites the title being typed in the same pause", async () => {
+  it("sends a comment on a row still being created once the server has given it an id, so a comment written right after Enter is kept", async () => {
     const { calls, send } = server();
+    const sync = new Sync([], send);
+
+    sync.apply([{ type: "create", key: "new1", parent: ROOT, index: 0, title: "book hotel" }]);
+    const posted = sync.comment("new1", "near the station");
+    await vi.runAllTimersAsync();
+
+    expect(calls.map(({ method, path, body }) => [method, path, body])).toEqual([
+      ["POST", "/api/v1/todos", { title: "book hotel", parentId: null, index: 0 }],
+      ["POST", "/api/v1/todos/100/comments", { body: "near the station" }],
+    ]);
+    expect(await posted).toMatchObject({ body: "near the station" });
+  });
+
+  it("edits and deletes comments by their own ids, in the order they were made", async () => {
+    const { calls, send } = server((call) => (call.method === "DELETE" ? 204 : 200));
     const sync = new Sync([["t1", 1]], send);
 
-    sync.title("t1", "book hotel");
-    for (const note of ["n", "ne", "near the station"]) {
-      sync.note("t1", note);
-      await vi.advanceTimersByTimeAsync(200);
-    }
+    const edited = sync.editComment(7, "no answer, try Friday");
+    const deleted = sync.deleteComment(8);
     await vi.runAllTimersAsync();
 
     expect(calls).toEqual([
-      { method: "PATCH", path: "/api/v1/todos/1", body: { title: "book hotel" } },
-      { method: "PATCH", path: "/api/v1/todos/1", body: { note: "near the station" } },
+      { method: "PATCH", path: "/api/v1/comments/7", body: { body: "no answer, try Friday" } },
+      { method: "DELETE", path: "/api/v1/comments/8", body: undefined },
     ]);
-    expect(sync.pending).toBe(false);
+    expect(await edited).toMatchObject({ body: "no answer, try Friday" });
+    await expect(deleted).resolves.toBeUndefined();
   });
 
-  it("sends a pending note before a structural change to the same row, keeping the user's order", async () => {
-    const { calls, send } = server();
-    const sync = new Sync([["t1", 1]], send);
+  it("rejects a comment the server refused and every comment after it, so the pane can stop showing them as sending", async () => {
+    const { send } = server((call) => (call.path === "/api/v1/todos/1/comments" ? 500 : 200));
+    let notified = 0;
+    const sync = new Sync([["t1", 1], ["t2", 2]], send, () => notified++);
 
-    sync.note("t1", "near the station");
-    sync.apply([{ type: "update", key: "t1", fields: { completed: true } }]);
+    const refused = sync.comment("t1", "first");
+    const waiting = sync.comment("t2", "second");
     await vi.runAllTimersAsync();
 
-    expect(calls.map((call) => call.body)).toEqual([{ note: "near the station" }, { completed: true }]);
+    await expect(refused).rejects.toThrow();
+    await expect(waiting).rejects.toThrow();
+    await expect(sync.comment("t2", "third")).rejects.toThrow();
+    expect([sync.failed, notified]).toEqual([true, 1]);
   });
 
   it("sends a pending title before a structural change to the same row, keeping the user's order", async () => {
@@ -138,12 +159,11 @@ describe("Sync", () => {
     expect(sync.failed).toBe(true);
   });
 
-  it("drops pending titles and notes of deleted rows instead of sending them to todos that no longer exist", async () => {
+  it("drops pending titles of deleted rows instead of sending them to todos that no longer exist", async () => {
     const { calls, send } = server((call) => (call.method === "DELETE" ? 204 : 200));
     const sync = new Sync([["t1", 1], ["t2", 2]], send);
 
     sync.title("t1", "typed into the row");
-    sync.note("t1", "typed under the title");
     sync.title("t2", "typed under the parent");
     sync.apply([{ type: "delete", key: "t1", removed: ["t1", "t2"] }]);
     await vi.runAllTimersAsync();

@@ -25,11 +25,11 @@ import {
 } from "./outline";
 import { MAX_DEPTH, MAX_TITLE_LENGTH } from "./todos";
 
-function todo(id: number, title: string, parentId: number | null = null, extra: { done?: boolean; collapsed?: boolean; note?: string } = {}) {
+function todo(id: number, title: string, parentId: number | null = null, extra: { done?: boolean; collapsed?: boolean; comments?: number } = {}) {
   return {
     id,
     title,
-    note: extra.note ?? "",
+    commentCount: extra.comments ?? 0,
     parentId,
     completedAt: extra.done ? "2026-10-23 09:00:00" : null,
     collapsed: extra.collapsed ?? false,
@@ -147,10 +147,10 @@ describe("split", () => {
     expect(change.ops).toEqual([{ type: "create", key: "n1", parent: "t1", index: 0, title: "" }]);
   });
 
-  it("leaves the note with the head of the title, since the note was written about the row it is under", () => {
-    const outline = fromTodos([todo(1, "book hotel near the station", null, { note: "budget 20000 yen" })]);
+  it("leaves the comments with the head of the title, since they were written about the row they are under", () => {
+    const outline = fromTodos([todo(1, "book hotel near the station", null, { comments: 2 })]);
     const change = split(outline, "t1", "book hotel".length, "n1", shown(outline));
-    expect([change.outline.t1.note, change.outline.n1.note]).toEqual(["budget 20000 yen", ""]);
+    expect([change.outline.t1.comments, change.outline.n1.comments]).toEqual([2, 0]);
   });
 });
 
@@ -326,8 +326,8 @@ describe("mergeIntoPrevious", () => {
     expect(mergeIntoPrevious(doneIntoOpen, rowsOf(doneIntoOpen), "t2")).toBeNull();
   });
 
-  it("refuses when the row has a note, so Backspace never throws away what was written under it", () => {
-    const outline = fromTodos([todo(1, "buy "), todo(2, "milk", null, { note: "the low-fat one" })]);
+  it("refuses when the row has comments, so Backspace never throws away the log kept on it", () => {
+    const outline = fromTodos([todo(1, "buy "), todo(2, "milk", null, { comments: 1 })]);
     expect(mergeIntoPrevious(outline, rowsOf(outline), "t2")).toBeNull();
   });
 
@@ -439,20 +439,32 @@ describe("undoFor", () => {
     ]);
   });
 
-  it("recreates a deleted subtree parents first under the same keys, with every note, completion and fold it had", () => {
+  it("restores a deleted subtree in one step under the same keys and place, so the server can bring back the same todos with their comments", () => {
     const outline = fromTodos([
-      todo(1, "trip", null, { collapsed: true }),
-      todo(2, "packing", 1, { note: "check the weather" }),
-      todo(3, "socks", 2, { done: true }),
-      todo(4, "home"),
+      todo(1, "home"),
+      todo(2, "trip", null, { collapsed: true }),
+      todo(3, "packing", 2, { comments: 2 }),
+      todo(4, "socks", 3, { done: true }),
     ]);
-    expect(undoFor(outline, remove(outline, "t1").ops)).toEqual([
-      { type: "create", key: "t1", parent: ROOT, index: 0, title: "trip", note: "" },
-      { type: "update", key: "t1", fields: { collapsed: true } },
-      { type: "create", key: "t2", parent: "t1", index: 0, title: "packing", note: "check the weather" },
-      { type: "create", key: "t3", parent: "t2", index: 0, title: "socks", note: "" },
-      { type: "update", key: "t3", fields: { completed: true } },
+    const removed = remove(outline, "t2");
+
+    const undo = undoFor(outline, removed.ops);
+
+    expect(undo).toEqual([{ type: "restore", key: "t2", parent: ROOT, index: 1, items: [outline.t2, outline.t3, outline.t4] }]);
+    expect(applyOps(removed.outline, undo)).toEqual(outline);
+  });
+
+  it("undoes a join by restoring the joined row and its old title, so Backspace at the start of a row can be taken back", () => {
+    const outline = fromTodos([todo(1, "buy "), todo(2, "milk")]);
+    const joined = mergeIntoPrevious(outline, visibleRows(outline, true), "t2")!;
+
+    const undo = undoFor(outline, joined.ops);
+
+    expect(undo).toEqual([
+      { type: "restore", key: "t2", parent: ROOT, index: 1, items: [outline.t2] },
+      { type: "title", key: "t1", title: "buy " },
     ]);
+    expect(applyOps(joined.outline, undo)).toEqual(outline);
   });
 });
 
@@ -480,9 +492,9 @@ describe("visibleRows", () => {
     expect(visibleRows(outline, true, "INSIDE").map((row) => row.key)).toEqual(["t3", "t4"]);
   });
 
-  it("finds a row by its note, so details kept out of the title can still be filtered for", () => {
-    const noted = fromTodos([todo(1, "dentist", null, { note: "Only weekday mornings" }), todo(2, "milk")]);
-    expect(visibleRows(noted, true, "weekday").map((row) => row.key)).toEqual(["t1"]);
+  it("shows rows the server found by their comments, with their parents, since comments are not kept in the outline", () => {
+    const nested = fromTodos([todo(1, "health"), todo(2, "dentist", 1), todo(3, "milk")]);
+    expect(visibleRows(nested, true, "weekday", new Set(["t2"])).map((row) => row.key)).toEqual(["t1", "t2"]);
   });
 
   it("keeps rows created during a filter visible even though their text does not match yet", () => {

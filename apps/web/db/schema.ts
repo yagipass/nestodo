@@ -9,7 +9,6 @@ export const todos = sqliteTable(
     parentId: integer("parent_id"),
     position: integer("position").notNull().default(0),
     title: text("title").notNull(),
-    note: text("note").notNull().default(""),
     collapsed: integer("collapsed", { mode: "boolean" }).notNull().default(false),
     completedAt: text("completed_at"),
     createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
@@ -27,7 +26,39 @@ export const todoEvents = sqliteTable(
     kind: text("kind", { enum: ["created", "completed", "reopened", "deleted"] }).notNull(),
     at: text("at").notNull().default(sql`(datetime('now'))`),
   },
-  (table) => [index("todo_events_user_id_at_idx").on(table.userId, table.at)],
+  (table) => [index("todo_events_user_id_at_idx").on(table.userId, table.at), index("todo_events_user_id_todo_id_idx").on(table.userId, table.todoId)],
+);
+
+export const todoComments = sqliteTable(
+  "todo_comments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: text("user_id").notNull(),
+    todoId: integer("todo_id").notNull(),
+    body: text("body").notNull(),
+    via: text("via", { enum: ["app", "mcp"] }).notNull(),
+    createdAt: text("created_at").notNull().default(sql`(strftime('%Y-%m-%d %H:%M:%f', 'now'))`),
+    editedAt: text("edited_at"),
+  },
+  (table) => [index("todo_comments_user_id_todo_id_idx").on(table.userId, table.todoId, table.createdAt)],
+);
+
+export const trashedTodos = sqliteTable(
+  "trashed_todos",
+  {
+    id: integer("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    batch: integer("batch").notNull(),
+    parentId: integer("parent_id"),
+    position: integer("position").notNull(),
+    title: text("title").notNull(),
+    collapsed: integer("collapsed", { mode: "boolean" }).notNull(),
+    completedAt: text("completed_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    trashedAt: text("trashed_at").notNull().default(sql`(datetime('now'))`),
+  },
+  (table) => [index("trashed_todos_user_id_batch_idx").on(table.userId, table.batch)],
 );
 
 export const webhooks = sqliteTable("webhooks", {
@@ -47,7 +78,6 @@ export const archivedTodos = sqliteTable(
     userId: text("user_id").notNull(),
     path: text("path", { mode: "json" }).$type<string[]>().notNull(),
     title: text("title").notNull(),
-    note: text("note").notNull(),
     createdAt: text("created_at").notNull(),
     completedAt: text("completed_at").notNull(),
   },

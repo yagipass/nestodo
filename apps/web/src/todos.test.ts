@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { MINUTE, sqliteTime } from "./time";
-import { clampIndex, depthOf, heightOf, isWithin, outlineOrder, todosAwaitingNote } from "./todos";
+import { clampIndex, depthOf, heightOf, isWithin, outlineOrder, todosAwaitingComment } from "./todos";
 
 function row(id: number, parentId: number | null, position: number) {
   return { id, parentId, position };
@@ -58,17 +58,17 @@ describe("depthOf and heightOf", () => {
   });
 });
 
-describe("todosAwaitingNote", () => {
+describe("todosAwaitingComment", () => {
   const now = new Date("2026-10-30T12:00:00Z");
 
-  function todo(id: number, parentId: number | null, fields: { title?: string; note?: string; completed?: boolean; age?: number } = {}) {
+  function todo(id: number, parentId: number | null, fields: { title?: string; comments?: string[]; completed?: boolean; age?: number } = {}) {
     const createdAt = sqliteTime(now.getTime() - (fields.age ?? 5) * MINUTE);
     return {
       id,
       parentId,
       position: 0,
       title: fields.title ?? `todo ${id}`,
-      note: fields.note ?? "",
+      comments: fields.comments ?? [],
       completedAt: fields.completed ? createdAt : null,
       createdAt,
     };
@@ -77,10 +77,10 @@ describe("todosAwaitingNote", () => {
   const root = todo(1, null, { title: "Side projects", age: 60 });
 
   function awaiting(rows: ReturnType<typeof todo>[], at = now) {
-    return todosAwaitingNote(rows, "Side projects", at).map((row) => row.id);
+    return todosAwaitingComment(rows, "Side projects", at).map((row) => row.id);
   }
 
-  it("picks open todos without a note anywhere under the root, so the receiver can write notes for new tasks in that project", () => {
+  it("picks open todos without a comment anywhere under the root, so the receiver can comment on new tasks in that project", () => {
     expect(awaiting([root, todo(2, 1, { age: 60 }), todo(3, 2), todo(4, 1)])).toEqual([3, 4]);
   });
 
@@ -105,19 +105,27 @@ describe("todosAwaitingNote", () => {
     expect(awaiting([todo(1, null, { title: "\u00a0Side projects\u3000", age: 60 }), todo(2, 1)])).toEqual([2]);
   });
 
-  it("treats a blank note or one that is only a URL as missing, so links saved for later get a note too", () => {
-    const notes = ["", " \n\t", "\u3000", " https://example.com/a?b=c#d \n", "HTTP://EXAMPLE.COM"];
-    const rows = [root, ...notes.map((note, i) => todo(i + 2, 1, { note }))];
-    expect(awaiting(rows)).toEqual([2, 3, 4, 5, 6]);
+  it("still waits on a todo whose comments are each just a URL, so links shared for later get a comment about them too", () => {
+    const logs = [[" https://example.com/a?b=c#d \n"], ["HTTP://EXAMPLE.COM"], ["https://a.example", "https://b.example"]];
+    const rows = [root, ...logs.map((comments, i) => todo(i + 2, 1, { comments }))];
+    expect(awaiting(rows)).toEqual([2, 3, 4]);
   });
 
-  it("leaves a note with anything besides a single URL alone, so what the member wrote is never overwritten", () => {
-    const notes = ["memo", "see https://example.com", "https://a.example https://b.example", "https://a.example\nhttps://b.example", "https://", "ftp://example.com"];
-    const rows = [root, ...notes.map((note, i) => todo(i + 2, 1, { note }))];
+  it("stops waiting once any comment says more than a single URL, so a todo the member already wrote about is left to them", () => {
+    const logs = [
+      ["memo"],
+      ["see https://example.com"],
+      ["https://a.example https://b.example"],
+      ["https://a.example\nhttps://b.example"],
+      ["https://"],
+      ["ftp://example.com"],
+      ["https://a.example", "memo"],
+    ];
+    const rows = [root, ...logs.map((comments, i) => todo(i + 2, 1, { comments }))];
     expect(awaiting(rows)).toEqual([]);
   });
 
-  it("skips a todo with a blank title, since a row left empty after Enter gives the receiver nothing to write a note about", () => {
+  it("skips a todo with a blank title, since a row left empty after Enter gives the receiver nothing to comment on", () => {
     const rows = [root, ...["", "   ", "\u3000"].map((title, i) => todo(i + 2, 1, { title }))];
     expect(awaiting(rows)).toEqual([]);
   });

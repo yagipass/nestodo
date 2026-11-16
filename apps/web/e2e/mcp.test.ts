@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Client, StreamableHTTPClientTransport, type VersionNegotiationOptions } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, inject, it } from "vite-plus/test";
-import { accessAssertion, json, Session, signedInUser, type Day, type Todo } from "./helpers";
+import { accessAssertion, json, Session, signedInUser, type Comment, type Day, type TimelineItem, type Todo } from "./helpers";
 
 const baseUrl = inject("baseUrl");
 const access = inject("access");
@@ -117,56 +117,71 @@ describe("MCP endpoint that Claude reaches through its own Access app", () => {
     expect(added.createdAt).toMatch(/Z$/);
   });
 
-  it("lets Claude write, rewrite and remove the note the member sees under a todo's title", async () => {
+  it("lets Claude start a todo's work log and add to it, marked as from MCP so the member can tell its comments from their own", async () => {
     const { web, claude } = await member();
 
     const { todo } = await value<{ todo: Todo }>(claude, "add_todo", {
       title: "book hotel",
-      note: "near the station\nhttps://example.com/hotel/4821",
+      comment: "near the station\nhttps://example.com/hotel/4821",
     });
-    expect((await web.todos())[0].note).toBe("near the station\nhttps://example.com/hotel/4821");
+    const { comment } = await value<{ comment: Comment }>(claude, "add_comment", { id: todo.id, body: "two rooms left for May 3" });
 
-    await value(claude, "update_todo", { id: todo.id, note: "booked, room 302" });
-    expect((await web.todos())[0]).toMatchObject({ title: "book hotel", note: "booked, room 302" });
-
-    await value(claude, "update_todo", { id: todo.id, note: "" });
-    expect((await web.todos())[0].note).toBe("");
+    expect(todo.commentCount).toBe(1);
+    expect(comment).toMatchObject({ body: "two rooms left for May 3", via: "mcp" });
+    expect((await web.timeline(todo.id)).filter((item) => item.type === "comment")).toMatchObject([
+      { body: "near the station\nhttps://example.com/hotel/4821", via: "mcp" },
+      { body: "two rooms left for May 3", via: "mcp" },
+    ]);
+    expect((await web.todos())[0].commentCount).toBe(2);
   });
 
-  it("shows Claude the note the member wrote, so it can use details that are not in the title", async () => {
+  it("shows Claude the work log the member kept, so it can use details that are not in the title", async () => {
     const { web, claude } = await member();
-    const dentist = await web.createTodo("dentist", { note: "only weekday mornings" });
+    const dentist = await web.createTodo("dentist", { comment: "only weekday mornings" });
+    await web.patch(dentist.id, { completed: true });
 
-    const { todos } = await value<{ todos: Todo[] }>(claude, "list_todos");
-    const { todo } = await value<{ todo: Todo }>(claude, "get_todo", { id: dentist.id });
+    const { items } = await value<{ items: TimelineItem[] }>(claude, "get_timeline", { id: dentist.id });
 
-    expect([todos[0].note, todo.note]).toEqual(["only weekday mornings", "only weekday mornings"]);
+    expect(items.map((item) => (item.type === "comment" ? `${item.via}: ${item.body}` : item.kind))).toEqual([
+      "created",
+      "app: only weekday mornings",
+      "completed",
+    ]);
+    expect((await value<{ todos: Todo[] }>(claude, "list_todos")).todos[0].commentCount).toBe(1);
   });
 
-  it("tells Claude what the note is for, so it puts details there instead of stuffing the title", async () => {
+  it("tells Claude that comments are a work log and that update_todo no longer edits text under the title", async () => {
     const { claude } = await member();
     const { tools } = await claude.listTools();
-    const noteOf = (name: string) => propertiesOf(tools, name)?.note?.description;
 
-    expect(noteOf("add_todo")).toContain("Note shown under the title");
-    expect(noteOf("update_todo")).toContain("an empty string removes it");
-    expect(tools.find((tool) => tool.name === "list_todos")?.description).toContain("note is what the member wrote under the title");
+    expect(propertiesOf(tools, "add_todo")?.comment?.description).toContain("work log");
+    expect(propertiesOf(tools, "update_todo")?.note).toBeUndefined();
+    expect(tools.find((tool) => tool.name === "update_todo")?.description).toContain("use add_comment");
+    expect(tools.find((tool) => tool.name === "list_todos")?.description).toContain("commentCount");
   });
 
-  it("tells Claude how long a title and a note may be, so it can shorten them instead of having them refused", async () => {
+  it("tells Claude how long a title and a comment may be, so it can shorten them instead of having them refused", async () => {
     const { claude } = await member();
     const { tools } = await claude.listTools();
-    const limitsOf = (name: string) => [propertiesOf(tools, name)?.title?.maxLength, propertiesOf(tools, name)?.note?.maxLength];
 
-    expect(limitsOf("add_todo")).toEqual([2000, 10000]);
-    expect(limitsOf("update_todo")).toEqual([2000, 10000]);
+    expect([propertiesOf(tools, "add_todo")?.title?.maxLength, propertiesOf(tools, "add_todo")?.comment?.maxLength]).toEqual([2000, 10000]);
+    expect(propertiesOf(tools, "update_todo")?.title?.maxLength).toBe(2000);
+    expect(propertiesOf(tools, "add_comment")?.body?.maxLength).toBe(10000);
   });
 
-  it("refuses a note longer than the web app allows, leaving the outline unchanged", async () => {
+  it("refuses a comment longer than the web app allows or one on another member's todo, leaving everything unchanged", async () => {
+    const victim = await signedInUser();
+    const secret = await victim.createTodo("victim's secret");
     const { web, claude } = await member();
-    const { isError } = await call(claude, "add_todo", { title: "book hotel", note: "x".repeat(10001) });
-    expect(isError).toBe(true);
-    expect(await web.todos()).toEqual([]);
+    const own = await web.createTodo("book hotel");
+
+    expect((await call(claude, "add_todo", { title: "book hotel", comment: "x".repeat(10001) })).isError).toBe(true);
+    expect((await call(claude, "add_comment", { id: own.id, body: "x".repeat(10001) })).isError).toBe(true);
+    expect(await refusal(claude, "add_comment", { id: secret.id, body: "planted" })).toMatchObject({ error: "not_found" });
+    expect(await refusal(claude, "get_timeline", { id: secret.id })).toMatchObject({ error: "not_found" });
+
+    expect(await web.todos()).toEqual([own]);
+    expect(await victim.todos()).toEqual([secret]);
   });
 
   it("tells Claude which open todos were completed along with the one it completed, so it can report them to the member", async () => {
@@ -243,7 +258,7 @@ describe("MCP endpoint that Claude reaches through its own Access app", () => {
     const { claude } = await member();
     const { tools } = await claude.listTools();
 
-    expect(tools.map((tool) => tool.name).sort()).toEqual(["add_todo", "get_stats", "get_todo", "list_todos", "update_todo"]);
+    expect(tools.map((tool) => tool.name).sort()).toEqual(["add_comment", "add_todo", "get_stats", "get_timeline", "get_todo", "list_todos", "update_todo"]);
   });
 
   it("tells Claude that completed todos leave the list after 8 days, so it does not take the list for everything the member finished", async () => {
@@ -261,8 +276,8 @@ describe("MCP endpoint that Claude reaches through its own Access app", () => {
     const hints = Object.fromEntries(tools.map((tool) => [tool.name, tool.annotations]));
 
     expect(hints.update_todo).toMatchObject({ readOnlyHint: false, destructiveHint: true });
-    expect(hints.add_todo).toMatchObject({ readOnlyHint: false, destructiveHint: false });
-    for (const name of ["list_todos", "get_todo", "get_stats"]) expect(hints[name]).toMatchObject({ readOnlyHint: true });
+    for (const name of ["add_todo", "add_comment"]) expect(hints[name]).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+    for (const name of ["list_todos", "get_todo", "get_timeline", "get_stats"]) expect(hints[name]).toMatchObject({ readOnlyHint: true });
   });
 
   it("refuses MCP requests that Cloudflare Access did not vouch for", async () => {

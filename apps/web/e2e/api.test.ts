@@ -47,39 +47,40 @@ describe("todo API for the web, CLI and Android apps", () => {
     expect((await json<{ todo: Todo }>(patched)).todo.title).toBe("call the dentist");
   });
 
-  it("keeps a note under a todo, line breaks and all, so details that do not fit in the title travel with it", async () => {
+  it("starts a todo's work log with the comment given while adding it, so a link shared from another app arrives in one request", async () => {
     const client = await signedInUser();
-    const created = await client.createTodo("book hotel", { note: "near the station\nhttps://example.com/hotel/4821" });
-    expect(created.note).toBe("near the station\nhttps://example.com/hotel/4821");
+    const created = await client.createTodo("book hotel", { comment: "near the station\nhttps://example.com/hotel/4821" });
 
-    const patched = await client.patch(created.id, { note: "near the station\nbudget 20000 yen" });
-    expect((await json<{ todo: Todo }>(patched)).todo.note).toBe("near the station\nbudget 20000 yen");
-    expect((await client.todos()).map((todo) => todo.note)).toEqual(["near the station\nbudget 20000 yen"]);
+    expect(created.commentCount).toBe(1);
+    expect((await client.timeline(created.id)).map((item) => (item.type === "comment" ? item.body : item.kind))).toEqual([
+      "created",
+      "near the station\nhttps://example.com/hotel/4821",
+    ]);
   });
 
-  it("gives a todo added without a note an empty one, so clients can show every note without a null check", async () => {
+  it("counts the comments on each todo in the list, so a row can show the size of its log without loading it", async () => {
     const client = await signedInUser();
-    expect((await client.createTodo("buy milk")).note).toBe("");
+    const hotel = await client.createTodo("book hotel");
+    const milk = await client.createTodo("buy milk");
+    expect(hotel.commentCount).toBe(0);
+
+    await client.comment(hotel.id, "asked two hotels");
+    const second = await client.comment(hotel.id, "the first one is full");
+    await client.deleteComment(second.id);
+
+    expect((await client.todos()).map(({ id, commentCount }) => ({ id, commentCount }))).toEqual([
+      { id: hotel.id, commentCount: 1 },
+      { id: milk.id, commentCount: 0 },
+    ]);
   });
 
-  it("leaves the note alone when only the title changes, so renaming from a client that knows nothing of notes keeps it", async () => {
+  it("refuses an empty first comment instead of starting the log with nothing, leaving the outline unchanged", async () => {
     const client = await signedInUser();
-    const created = await client.createTodo("book hotel", { note: "near the station" });
-
-    await client.patch(created.id, { title: "book the inn", completed: true });
-
-    expect((await client.todos())[0]).toMatchObject({ title: "book the inn", note: "near the station" });
-  });
-
-  it("rejects a note over 10000 characters with the validation message", async () => {
-    const client = await signedInUser();
-    const created = await client.createTodo("book hotel", { note: "near the station" });
-
-    const res = await client.patch(created.id, { note: "x".repeat(10001) });
+    const res = await client.request("/api/v1/todos", { method: "POST", body: { title: "book hotel", comment: " \n " } });
 
     expect(res.status).toBe(400);
-    expect(JSON.stringify(await res.json())).toContain("Note must be 10000 characters or fewer");
-    expect((await client.todos())[0].note).toBe("near the station");
+    expect(JSON.stringify(await res.json())).toContain("Comment must not be empty");
+    expect(await client.todos()).toEqual([]);
   });
 
   it("rejects a title over 2000 characters with the validation message", async () => {
@@ -106,19 +107,6 @@ describe("todo API for the web, CLI and Android apps", () => {
     expect(res.status).toBe(400);
     expect(JSON.stringify(await res.json())).toContain("Title must be 2000 characters or fewer");
     expect((await client.todos()).map((todo) => todo.title)).toEqual([longest]);
-  });
-
-  it("counts a note in UTF-16 units like the web and Android editors, so a note with emoji saved from the CLI or Claude is never too long to edit there", async () => {
-    const client = await signedInUser();
-    const created = await client.createTodo("book hotel");
-    const longest = "😀".repeat(5000);
-    expect((await client.patch(created.id, { note: longest })).status).toBe(200);
-
-    const res = await client.patch(created.id, { note: "😀".repeat(5001) });
-
-    expect(res.status).toBe(400);
-    expect(JSON.stringify(await res.json())).toContain("Note must be 10000 characters or fewer");
-    expect((await client.todos())[0].note).toBe(longest);
   });
 
   it("inserts a todo at the requested index so a new row can appear in the middle of a list", async () => {

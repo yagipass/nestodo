@@ -10,15 +10,19 @@ export type Todo = {
   parentId: number | null;
   position: number;
   title: string;
-  note: string;
   completedAt: string | null;
   collapsed: boolean;
   createdAt: string;
+  commentCount: number;
 };
+
+export type Comment = { id: number; body: string; via: "app" | "mcp"; at: string; editedAt: string | null };
+
+export type TimelineItem = { type: "event"; kind: "created" | "completed" | "reopened"; at: string } | ({ type: "comment" } & Comment);
 
 export type Day = { date: string; added: number; completed: number; open: number };
 
-export type ArchivedTodo = { path: string[]; title: string; note: string; createdAt: string; completedAt: string };
+export type ArchivedTodo = { path: string[]; title: string; createdAt: string; completedAt: string };
 
 export type WebhookHeader = { name: string; value: string; secret: boolean };
 
@@ -66,7 +70,7 @@ export function archivedTodos(email: string): ArchivedTodo[] {
   try {
     const rows = database
       .prepare(
-        "SELECT path, title, note, created_at AS createdAt, completed_at AS completedAt FROM archived_todos WHERE user_id = ? ORDER BY id",
+        "SELECT path, title, created_at AS createdAt, completed_at AS completedAt FROM archived_todos WHERE user_id = ? ORDER BY id",
       )
       .all(email) as (Omit<ArchivedTodo, "path"> & { path: string })[];
     return rows.map((row) => ({ ...row, path: JSON.parse(row.path) }));
@@ -97,8 +101,26 @@ export function archiveDirectly(id: number, email: string) {
   const database = localDatabase({ readOnly: false });
   try {
     database
-      .prepare("INSERT INTO archived_todos (id, user_id, path, title, note, created_at, completed_at) VALUES (?, ?, '[]', '', '', '', '')")
+      .prepare("INSERT INTO archived_todos (id, user_id, path, title, created_at, completed_at) VALUES (?, ?, '[]', '', '', '')")
       .run(id, email);
+  } finally {
+    database.close();
+  }
+}
+
+export function storedComments(email: string) {
+  const database = localDatabase({ readOnly: true });
+  try {
+    return database.prepare("SELECT todo_id AS todoId, body FROM todo_comments WHERE user_id = ? ORDER BY id").all(email) as { todoId: number; body: string }[];
+  } finally {
+    database.close();
+  }
+}
+
+export function trashedTodoIds(email: string) {
+  const database = localDatabase({ readOnly: true });
+  try {
+    return (database.prepare("SELECT id FROM trashed_todos WHERE user_id = ? ORDER BY id").all(email) as { id: number }[]).map((row) => row.id);
   } finally {
     database.close();
   }
@@ -193,7 +215,7 @@ export class Session {
     return (await json<{ todos: Todo[] }>(res)).todos;
   }
 
-  async createTodo(title: string, fields: { note?: string; parentId?: number | null; index?: number } = {}): Promise<Todo> {
+  async createTodo(title: string, fields: { comment?: string; parentId?: number | null; index?: number } = {}): Promise<Todo> {
     const res = await this.request("/api/v1/todos", { method: "POST", body: { title, ...fields } });
     expect(res.status).toBe(201);
     return (await json<{ todo: Todo }>(res)).todo;
@@ -201,6 +223,36 @@ export class Session {
 
   async patch(id: number, body: Record<string, unknown>) {
     return this.request(`/api/v1/todos/${id}`, { method: "PATCH", body });
+  }
+
+  async timeline(id: number): Promise<TimelineItem[]> {
+    const res = await this.request(`/api/v1/todos/${id}/timeline`);
+    expect(res.status).toBe(200);
+    return (await json<{ items: TimelineItem[] }>(res)).items;
+  }
+
+  async comment(id: number, body: string): Promise<Comment> {
+    const res = await this.request(`/api/v1/todos/${id}/comments`, { method: "POST", body: { body } });
+    expect(res.status).toBe(201);
+    return (await json<{ comment: Comment }>(res)).comment;
+  }
+
+  editComment(id: number, body: unknown) {
+    return this.request(`/api/v1/comments/${id}`, { method: "PATCH", body: { body } });
+  }
+
+  deleteComment(id: number) {
+    return this.request(`/api/v1/comments/${id}`, { method: "DELETE" });
+  }
+
+  restore(id: number, body: { parentId?: number | null; index?: number } = {}) {
+    return this.request(`/api/v1/todos/${id}/restore`, { method: "POST", body });
+  }
+
+  async search(query: string) {
+    const res = await this.request(`/api/v1/search?q=${encodeURIComponent(query)}`);
+    expect(res.status).toBe(200);
+    return (await json<{ todos: { id: number; comment: string }[] }>(res)).todos;
   }
 
   async stats(timeZone: string) {

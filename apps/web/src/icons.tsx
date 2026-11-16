@@ -36,18 +36,23 @@ const SHAPES = {
   ),
   signOut: <path d="M10 4H7.5A3.5 3.5 0 0 0 4 7.5v9A3.5 3.5 0 0 0 7.5 20H10M15 8l4 4-4 4M19 12h-9" />,
   expand: <path d="M9.5 6.5 15 12l-5.5 5.5" />,
-  note: (
-    <>
-      <rect x="4.5" y="3.5" width="15" height="17" rx="4" />
-      <circle cx="9" cy="9" r=".75" fill="currentColor" />
-      <path d="M12.5 9h3M9 13.5h6.5M9 17h3.5" />
-    </>
-  ),
   done: <rect x="4" y="4" width="16" height="16" rx="5" />,
   link: <path d="M8 16 16 8M10 8h6v6" />,
   add: <path d="M12 5.5v13M5.5 12h13" />,
   close: <path d="M7 7l10 10M17 7 7 17" />,
   tick: <path d="M5 12l5 5 9-10" />,
+  comment: <path d="M8 17.5h8.5A3.5 3.5 0 0 0 20 14V8a3.5 3.5 0 0 0-3.5-3.5h-9A3.5 3.5 0 0 0 4 8v12.5z" />,
+  edit: <path d="M14.5 5.5l4 4L9 19H5v-4z" />,
+  trash: <path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12" />,
+  reopen: <path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4v4h4" />,
+  bot: (
+    <>
+      <rect x="5" y="8.5" width="14" height="10.5" rx="3" />
+      <path d="M12 8.5V5" />
+      <circle cx="9.5" cy="13.5" r=".9" fill="currentColor" />
+      <circle cx="14.5" cy="13.5" r=".9" fill="currentColor" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof SHAPES;

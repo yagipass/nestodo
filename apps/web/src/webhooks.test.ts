@@ -48,7 +48,7 @@ describe("webhookUrlProblem", () => {
 });
 
 describe("webhookRequest", () => {
-  const todo = { id: 12, title: "read the changelog", note: "https://example.com", position: 3, createdAt: "2026-11-05 00:00:00" };
+  const todo = { id: 12, title: "read the changelog", comments: ["https://example.com"], position: 3, createdAt: "2026-11-05 00:00:00" };
   const hook = { url: "https://example.com/hook", urlSecret: true, token: "", headers: [] };
 
   it("gives no server special treatment, so every receiver gets only the headers the member listed", () => {
@@ -74,12 +74,12 @@ describe("webhookRequest", () => {
     expect(webhookRequest({ ...hook, headers: [secret("X-Api-Key", "k")] }, "p", [todo]).headers.get("Content-Type")).toBe("application/json");
   });
 
-  it("sends the id, title and note a receiver acts on, and not the app's internal fields", () => {
+  it("sends the id, title and comments a receiver acts on, and not the app's internal fields", () => {
     const { body } = webhookRequest(hook, "Side projects", [todo]);
     expect(JSON.parse(body)).toEqual({
       event: "todos.awaiting_note",
       project: "Side projects",
-      todos: [{ id: 12, title: "read the changelog", note: "https://example.com" }],
+      todos: [{ id: 12, title: "read the changelog", comments: ["https://example.com"] }],
     });
   });
 

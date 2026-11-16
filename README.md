@@ -7,6 +7,7 @@ A todo list for my family. Each member signs in through Cloudflare Access and se
 I publish the code as it is. There is no public instance to sign up for, and no guide to running your own copy.
 
 - Nest todos into an outline and collapse the parts you are not working on.
+- Keep a log of the work on each todo as comments, next to when it was added, completed and reopened.
 - See what you added and completed each day on the stats page.
 - Completed todos leave the list 8 days after they were completed and are kept in an archive.
 
@@ -19,7 +20,7 @@ I publish the code as it is. There is no public instance to sign up for, and no 
 
 ## MCP
 
-Add `https://<your MCP host>/mcp` to an AI assistant as a remote MCP server, such as a custom connector in Claude, to let it list, add, edit and complete your todos and read your stats.
+Add `https://<your MCP host>/mcp` to an AI assistant as a remote MCP server, such as a custom connector in Claude, to let it list, add, edit and complete your todos, read and add comments, and read your stats.
 
 ## Development
 
