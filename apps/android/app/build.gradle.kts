@@ -42,6 +42,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.bouncycastle)
+    implementation(libs.commonmark)
+    implementation(libs.commonmark.ext.gfm.strikethrough)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
