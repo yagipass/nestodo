@@ -74,7 +74,7 @@ export function encodePastedUrl(text: string): string | null {
   return url;
 }
 
-export function tokens(title: string, query: string): Part[] {
+export function tokens(title: string, query: string, links: readonly Link[] = findLinks(title)): Part[] {
   const q = query.trim().toLowerCase();
   const parts: Part[] = [];
   const push = (text: string, from: number, className?: string) => parts.push({ text, from, to: from + text.length, className });
@@ -93,7 +93,7 @@ export function tokens(title: string, query: string): Part[] {
     }
   };
   let at = 0;
-  for (const link of findLinks(title)) {
+  for (const link of links) {
     plain(title.slice(at, link.start), at);
     parts.push({
       text: linkLabel(link.url),

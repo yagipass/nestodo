@@ -1,21 +1,12 @@
 import { Icon } from "./icons";
-import { tokens } from "./title";
+import { tokens, type Link } from "./title";
 
-export function Tokens({ text, query, focusable = false }: { text: string; query: string; focusable?: boolean }) {
+export function Tokens({ text, query, links }: { text: string; query: string; links?: readonly Link[] }) {
   return (
     <>
-      {tokens(text, query).map((part, index) =>
+      {tokens(text, query, links).map((part, index) =>
         part.href ? (
-          <a
-            key={index}
-            className={part.className}
-            href={part.href}
-            target="_blank"
-            rel="noreferrer"
-            tabIndex={focusable ? undefined : -1}
-            data-from={part.from}
-            data-to={part.to}
-          >
+          <a key={index} className={part.className} href={part.href} target="_blank" rel="noreferrer" tabIndex={-1} data-from={part.from} data-to={part.to}>
             {part.text}
             <Icon name="link" size={12} strokeWidth={2.6} />
           </a>

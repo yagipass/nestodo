@@ -120,6 +120,13 @@ describe("tokens", () => {
     expect(tokens("see https://ja.wikipedia.org/wiki/x", "wiki").map((part) => part.className)).toEqual([undefined, "link match"]);
   });
 
+  it("looks for no links when the caller says there are none, so a comment's text is only highlighted and its links come from its Markdown", () => {
+    expect(tokens("curl https://example.com/api", "curl", []).map(({ text, className, href }) => ({ text, className, href }))).toEqual([
+      { text: "curl", className: "match", href: undefined },
+      { text: " https://example.com/api", className: undefined, href: undefined },
+    ]);
+  });
+
   it("covers the title in order without gaps so a click on any part maps back to a caret position", () => {
     const title = "Buy milk at https://shop.example/milk then pay";
     const parts = tokens(title, "a");

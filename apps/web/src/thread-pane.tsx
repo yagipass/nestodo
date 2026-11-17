@@ -7,6 +7,16 @@ import { MAX_COMMENT_LENGTH } from "./todos";
 
 const FETCH_DELAY = 150;
 
+const NO_LINKS = [] as const;
+
+type MarkdownView = typeof import("./markdown-view").Markdown;
+
+let markdownView: MarkdownView | null = null;
+
+function loadMarkdownView() {
+  return import("./markdown-view").then(({ Markdown }) => (markdownView = Markdown));
+}
+
 const EVENT_LABELS = { created: "Created", completed: "Completed", reopened: "Reopened" } as const;
 
 const EVENT_ICONS = { created: "add", completed: "tick", reopened: "reopen" } as const;
@@ -44,6 +54,17 @@ async function timelineOf(id: number) {
   const res = await fetch(`/api/v1/todos/${id}/timeline`, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`timeline failed with ${res.status}`);
   return ((await res.json()) as { items: TimelineItem[] }).items;
+}
+
+function Body({ text, query, view: View }: { text: string; query: string; view: MarkdownView | null }) {
+  if (View) return <View text={text} query={query} />;
+  return (
+    <div className="thread-text">
+      <p>
+        <Tokens text={text} query={query} links={NO_LINKS} />
+      </p>
+    </div>
+  );
 }
 
 function DeleteDialog({ comment, onConfirm, onClose }: { comment: Comment; onConfirm: () => void; onClose: () => void }) {
@@ -101,6 +122,21 @@ export function ThreadPane({
   const shownDone = useRef(done);
   const counter = useRef(0);
   const mutations = useRef(0);
+  const [view, setView] = useState(() => markdownView);
+
+  useEffect(() => {
+    if (view) return;
+    let gone = false;
+    loadMarkdownView().then(
+      (loaded) => {
+        if (!gone) setView(() => loaded);
+      },
+      () => {},
+    );
+    return () => {
+      gone = true;
+    };
+  }, [view]);
 
   useEffect(() => {
     if (serverId === null) {
@@ -295,9 +331,7 @@ export function ThreadPane({
                       </span>
                       <div className="thread-comment-body">
                         <p className="thread-comment-meta">Sending…</p>
-                        <p className="thread-text">
-                          <Tokens text={entry.body} query={query} focusable />
-                        </p>
+                        <Body text={entry.body} query={query} view={view} />
                       </div>
                     </li>
                   );
@@ -350,9 +384,7 @@ export function ThreadPane({
                           </div>
                         </div>
                       ) : (
-                        <p className="thread-text">
-                          <Tokens text={entry.body} query={query} focusable />
-                        </p>
+                        <Body text={entry.body} query={query} view={view} />
                       )}
                     </div>
                   </li>
