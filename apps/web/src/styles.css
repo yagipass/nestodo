@@ -784,7 +784,6 @@ a {
   background: var(--guide);
 }
 
-.thread-text .link,
 .comment-match .link {
   padding-block: 0;
   font-size: inherit;
@@ -1099,11 +1098,92 @@ body:has(.thread) {
 }
 
 .thread-text {
-  margin: 0;
   font-size: 0.90625rem;
   line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.thread-text :is(p, ul, ol, blockquote, pre, h4, h5, h6, hr) {
+  margin: 0;
+}
+
+.thread-text > :not(:first-child),
+.thread-text :is(li, blockquote) > :not(:first-child) {
+  margin-top: 8px;
+}
+
+.thread-text li > :is(ul, ol):not(:first-child) {
+  margin-top: 0;
+}
+
+.thread-text :is(h4, h5, h6) {
+  font-size: inherit;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.thread-text h4 {
+  font-size: 1.0625rem;
+}
+
+.thread-text h5 {
+  font-size: 1rem;
+}
+
+.thread-text ul {
+  padding-left: 20px;
+  list-style: disc;
+}
+
+.thread-text ul ul {
+  list-style: circle;
+}
+
+.thread-text ol {
+  padding-left: 24px;
+  list-style: decimal;
+}
+
+.thread-text li::before {
+  content: none;
+}
+
+.thread-text li::marker {
+  color: var(--muted);
+}
+
+.thread-text blockquote {
+  padding-left: 12px;
+  border-left: 3px solid var(--guide);
+  color: var(--muted);
+}
+
+.thread-text hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.thread-text code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.875em;
+}
+
+.thread-text pre {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  line-height: 1.55;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.thread-text pre code {
+  padding: 0;
+  background: none;
 }
 
 .thread-comment.pending {
