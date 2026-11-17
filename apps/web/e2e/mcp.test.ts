@@ -162,6 +162,16 @@ describe("MCP endpoint that Claude reaches through its own Access app", () => {
     expect(tools.find((tool) => tool.name === "list_todos")?.description).toContain("commentCount");
   });
 
+  it("tells Claude that a comment is shown as Markdown and what is not drawn, so it does not write a table the member would read as rows of pipes", async () => {
+    const { claude } = await member();
+    const { tools } = await claude.listTools();
+
+    for (const description of [propertiesOf(tools, "add_comment")?.body?.description, propertiesOf(tools, "add_todo")?.comment?.description]) {
+      expect(description).toContain("shown as Markdown with every line break kept");
+      expect(description).toContain("Tables, images and HTML are shown as written");
+    }
+  });
+
   it("tells Claude how long a title and a comment may be, so it can shorten them instead of having them refused", async () => {
     const { claude } = await member();
     const { tools } = await claude.listTools();

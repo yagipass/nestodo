@@ -14,6 +14,8 @@ const notFound = { error: "not_found", message: "Todo not found" };
 
 const STATS_APP_URI = "ui://nestodo/stats.html";
 
+const COMMENT_FORMAT = "shown as Markdown with every line break kept. Tables, images and HTML are shown as written, so use a list in place of a table";
+
 const id = z.number().int().positive().describe("The todo's id, as list_todos shows it");
 
 function withUtcTimes<T extends { completedAt: string | null; createdAt: string }>(todo: T): T {
@@ -73,7 +75,7 @@ export function nestodoMcpServer(userId: string) {
       inputSchema: createTodoBody.extend({
         title: createTodoBody.shape.title.describe(`Title, up to ${MAX_TITLE_LENGTH} characters`),
         comment: createTodoBody.shape.comment.describe(
-          `Optional first comment in the todo's work log, for details that do not fit in the title, such as links, up to ${MAX_COMMENT_LENGTH} characters`,
+          `Optional first comment in the todo's work log, for details that do not fit in the title, such as links, up to ${MAX_COMMENT_LENGTH} characters, ${COMMENT_FORMAT}`,
         ),
         parentId: createTodoBody.shape.parentId.describe(
           `Id of the todo to nest it under, so that it is at most ${MAX_DEPTH} levels deep, or omit it for the top level`,
@@ -139,7 +141,7 @@ export function nestodoMcpServer(userId: string) {
         "Add a comment to the end of a todo's work log, such as what was done, what was found or a summary of a link. The member sees it marked as added through MCP.",
       inputSchema: z.object({
         id,
-        body: commentBody.describe(`The comment, up to ${MAX_COMMENT_LENGTH} characters, with line breaks kept`),
+        body: commentBody.describe(`The comment, up to ${MAX_COMMENT_LENGTH} characters, ${COMMENT_FORMAT}`),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
