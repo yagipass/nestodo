@@ -255,6 +255,19 @@ fn plain(title: &str, from: usize, to: usize, q: &str, parts: &mut Vec<Part>) {
 }
 
 #[must_use]
+pub fn highlighted(text: &str, query: &str) -> Vec<Part> {
+    let mut parts = Vec::new();
+    plain(
+        text,
+        0,
+        text.len(),
+        &query.trim().to_lowercase(),
+        &mut parts,
+    );
+    parts
+}
+
+#[must_use]
 pub fn tokens(title: &str, query: &str) -> Vec<Part> {
     let q = query.trim().to_lowercase();
     let mut parts = Vec::new();
@@ -577,6 +590,22 @@ mod tests {
                         Some("link"),
                         Some("https://example.com/page#section")
                     ),
+                ]
+            );
+        }
+
+        #[test]
+        fn highlights_the_filtered_words_without_looking_for_links_so_a_comments_links_come_only_from_its_markdown()
+         {
+            let parts: Vec<_> = highlighted("curl https://example.com/api", "CURL ")
+                .iter()
+                .map(|part| (part.text.clone(), class(part)))
+                .collect();
+            assert_eq!(
+                parts,
+                [
+                    ("curl".to_owned(), Some("match")),
+                    (" https://example.com/api".to_owned(), None),
                 ]
             );
         }

@@ -24,6 +24,7 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", default-fe
 iana-time-zone = "0.1"
 image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
 keyring = "4.2.0"
+pulldown-cmark = { version = "0.13.6", default-features = false }
 ring = "0.17.14"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
