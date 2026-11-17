@@ -2,7 +2,6 @@ package io.github.yagipass.nestodo.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,12 +66,10 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -464,7 +461,7 @@ private fun CommentLine(
             if (editing) {
                 CommentEditor(comment, viewModel, onEditing)
             } else {
-                Body(comment.body, onOpenLink)
+                MarkdownText(comment.body, onOpenLink)
             }
         }
     }
@@ -487,7 +484,7 @@ private fun PendingLine(
             Row(Modifier.heightIn(min = 34.dp), verticalAlignment = Alignment.CenterVertically) {
                 Meta("Sending…")
             }
-            Body(pending.body, onOpenLink)
+            MarkdownText(pending.body, onOpenLink)
         }
     }
 }
@@ -498,36 +495,6 @@ private fun Meta(text: String) {
         text,
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
-
-@Composable
-private fun Body(text: String, onOpenLink: (String) -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    val shown = remember(text, colors.primary) { shownTitle(text, colors.primary) }
-    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    val chip = colors.secondaryContainer
-    Text(
-        shown.text,
-        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
-        color = colors.onSurface,
-        inlineContent = LinkIcon,
-        onTextLayout = { layout = it },
-        modifier =
-            Modifier.drawBehind {
-                    val laid = layout ?: return@drawBehind
-                    shown.links.forEach { drawPath(laid.getPathForRange(it.start, it.end), chip) }
-                }
-                .pointerInput(shown) {
-                    detectTapGestures { tap ->
-                        val at = layout?.getOffsetForPosition(tap) ?: return@detectTapGestures
-                        shown.links
-                            .firstOrNull { at in it.start until it.end }
-                            ?.let {
-                                onOpenLink(it.url)
-                            }
-                    }
-                },
     )
 }
 
