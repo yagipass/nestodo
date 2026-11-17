@@ -86,6 +86,12 @@ describe("markdown", () => {
     expect(markdown("[later]() and ![chart]()")).toEqual([p(text("later and chart"))]);
   });
 
+  it("shows the address of a link with no label, so no link is too small to see or click", () => {
+    expect(markdown("![](https://example.com/plain.png) and [](https://example.net/b)")).toEqual([
+      p(link("https://example.com/plain.png", text("https://example.com/plain.png")), text(" and "), link("https://example.net/b", text("https://example.net/b"))),
+    ]);
+  });
+
   it("shows HTML, tables and task boxes as written, since they are not drawn", () => {
     expect(markdown("<b>bold</b>\n\n<script>alert(1)</script>\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- [ ] later")).toEqual([
       p(text("<b>bold</b>")),

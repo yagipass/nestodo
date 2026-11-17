@@ -25,6 +25,10 @@ const parser = new MarkdownIt("commonmark", { html: false }).enable("strikethrou
 
 parser.validateLink = opens;
 
+function linkTo(href: string, label: Inline[]): Inline {
+  return { type: "link", href, children: label.length > 0 ? label : [{ type: "text", text: href }] };
+}
+
 function withBareLinks(nodes: readonly Inline[]): Inline[] {
   return nodes.flatMap((node): Inline[] => {
     if (node.type !== "text") return [node];
@@ -32,7 +36,7 @@ function withBareLinks(nodes: readonly Inline[]): Inline[] {
     let at = 0;
     for (const { start, end, url } of findLinks(node.text)) {
       if (start > at) parts.push({ type: "text", text: node.text.slice(at, start) });
-      parts.push({ type: "link", href: url, children: [{ type: "text", text: url }] });
+      parts.push(linkTo(url, []));
       at = end;
     }
     if (at < node.text.length) parts.push({ type: "text", text: node.text.slice(at) });
@@ -76,7 +80,7 @@ function inlines(tokens: readonly Token[]): Inline[] {
         case "link_open": {
           const href = String(token.attrGet("href"));
           const label = until("link_close", true);
-          if (opens(href)) add({ type: "link", href, children: label });
+          if (opens(href)) add(linkTo(href, label));
           else label.forEach(add);
           break;
         }
@@ -84,7 +88,7 @@ function inlines(tokens: readonly Token[]): Inline[] {
           const src = String(token.attrGet("src"));
           const alt = (token.children ?? []).map((child) => child.content).join("");
           if (linked || !opens(src)) text(alt);
-          else add({ type: "link", href: src, children: alt === "" ? [] : [{ type: "text", text: alt }] });
+          else add(linkTo(src, alt === "" ? [] : [{ type: "text", text: alt }]));
           break;
         }
         default:
