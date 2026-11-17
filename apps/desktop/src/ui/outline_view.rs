@@ -4,8 +4,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable, Font, FontWeight,
-    Hsla, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseUpEvent, NoAction, Pixels,
+    AnyElement, App, Bounds, Context, Entity, FocusHandle, Focusable, Font, FontWeight, Hsla,
+    KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseUpEvent, NoAction, Pixels,
     PromptLevel, Radians, ScrollHandle, SharedString, StrikethroughStyle, StyledText, Subscription,
     Task, TextLayout, TextRun, Transformation, TransformationMatrix, Window, actions, canvas, div,
     fill, point, prelude::*, px, size,

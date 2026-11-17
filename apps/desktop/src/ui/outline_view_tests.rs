@@ -1797,3 +1797,128 @@ fn ctrl_space_opens_a_collapsed_row_to_show_what_is_under_it(cx: &mut TestAppCon
     assert_eq!(server.tree(), "Archive\n  Old item");
     assert_eq!(titles(&view, cx), ["Archive", "  Old item"]);
 }
+
+#[gpui::test]
+fn clicking_a_links_label_in_a_comment_opens_its_address_and_clicking_the_text_beside_it_opens_nothing(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Dentist").comment("see [the form](https://example.com/form) first"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Dentist");
+    let text = cx
+        .debug_bounds("comment-text-1-1")
+        .expect("the comment was drawn");
+    let glyph = 14.5 * 0.6;
+    let at = |glyphs: f32| {
+        gpui::point(
+            text.origin.x + px(glyph * glyphs),
+            text.origin.y + text.size.height / 2.,
+        )
+    };
+
+    cx.simulate_click(at(1.5), gpui::Modifiers::none());
+    assert_eq!(cx.opened_url(), None);
+
+    cx.simulate_click(at(6.5), gpui::Modifiers::none());
+    assert_eq!(cx.opened_url().as_deref(), Some("https://example.com/form"));
+}
+
+#[gpui::test]
+fn every_kind_of_markdown_in_a_comment_is_drawn_inside_the_pane_so_nothing_a_member_writes_is_cut_off_or_missing(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![seed("Dentist").comment(
+        "# Plan\n\n**call** the *clinic*, ~~email~~ `now`\n\n1. book\n   - Saturday\n2. pay\n\n> ask about parking\n\n---\n\n```\nopen 9-17\n```",
+    )]));
+    let (view, cx) = open(cx, &server, true);
+
+    open_comments_on(&view, cx, "Dentist");
+
+    let pane = cx.debug_bounds("thread").expect("the pane was drawn");
+    for part in 1..=7 {
+        let selector: &'static str = Box::leak(format!("comment-text-1-{part}").into_boxed_str());
+        let drawn = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} was not drawn"));
+        assert!(drawn.size.height > px(0.), "{selector} has no height");
+        assert!(
+            drawn.left() >= pane.left() && drawn.right() <= pane.right(),
+            "{selector} leaves the pane"
+        );
+    }
+    assert!(cx.debug_bounds("comment-text-1-8").is_none());
+}
+
+fn code_comment() -> &'static str {
+    Box::leak(format!("```\n{}\nend\n```", "x".repeat(300)).into_boxed_str())
+}
+
+#[gpui::test]
+fn a_long_line_of_code_in_a_comment_stays_on_one_line_inside_the_pane_so_pasted_output_keeps_its_shape(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Dentist").comment(code_comment()),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+
+    open_comments_on(&view, cx, "Dentist");
+
+    let pane = cx.debug_bounds("thread").expect("the pane was drawn");
+    let block = cx
+        .debug_bounds("comment-text-1-1")
+        .expect("the code block was drawn");
+    let lines = cx
+        .debug_bounds("comment-text-1-1-lines")
+        .expect("the code was drawn");
+    assert_eq!(lines.size.height, px(40.));
+    assert!(lines.size.width > block.size.width);
+    assert!(block.right() <= pane.right());
+}
+
+#[gpui::test]
+fn scrolling_sideways_over_a_code_block_moves_only_its_code_and_scrolling_up_still_moves_the_log(
+    cx: &mut TestAppContext,
+) {
+    let mut dentist = seed("Dentist");
+    for _ in 0..40 {
+        dentist = dentist.comment("called again");
+    }
+    let server = Arc::new(FakeServer::with(vec![dentist.comment(code_comment())]));
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Dentist");
+    let placed = |cx: &mut VisualTestContext| {
+        let block = cx
+            .debug_bounds("comment-text-41-1")
+            .expect("the code block was drawn");
+        let lines = cx
+            .debug_bounds("comment-text-41-1-lines")
+            .expect("the code was drawn");
+        (block.origin, lines.origin.x)
+    };
+    let (block, code) = placed(cx);
+    let over = gpui::point(block.x + px(40.), block.y + px(20.));
+    let scroll = |cx: &mut VisualTestContext, x: f32, y: f32| {
+        cx.simulate_event(gpui::ScrollEvent {
+            position: over,
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(x), px(y))),
+            ..gpui::ScrollEvent::default()
+        });
+        settle(cx);
+    };
+
+    scroll(cx, -120., 0.);
+    assert_eq!(placed(cx), (block, code - px(120.)));
+
+    scroll(cx, 120., 0.);
+    assert_eq!(placed(cx), (block, code));
+
+    scroll(cx, 0., 120.);
+    let (moved, still) = placed(cx);
+    assert_eq!(
+        (moved.x, moved.y, still),
+        (block.x, block.y + px(120.), code)
+    );
+}

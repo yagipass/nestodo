@@ -8,6 +8,7 @@ use nestodo_desktop::thread::{Comment, Entry, EventKind, TimelineItem, Via, by_d
 
 use super::*;
 use crate::ui::avatar::avatar_circle;
+use crate::ui::markdown_view::markdown_view;
 use crate::ui::widgets::{pill, text_button};
 
 const FETCH_DELAY: Duration = Duration::from_millis(150);
@@ -565,41 +566,8 @@ impl OutlineView {
         self.cancel_edit(window, cx);
     }
 
-    fn comment_text(&self, id: SharedString, text: &str, font: &Font, cx: &App) -> AnyElement {
-        let colors = theme(cx);
-        let mirror = Rc::new(mirror_for(
-            text,
-            &self.query,
-            &colors,
-            colors.text,
-            false,
-            false,
-            font,
-        ));
-        let hits = TextHits::default();
-        let shown = ClampedText::new(
-            mirror.text.clone(),
-            mirror.runs.clone(),
-            None,
-            colors.text,
-            hits.clone(),
-        )
-        .with_icons(mirror.icons.clone(), Icon::Link.path(), colors.accent);
-        div()
-            .id(id)
-            .text_size(px(14.5))
-            .line_height(px(24.))
-            .text_color(colors.text)
-            .on_click(move |event: &ClickEvent, _, cx| {
-                let clicked = hits
-                    .index_for(event.position())
-                    .and_then(|index| mirror.link_at(index));
-                if let Some(target) = clicked.and_then(|href| link_target(href)) {
-                    cx.open_url(&target);
-                }
-            })
-            .child(shown)
-            .into_any_element()
+    fn comment_text(&self, id: &str, text: &str, font: &Font, cx: &App) -> AnyElement {
+        markdown_view(id, text, &self.query, font, &theme(cx))
     }
 
     fn render_event(kind: EventKind, time: &str, rail: Option<Div>, colors: &Theme) -> AnyElement {
@@ -785,7 +753,7 @@ impl OutlineView {
                 )
                 .into_any_element()
         } else {
-            self.comment_text(format!("comment-text-{id}").into(), &comment.body, font, cx)
+            self.comment_text(&format!("comment-text-{id}"), &comment.body, font, cx)
         };
         div()
             .id(SharedString::from(format!("comment-{id}")))
@@ -847,12 +815,7 @@ impl OutlineView {
                             .text_color(colors.muted)
                             .child("Sending\u{2026}"),
                     )
-                    .child(self.comment_text(
-                        format!("pending-text-{ticket}").into(),
-                        body,
-                        font,
-                        cx,
-                    )),
+                    .child(self.comment_text(&format!("pending-text-{ticket}"), body, font, cx)),
             )
             .into_any_element()
     }
@@ -1099,6 +1062,7 @@ impl OutlineView {
                         .flex_1()
                         .min_h_0()
                         .overflow_y_scroll()
+                        .restrict_scroll_to_axis()
                         .track_scroll(&scroll)
                         .px(px(16.))
                         .pb(px(12.))
