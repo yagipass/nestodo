@@ -1,5 +1,19 @@
 # Changelog
 
+## [v0.13.0](https://github.com/yagipass/nestodo/compare/v0.12.1...v0.13.0) - 2026-11-17
+
+### MCP
+- feat(mcp): tell Claude that comments are shown as Markdown by @yagipass in https://github.com/yagipass/nestodo/pull/151
+### Web
+- feat(web): show comments as Markdown, with headings, lists and code by @yagipass in https://github.com/yagipass/nestodo/pull/150
+- fix(web): show the address of a link that has no label by @yagipass in https://github.com/yagipass/nestodo/pull/155
+### Android
+- feat(android): show comments as Markdown, with headings, lists and code by @yagipass in https://github.com/yagipass/nestodo/pull/153
+### Desktop
+- feat(desktop): show comments as Markdown, with headings, lists and code by @yagipass in https://github.com/yagipass/nestodo/pull/154
+### Maintenance
+- ci: label MCP pull requests and group them in the release notes by @yagipass in https://github.com/yagipass/nestodo/pull/147
+
 ## [v0.12.1](https://github.com/yagipass/nestodo/compare/v0.12.0...v0.12.1) - 2026-11-16
 
 ### Web
