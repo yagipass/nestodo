@@ -55,6 +55,9 @@ spec:
   - name: maintenance
     description: Build, CI, and refactoring work that users do not see
     color: c5def5
+  - name: mcp
+    description: Pull requests that change the shipped MCP server code
+    color: d93f0b
   - name: question
     description: Further information is requested
     color: d876e3

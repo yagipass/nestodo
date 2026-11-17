@@ -6,6 +6,8 @@ documentation:
   - head-branch: ['^docs/']
 maintenance:
   - head-branch: ['^(build|chore|ci|refactor|style|test)/']
+mcp:
+  - head-branch: ['^[a-z]+/mcp-']
 web:
   - changed-files:
       - all-globs-to-any-file: ['apps/web/**', '!apps/web/e2e/**', '!apps/web/**/*.md']

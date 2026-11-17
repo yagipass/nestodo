@@ -86,6 +86,7 @@ To use `vp dev` instead of production, start it with `pnpm exec vp dev --host 12
 
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/), checked by the `commit-msg` hook. Scope them to the app, such as `feat(web)`, `fix(android)` or `build(nix)`, and say what changes for the user: `feat(web): expand or collapse a todo by clicking its bullet`.
 - Name branches `<type>/<slug>` after the Conventional Commits type, for example `feat/collapse-todos`. `.github/labeler.yml` labels the pull request by it, and the label picks its section of the release notes.
+- When a change is for the MCP server, scope it `feat(mcp)` and start the slug with `mcp-`, for example `feat/mcp-show-stats`. The pull request then goes under MCP in the release notes instead of Web.
 - tagpr writes `CHANGELOG.md` and the version numbers of the CLI, the desktop app, the Android app and the MCP server. Do not edit them by hand.
 
 ## Making a change

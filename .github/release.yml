@@ -3,6 +3,13 @@ changelog:
     labels:
       - tagpr
   categories:
+    - title: MCP
+      labels:
+        - mcp
+      exclude:
+        labels:
+          - documentation
+          - maintenance
     - title: Web
       labels:
         - web
