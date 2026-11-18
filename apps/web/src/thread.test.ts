@@ -30,18 +30,18 @@ describe("byDay", () => {
 });
 
 describe("isPostKey", () => {
-  const enter: Keys = { key: "Enter", shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, isComposing: false };
+  const enter: Keys = { key: "Enter", shiftKey: false, altKey: false, isComposing: false };
 
-  it("posts on ⇧Enter, and on Ctrl/⌘ Enter for those used to it from other apps", () => {
-    expect([{ shiftKey: true }, { ctrlKey: true }, { metaKey: true }].map((held) => isPostKey({ ...enter, ...held }))).toEqual([true, true, true]);
+  it("posts on Enter, so a comment is sent the way a chat message is", () => {
+    expect(isPostKey(enter)).toBe(true);
   });
 
-  it("leaves Enter alone, so a comment can have more than one line", () => {
-    expect(isPostKey(enter)).toBe(false);
+  it("leaves ⇧Enter alone, so a comment can have more than one line", () => {
+    expect(isPostKey({ ...enter, shiftKey: true })).toBe(false);
   });
 
   it("never posts while an input method is composing, since its Enter only confirms the text being typed", () => {
-    expect(isPostKey({ ...enter, shiftKey: true, isComposing: true })).toBe(false);
+    expect(isPostKey({ ...enter, isComposing: true })).toBe(false);
   });
 });
 

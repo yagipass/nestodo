@@ -46,8 +46,8 @@ function composingKey(event: KeyboardEvent) {
 }
 
 function isSubmit(event: KeyboardEvent) {
-  const { key, shiftKey, ctrlKey, metaKey, altKey } = event;
-  return isPostKey({ key, shiftKey, ctrlKey, metaKey, altKey, isComposing: composingKey(event) });
+  const { key, shiftKey, altKey } = event;
+  return isPostKey({ key, shiftKey, altKey, isComposing: composingKey(event) });
 }
 
 async function timelineOf(id: number) {
@@ -419,7 +419,6 @@ export function ThreadPane({
         />
         <div className="thread-compose-foot">
           <span className="thread-hint">
-            <kbd>⇧</kbd>
             <kbd>Enter</kbd> to post, <kbd>Esc</kbd> back to the item
           </span>
           <button type="submit" className="pill primary" disabled={!editable || draft.trim() === ""}>
