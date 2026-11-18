@@ -186,7 +186,7 @@ import kotlin.math.floor
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.filterNotNull
 
-private val RowHeight = 48.dp
+internal val RowHeight = 48.dp
 private val FabMargin = 16.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -987,7 +987,7 @@ private fun OutlineItem(
     }
 }
 
-private fun DrawScope.drawGuide(guide: Guide, depth: Int, color: Color) {
+internal fun DrawScope.drawGuide(guide: Guide, depth: Int, color: Color) {
     val stroke = 2.dp.toPx()
     val middle = RowHeight.toPx() / 2
     guide.through.forEachIndexed { level, through ->
@@ -1012,7 +1012,7 @@ private fun DrawScope.drawGuide(guide: Guide, depth: Int, color: Color) {
 }
 
 @Composable
-private fun Bullet(row: OutlineRow, enabled: Boolean, onToggle: () -> Unit) {
+internal fun Bullet(row: OutlineRow, enabled: Boolean, onToggle: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val accent = colors.primary
     val onAccent = colors.onPrimary

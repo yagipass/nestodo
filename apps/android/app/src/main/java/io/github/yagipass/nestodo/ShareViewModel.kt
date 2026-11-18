@@ -12,6 +12,7 @@ import io.github.yagipass.nestodo.data.Connection
 import io.github.yagipass.nestodo.data.PreferenceSettings
 import io.github.yagipass.nestodo.data.Settings
 import io.github.yagipass.nestodo.data.TodoRepository
+import io.github.yagipass.nestodo.domain.Change
 import io.github.yagipass.nestodo.domain.Destination
 import io.github.yagipass.nestodo.domain.MAX_TITLE_LENGTH
 import io.github.yagipass.nestodo.domain.Outline
@@ -69,6 +70,13 @@ class ShareViewModel(
 
     fun setTitle(title: String) {
         this.title = singleLine(title).take(MAX_TITLE_LENGTH)
+    }
+
+    fun toggleCollapsed(key: Long) {
+        val ready = _state.value as? ShareState.Ready ?: return
+        val node = ready.outline[key] ?: return
+        _state.value =
+            ready.copy(outline = ready.outline.apply(Change.Collapse(key, !node.collapsed)))
     }
 
     fun add(parent: Long?) {

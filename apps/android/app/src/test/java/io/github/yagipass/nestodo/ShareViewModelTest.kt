@@ -15,6 +15,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -109,6 +110,18 @@ class ShareViewModelTest {
         settings.showCompleted = false
         settings.shareParent = 2
         assertNull(viewModel().ready().last)
+    }
+
+    @Test
+    fun `folding or opening a todo in the picker stays on this screen, so sharing never changes how the main list is folded`() {
+        val viewModel = viewModel()
+
+        viewModel.toggleCollapsed(1)
+        assertTrue(viewModel.ready().outline[1]!!.collapsed)
+
+        viewModel.toggleCollapsed(1)
+        assertFalse(viewModel.ready().outline[1]!!.collapsed)
+        assertEquals(listOf("GET"), repository.calls)
     }
 
     @Test
