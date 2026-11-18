@@ -25,12 +25,8 @@ const SHORTCUTS: &[(&str, &[Shortcut])] = &[
         "Comments",
         &[
             ("Open the item\u{2019}s comments", "\u{21e7} Enter", None),
-            (
-                "Post",
-                "\u{21e7} Enter / Ctrl/\u{2318} Enter",
-                Some("in a comment"),
-            ),
-            ("New line", "Enter", Some("in a comment")),
+            ("Post", "Enter / Ctrl/\u{2318} Enter", Some("in a comment")),
+            ("New line", "\u{21e7} Enter", Some("in a comment")),
             ("Back to the item", "Esc", Some("in the comment box")),
             ("Stop editing a comment", "Esc", Some("while editing")),
             ("Close the comments", "Esc", Some("on an item")),

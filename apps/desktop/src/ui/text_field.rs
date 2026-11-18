@@ -105,6 +105,7 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-shift-down", SelectDocEnd, c),
         KeyBinding::new("cmd-a", SelectAll, c),
         KeyBinding::new("enter", Newline, multi),
+        KeyBinding::new("shift-enter", Newline, multi),
         KeyBinding::new("cmd-c", Copy, c),
         KeyBinding::new("cmd-x", Cut, c),
         KeyBinding::new("cmd-v", Paste, c),

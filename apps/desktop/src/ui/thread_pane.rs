@@ -1024,7 +1024,6 @@ impl OutlineView {
                             .gap(px(4.))
                             .text_size(px(12.))
                             .text_color(colors.muted)
-                            .child(kbd("\u{21e7}", cx))
                             .child(kbd("Enter", cx))
                             .child("to post,")
                             .child(kbd("Esc", cx))
