@@ -39,10 +39,10 @@ export function byDay(entries: readonly Entry[], now: Date, timeZone?: string): 
   return days;
 }
 
-export type Keys = { key: string; shiftKey: boolean; ctrlKey: boolean; metaKey: boolean; altKey: boolean; isComposing: boolean };
+export type Keys = { key: string; shiftKey: boolean; altKey: boolean; isComposing: boolean };
 
-export function isPostKey({ key, shiftKey, ctrlKey, metaKey, altKey, isComposing }: Keys) {
-  return key === "Enter" && !isComposing && !altKey && (shiftKey || ctrlKey || metaKey);
+export function isPostKey({ key, shiftKey, altKey, isComposing }: Keys) {
+  return key === "Enter" && !isComposing && !altKey && !shiftKey;
 }
 
 function indexOfChars(chars: readonly string[], query: readonly string[]) {

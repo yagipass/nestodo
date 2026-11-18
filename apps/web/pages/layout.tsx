@@ -23,8 +23,8 @@ const SHORTCUTS: { name: string; shortcuts: Shortcut[] }[] = [
     name: "Comments",
     shortcuts: [
       ["Open the item's comments", "⇧ Enter"],
-      ["Post", "⇧ Enter / Ctrl/⌘ Enter", "in a comment"],
-      ["New line", "Enter", "in a comment"],
+      ["Post", "Enter / Ctrl/⌘ Enter", "in a comment"],
+      ["New line", "⇧ Enter", "in a comment"],
       ["Back to the item", "Esc", "in the comment box"],
       ["Stop editing a comment", "Esc", "while editing"],
       ["Close the comments", "Esc", "on an item"],
