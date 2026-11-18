@@ -435,7 +435,7 @@ fn open_comments_on(view: &Entity<OutlineView>, cx: &mut VisualTestContext, titl
 }
 
 #[gpui::test]
-fn shift_enter_opens_the_items_comments_beside_the_outline_and_posts_one_there_with_its_line_breaks_kept(
+fn shift_enter_opens_the_items_comments_beside_the_outline_and_enter_posts_one_there_with_the_line_breaks_shift_enter_made(
     cx: &mut TestAppContext,
 ) {
     let server = groceries();
@@ -449,9 +449,9 @@ fn shift_enter_opens_the_items_comments_beside_the_outline_and_posts_one_there_w
     assert_eq!(log(&view, cx), ["Created"]);
 
     cx.simulate_input("near the station");
-    cx.simulate_keystrokes("enter");
-    cx.simulate_input("opens at 7");
     cx.simulate_keystrokes("shift-enter");
+    cx.simulate_input("opens at 7");
+    cx.simulate_keystrokes("enter");
     settle(cx);
 
     assert_eq!(
@@ -471,7 +471,7 @@ fn cmd_enter_posts_too_for_those_used_to_it_from_other_apps_and_neither_key_post
     let (view, cx) = open(cx, &server, true);
     open_comments_on(&view, cx, "Bread");
 
-    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_keystrokes("enter");
     cx.simulate_keystrokes("cmd-enter");
     settle(cx);
     assert_eq!(log(&view, cx), ["Created"]);
@@ -715,7 +715,7 @@ fn the_filter_also_finds_rows_by_their_comments_once_typing_pauses_and_shows_the
 }
 
 #[gpui::test]
-fn a_comment_can_be_edited_in_place_with_shift_enter_while_escape_leaves_it_as_it_was(
+fn a_comment_can_be_edited_in_place_with_enter_while_escape_leaves_it_as_it_was(
     cx: &mut TestAppContext,
 ) {
     let server = Arc::new(FakeServer::with(vec![
@@ -735,7 +735,7 @@ fn a_comment_can_be_edited_in_place_with_shift_enter_while_escape_leaves_it_as_i
     click_on(cx, "edit-comment-1");
     cx.simulate_keystrokes("cmd-a");
     cx.simulate_input("no answer, try Friday");
-    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_keystrokes("enter");
     settle(cx);
     assert_eq!(server.tree(), "Dentist [comment: no answer, try Friday]");
     assert_eq!(log(&view, cx), ["Created", "no answer, try Friday"]);
@@ -1001,9 +1001,9 @@ fn an_unposted_comment_and_an_edit_in_progress_wait_for_their_todo_while_the_car
     assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
 
     click_on(cx, "comment-editor");
-    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_keystrokes("enter");
     click_on(cx, "composer");
-    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_keystrokes("enter");
     settle(cx);
     assert_eq!(
         server.tree(),
