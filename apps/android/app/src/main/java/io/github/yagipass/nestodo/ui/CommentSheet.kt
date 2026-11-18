@@ -1,5 +1,6 @@
 package io.github.yagipass.nestodo.ui
 
+import android.view.KeyCharacterMap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -556,8 +557,14 @@ private fun CommentField(
     )
 }
 
-internal fun isPostKey(enter: Boolean, shift: Boolean, ctrl: Boolean, meta: Boolean, alt: Boolean) =
-    enter && !alt && (shift || ctrl || meta)
+internal fun isPostKey(
+    enter: Boolean,
+    shift: Boolean,
+    ctrl: Boolean,
+    meta: Boolean,
+    alt: Boolean,
+    hardware: Boolean,
+) = enter && !shift && !alt && (hardware || ctrl || meta)
 
 private fun submitKey(
     event: KeyEvent,
@@ -574,6 +581,7 @@ private fun submitKey(
             event.isCtrlPressed,
             event.isMetaPressed,
             event.isAltPressed,
+            hardware = event.nativeKeyEvent.deviceId != KeyCharacterMap.VIRTUAL_KEYBOARD,
         ) -> {
             if (field.composition != null) return false
             if (down) submit()
