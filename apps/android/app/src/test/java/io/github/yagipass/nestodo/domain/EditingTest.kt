@@ -1,7 +1,9 @@
 package io.github.yagipass.nestodo.domain
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EditingTest {
@@ -13,6 +15,10 @@ class EditingTest {
     private val all = Viewport()
 
     private fun with(vararg todos: Todo) = outlineOf(todos.toList())
+
+    private fun List<Branch>.render() = map { "  ".repeat(it.row.depth) + it.row.title }
+
+    private fun List<Branch>.offered() = filter { it.offered }.map { it.row.key }
 
     private fun chain(depth: Int) =
         (1L..depth).map { id -> todo(id, "Level $id", parent = (id - 1).takeIf { it > 0 }) }
@@ -351,6 +357,70 @@ class EditingTest {
     fun `destinations leave out todos without a title, which could not be told apart`() {
         val blank = with(groceries.copy(title = " "), milk, eggs, dentist)
         assertEquals(listOf(2L, 3L), blank.destinations(all, 4, "").map { it.key })
+    }
+
+    @Test
+    fun `the destination tree lists todos under their parents in outline order, so the place to add under is found where it sits in the main list`() {
+        val tree = outline.destinationTree(all, "")
+        assertEquals(listOf("Groceries", "  Milk", "  Eggs", "Dentist"), tree.render())
+        assertEquals(listOf(1L, 2L, 3L, 4L), tree.offered())
+    }
+
+    @Test
+    fun `the destination tree starts with the todos folded in the main list still folded, so a long list is as short as the member keeps it`() {
+        val folded = with(groceries.copy(collapsed = true), milk, eggs, dentist)
+        val tree = folded.destinationTree(all, "")
+        assertEquals(listOf("Groceries", "Dentist"), tree.render())
+        assertTrue(tree.first().row.collapsed && tree.first().row.hasChildren)
+    }
+
+    @Test
+    fun `a search keeps the todos above a match so it is seen in its place, but offers only the match`() {
+        val tree = outline.destinationTree(all, " EGG ")
+        assertEquals(listOf("Groceries", "  Eggs"), tree.render())
+        assertEquals(listOf(3L), tree.offered())
+    }
+
+    @Test
+    fun `a search opens folded todos to show a match inside them`() {
+        val folded = with(groceries.copy(collapsed = true), milk, eggs, dentist)
+        val tree = folded.destinationTree(all, "egg")
+        assertEquals(listOf("Groceries", "  Eggs"), tree.render())
+        assertFalse(tree.first().row.collapsed)
+    }
+
+    @Test
+    fun `a matching parent whose children do not match no longer shows that it has any, so its bullet offers nothing to open`() {
+        val tree = outline.destinationTree(all, "groc")
+        assertEquals(listOf("Groceries"), tree.render())
+        assertFalse(tree.single().row.hasChildren)
+    }
+
+    @Test
+    fun `a todo without a title is kept in the tree only to hold the titled todos under it, and is never offered`() {
+        val blank =
+            with(groceries.copy(title = " "), milk, eggs, dentist, todo(5, "", position = 2))
+        val tree = blank.destinationTree(all, "")
+        assertEquals(listOf(1L, 2L, 3L, 4L), tree.map { it.row.key })
+        assertEquals(listOf(2L, 3L, 4L), tree.offered())
+    }
+
+    @Test
+    fun `the destination tree leaves out completed todos and everything under them while completed todos are hidden`() {
+        val done = with(groceries.copy(completedAt = "2026-10-23 09:00:00"), milk, eggs, dentist)
+        assertEquals(
+            listOf("Dentist"),
+            done.destinationTree(Viewport(showCompleted = false), "").render(),
+        )
+        assertEquals(listOf(1L, 2L, 3L, 4L), done.destinationTree(all, "").offered())
+    }
+
+    @Test
+    fun `the destination tree leaves out a todo at the deepest level the server allows, because nothing can be added under it`() {
+        assertEquals(
+            (1L until MAX_DEPTH).toList() + listOf(100L, 101L),
+            tooDeep.destinationTree(all, "").map { it.row.key },
+        )
     }
 
     @Test

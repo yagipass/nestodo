@@ -6,6 +6,8 @@ data class Edit(val changes: List<Change>, val caret: Caret?)
 
 data class Destination(val key: Long, val title: String, val path: List<String>)
 
+data class Branch(val row: OutlineRow, val offered: Boolean)
+
 fun caretIn(text: String, position: Int): Int {
     val at = position.coerceIn(0, text.length)
     return if (text.hasSurrogatePairAt(at - 1)) at + 1 else at
@@ -98,14 +100,42 @@ fun Outline.destinations(viewport: Viewport, key: Long?, query: String): List<De
                 val node = getValue(child)
                 if (child == key || !isShown(child, viewport)) continue
                 if (path.size + 1 + levels > MAX_DEPTH) continue
-                if (node.title.isNotBlank() && node.title.contains(match, ignoreCase = true)) {
-                    add(Destination(child, node.title, path))
-                }
+                if (node.matches(match)) add(Destination(child, node.title, path))
                 walk(child, path + node.title)
             }
         }
         walk(null, emptyList())
     }
+
+fun Outline.destinationTree(viewport: Viewport, query: String): List<Branch> {
+    val match = query.trim()
+    fun walk(parent: Long?, depth: Int, dimmed: Boolean): List<Branch> = buildList {
+        for (child in children(parent)) {
+            val node = getValue(child)
+            if (!isShown(child, viewport) || depth + 1 >= MAX_DEPTH) continue
+            val under = walk(child, depth + 1, dimmed || node.completed)
+            val offered = node.matches(match)
+            if (!offered && under.isEmpty()) continue
+            val collapsed = node.collapsed && match.isEmpty()
+            add(
+                Branch(
+                    OutlineRow(
+                        key = child,
+                        title = node.title,
+                        depth = depth,
+                        completed = node.completed,
+                        dimmed = dimmed,
+                        hasChildren = under.isNotEmpty(),
+                        collapsed = collapsed,
+                    ),
+                    offered,
+                )
+            )
+            if (!collapsed) addAll(under)
+        }
+    }
+    return walk(null, 0, false)
+}
 
 fun Outline.moveTo(viewport: Viewport, key: Long, target: Long): Edit? {
     val node = this[key] ?: return null
@@ -158,6 +188,9 @@ private fun Outline.shownSibling(viewport: Viewport, key: Long, step: Int): Int?
 }
 
 private fun Outline.getValue(key: Long): Node = nodes.getValue(key)
+
+private fun Node.matches(query: String): Boolean =
+    title.isNotBlank() && title.contains(query, ignoreCase = true)
 
 private fun Outline.isShown(key: Long, viewport: Viewport): Boolean =
     viewport.showCompleted || this[key]?.completed == false
