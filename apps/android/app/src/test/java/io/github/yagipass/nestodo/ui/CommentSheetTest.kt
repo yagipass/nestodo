@@ -24,24 +24,29 @@ class CommentSheetTest {
             }
         }
 
+    private fun posts(
+        shift: Boolean = false,
+        ctrl: Boolean = false,
+        meta: Boolean = false,
+        hardware: Boolean = true,
+    ) = isPostKey(enter = true, shift, ctrl, meta, alt = false, hardware)
+
     @Test
-    fun `a hardware keyboard posts with Shift+Enter, and with Ctrl or Cmd+Enter for those used to it from other apps`() {
+    fun `a hardware keyboard posts with Enter, and with Ctrl or Cmd+Enter for those used to it from other apps`() {
         assertEquals(
             listOf(true, true, true),
-            listOf(
-                isPostKey(enter = true, shift = true, ctrl = false, meta = false, alt = false),
-                isPostKey(enter = true, shift = false, ctrl = true, meta = false, alt = false),
-                isPostKey(enter = true, shift = false, ctrl = false, meta = true, alt = false),
-            ),
+            listOf(posts(), posts(ctrl = true), posts(meta = true)),
         )
     }
 
     @Test
-    fun `Enter alone is left to the field, so a comment typed on a hardware keyboard can have more than one line`() {
-        assertEquals(
-            false,
-            isPostKey(enter = true, shift = false, ctrl = false, meta = false, alt = false),
-        )
+    fun `Shift+Enter is left to the field, so a comment typed on a hardware keyboard can have more than one line`() {
+        assertEquals(false, posts(shift = true))
+    }
+
+    @Test
+    fun `Enter from the on-screen keyboard is left to the field, since it is the only key that starts a new line there`() {
+        assertEquals(false, posts(hardware = false))
     }
 
     @Test
