@@ -1,5 +1,16 @@
 # Changelog
 
+## [v0.13.1](https://github.com/yagipass/nestodo/compare/v0.13.0...v0.13.1) - 2026-11-19
+
+### Web
+- feat(web): post a comment with Enter and add a line with Shift+Enter by @yagipass in https://github.com/yagipass/nestodo/pull/160
+### Android
+- feat(android): show the share screen's todos as a tree, like the outline by @yagipass in https://github.com/yagipass/nestodo/pull/157
+- feat(android): post a comment with Enter on a hardware keyboard by @yagipass in https://github.com/yagipass/nestodo/pull/161
+### Desktop
+- feat(desktop): post a comment with Enter and add a line with Shift+Enter by @yagipass in https://github.com/yagipass/nestodo/pull/162
+- feat(desktop): select part of a comment and copy it with Cmd+C by @yagipass in https://github.com/yagipass/nestodo/pull/164
+
 ## [v0.13.0](https://github.com/yagipass/nestodo/compare/v0.12.1...v0.13.0) - 2026-11-17
 
 ### MCP
