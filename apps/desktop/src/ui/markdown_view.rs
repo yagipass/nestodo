@@ -1,15 +1,15 @@
 use std::ops::Range;
-use std::rc::Rc;
 
 use gpui::{
-    AnyElement, ClickEvent, Div, Font, FontStyle, FontWeight, HighlightStyle, Hsla, SharedString,
-    StrikethroughStyle, StyledText, TextRun, UnderlineStyle, div, prelude::*, px,
+    AnyElement, Div, Font, FontStyle, FontWeight, Hsla, SharedString, StrikethroughStyle, TextRun,
+    UnderlineStyle, div, prelude::*, px,
 };
 
 use nestodo_desktop::markdown::{Block, Inline, markdown};
-use nestodo_desktop::title::{highlighted, link_target};
+use nestodo_desktop::title::highlighted;
 
 use crate::ui::clamped_text::{ClampedText, TextHits};
+use crate::ui::text_selection::{Selectable, within};
 use crate::ui::theme::Theme;
 
 const CODE_FONT: &str = "Menlo";
@@ -35,12 +35,34 @@ struct View<'a> {
     font: &'a Font,
     colors: &'a Theme,
     parts: usize,
+    selected: Option<Range<usize>>,
+    readable: Selectable,
 }
 
 impl View<'_> {
     fn part(&mut self) -> SharedString {
         self.parts += 1;
         format!("{}-{}", self.id, self.parts).into()
+    }
+
+    fn selectable(
+        &mut self,
+        text: String,
+        copied: &str,
+        runs: Vec<TextRun>,
+        base: Hsla,
+    ) -> (ClampedText, usize) {
+        let hits = TextHits::default();
+        let start = self.readable.push(copied, hits.clone());
+        let mut shown = ClampedText::new(text.into(), runs, None, base, hits);
+        if let Some(local) = self
+            .selected
+            .as_ref()
+            .and_then(|selected| within(selected, start, copied.len()))
+        {
+            shown = shown.with_selection(local, self.colors.selection);
+        }
+        (shown, start)
     }
 
     fn marks(&self) -> Marks {
@@ -117,53 +139,36 @@ impl View<'_> {
     fn text_block(&mut self, children: &[Inline], marks: &Marks, base: Hsla) -> AnyElement {
         let mut styled = Shaped::default();
         self.styled(children, marks, base, &mut styled);
-        let hits = TextHits::default();
-        let shown = ClampedText::new(styled.text.into(), styled.runs, None, base, hits.clone());
-        let links = Rc::new(styled.links);
-        let id = self.part();
-        let selector = id.to_string();
+        let copied = styled.text.clone();
+        let (shown, start) = self.selectable(styled.text, &copied, styled.runs, base);
+        for (range, href) in styled.links {
+            self.readable
+                .link(start + range.start..start + range.end, href);
+        }
+        let selector = self.part().to_string();
         div()
-            .id(id)
             .debug_selector(move || selector)
-            .on_click(move |event: &ClickEvent, _, cx| {
-                let clicked = hits
-                    .index_for(event.position())
-                    .and_then(|index| links.iter().find(|(range, _)| range.contains(&index)));
-                if let Some(target) = clicked.and_then(|(_, href)| link_target(href)) {
-                    cx.open_url(&target);
-                }
-            })
             .child(shown)
             .into_any_element()
     }
 
     fn code_block(&mut self, text: &str) -> AnyElement {
-        let matched = self.colors.matched;
-        let lines: Vec<Div> = text
-            .split('\n')
-            .map(|line| {
-                let shown = if line.is_empty() {
-                    " ".to_owned()
-                } else {
-                    line.replace('\t', "    ")
-                };
-                let highlights: Vec<_> = highlighted(&shown, self.query)
-                    .into_iter()
-                    .filter(|part| part.matched)
-                    .map(|part| {
-                        let style = HighlightStyle {
-                            background_color: Some(matched),
-                            ..HighlightStyle::default()
-                        };
-                        (part.from..part.to, style)
-                    })
-                    .collect();
-                div()
-                    .flex_none()
-                    .whitespace_nowrap()
-                    .child(StyledText::new(shown).with_highlights(highlights))
-            })
-            .collect();
+        let mut marks = self.marks();
+        marks.font.family = CODE_FONT.into();
+        let base = self.colors.text;
+        let mut lines: Vec<Div> = Vec::new();
+        for line in text.split('\n') {
+            let copied = line.replace('\t', "    ");
+            let shown = if copied.is_empty() {
+                " ".to_owned()
+            } else {
+                copied.clone()
+            };
+            let mut styled = Shaped::default();
+            self.leaf(&shown, &marks, base, &mut styled);
+            let (shown, _) = self.selectable(styled.text, &copied, styled.runs, base);
+            lines.push(div().flex_none().child(shown.unwrapped()));
+        }
         let id = self.part();
         let selector = id.to_string();
         let written = format!("{id}-lines");
@@ -264,17 +269,28 @@ impl View<'_> {
     }
 }
 
-pub fn markdown_view(id: &str, body: &str, query: &str, font: &Font, colors: &Theme) -> AnyElement {
+pub fn markdown_view(
+    id: &str,
+    body: &str,
+    query: &str,
+    font: &Font,
+    colors: &Theme,
+    selected: Option<Range<usize>>,
+) -> (AnyElement, Selectable) {
     let mut view = View {
         id,
         query,
         font,
         colors,
         parts: 0,
+        selected,
+        readable: Selectable::default(),
     };
-    view.blocks(&markdown(body), colors.text, 0)
+    let element = view
+        .blocks(&markdown(body), colors.text, 0)
         .text_size(px(14.5))
         .line_height(px(24.))
         .text_color(colors.text)
-        .into_any_element()
+        .into_any_element();
+    (element, view.readable)
 }
