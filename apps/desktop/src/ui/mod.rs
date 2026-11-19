@@ -12,5 +12,6 @@ pub mod settings_view;
 pub mod shortcuts;
 pub mod stats_view;
 pub mod text_field;
+pub mod text_selection;
 pub mod theme;
 pub mod widgets;

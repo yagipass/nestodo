@@ -1922,3 +1922,143 @@ fn scrolling_sideways_over_a_code_block_moves_only_its_code_and_scrolling_up_sti
         (block.x, block.y + px(120.), code)
     );
 }
+
+const GLYPH: f32 = 14.5 * 0.6;
+
+fn on_glyph(block: Bounds<Pixels>, glyphs: f32, row: f32) -> gpui::Point<Pixels> {
+    gpui::point(
+        block.origin.x + px(GLYPH * glyphs),
+        block.origin.y + px(24. * row + 12.),
+    )
+}
+
+fn drag(cx: &mut VisualTestContext, from: gpui::Point<Pixels>, to: gpui::Point<Pixels>) {
+    cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::none());
+}
+
+fn copied(cx: &mut VisualTestContext) -> Option<String> {
+    cx.simulate_keystrokes("cmd-c");
+    cx.read_from_clipboard().and_then(|item| item.text())
+}
+
+fn drawn(cx: &mut VisualTestContext, selector: &'static str) -> Bounds<Pixels> {
+    cx.debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} was not drawn"))
+}
+
+#[gpui::test]
+fn dragging_from_one_paragraph_into_the_next_copies_only_the_text_passed_over_as_it_reads_without_markdown_marks(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Dentist").comment("call **the** clinic\n\nthen book a slot"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Dentist");
+    let first = drawn(cx, "comment-text-1-1");
+    let second = drawn(cx, "comment-text-1-2");
+
+    drag(cx, on_glyph(first, 5.2, 0.), on_glyph(second, 9.2, 0.));
+
+    assert_eq!(copied(cx).as_deref(), Some("the clinic\nthen book"));
+}
+
+#[gpui::test]
+fn double_clicking_a_word_in_a_comment_selects_that_word_so_a_name_or_number_can_be_copied_in_one_go(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Dentist").comment("call 0123456 before noon"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Dentist");
+    let at = on_glyph(drawn(cx, "comment-text-1-1"), 6.2, 0.);
+
+    cx.simulate_event(MouseDownEvent {
+        position: at,
+        button: MouseButton::Left,
+        modifiers: gpui::Modifiers::none(),
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_mouse_up(at, MouseButton::Left, gpui::Modifiers::none());
+
+    assert_eq!(copied(cx).as_deref(), Some("0123456"));
+}
+
+#[gpui::test]
+fn cmd_a_selects_all_of_the_comment_clicked_last_and_none_of_the_others(cx: &mut TestAppContext) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Dentist")
+            .comment("called once")
+            .comment("# Plan\n\n- call **the** clinic\n- pay"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Dentist");
+
+    let heading = on_glyph(drawn(cx, "comment-text-2-1"), 1.2, 0.);
+    cx.simulate_click(heading, gpui::Modifiers::none());
+    cx.simulate_keystrokes("cmd-a");
+
+    assert_eq!(copied(cx).as_deref(), Some("Plan\ncall the clinic\npay"));
+}
+
+#[gpui::test]
+fn a_drag_that_ends_on_a_link_selects_up_to_it_instead_of_opening_it(cx: &mut TestAppContext) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Dentist").comment("see [the form](https://example.com/form) first"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Dentist");
+    let text = drawn(cx, "comment-text-1-1");
+
+    drag(cx, on_glyph(text, 0.2, 0.), on_glyph(text, 8.2, 0.));
+
+    assert_eq!(cx.opened_url(), None);
+    assert_eq!(copied(cx).as_deref(), Some("see the "));
+}
+
+#[gpui::test]
+fn holding_the_mouse_above_the_log_keeps_scrolling_and_selecting_so_a_long_comment_can_be_copied_whole(
+    cx: &mut TestAppContext,
+) {
+    let notes: Vec<String> = (1..=80).map(|n| format!("note {n}")).collect();
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Dentist").comment(Box::leak(notes.join("\n").into_boxed_str())),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Dentist");
+    let log = drawn(cx, "thread-log");
+    let text = drawn(cx, "comment-text-1-1");
+    assert!(
+        text.top() < log.top(),
+        "the comment should not fit in the log"
+    );
+    let last_line = on_glyph(text, 0.2, 79.);
+    assert!(log.contains(&last_line), "the log should start at its end");
+    let above = gpui::point(last_line.x, log.top() - px(100.));
+
+    cx.simulate_mouse_down(last_line, MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(above, MouseButton::Left, gpui::Modifiers::none());
+    let mut tops = Vec::new();
+    for _ in 0..500 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        let top = drawn(cx, "comment-text-1-1").top();
+        if tops.last() == Some(&top) {
+            break;
+        }
+        tops.push(top);
+    }
+    cx.simulate_mouse_up(above, MouseButton::Left, gpui::Modifiers::none());
+
+    assert!(
+        tops.len() > 3,
+        "the log stopped scrolling while the mouse was held still"
+    );
+    assert!(tops.windows(2).all(|pair| pair[1] > pair[0]));
+    let expected = notes[..79].join("\n") + "\n";
+    assert_eq!(copied(cx), Some(expected));
+}

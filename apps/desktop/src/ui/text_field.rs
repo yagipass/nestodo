@@ -15,6 +15,7 @@ use nestodo_desktop::outline::caret_in;
 use nestodo_desktop::title::encode_pasted_url;
 use nestodo_desktop::todos::utf16_len;
 
+use crate::ui::text_selection::selection_bounds;
 use crate::ui::theme::theme;
 
 actions!(
@@ -1415,41 +1416,16 @@ impl Element for FieldElement {
                 } else {
                     end.x.max(start.x)
                 };
-                if (start.y - end.y).abs() < px(0.5) {
-                    let inset = if multiline {
-                        px(0.)
-                    } else {
-                        (line_height - (font_size * 1.25).min(line_height)) / 2.
-                    };
-                    quads.push(fill(
-                        Bounds::from_corners(
-                            point(start.x, start.y + inset),
-                            point(end.x, end.y + line_height - inset),
-                        ),
-                        colors.selection,
-                    ));
+                let inset = if multiline {
+                    px(0.)
                 } else {
-                    quads.push(fill(
-                        Bounds::from_corners(start, point(right, start.y + line_height)),
-                        colors.selection,
-                    ));
-                    if end.y - start.y > line_height + px(0.5) {
-                        quads.push(fill(
-                            Bounds::from_corners(
-                                point(layout.origin.x, start.y + line_height),
-                                point(right, end.y),
-                            ),
-                            colors.selection,
-                        ));
-                    }
-                    quads.push(fill(
-                        Bounds::from_corners(
-                            point(layout.origin.x, end.y),
-                            point(end.x, end.y + line_height),
-                        ),
-                        colors.selection,
-                    ));
-                }
+                    (line_height - (font_size * 1.25).min(line_height)) / 2.
+                };
+                quads.extend(
+                    selection_bounds(start, end, line_height, inset, layout.origin.x, right)
+                        .into_iter()
+                        .map(|area| fill(area, colors.selection)),
+                );
             }
         }
         self.field.update(cx, |field, _| {

@@ -30,7 +30,9 @@ use crate::ui::backend::Backend;
 use crate::ui::clamped_text::{ClampedText, TextHits};
 use crate::ui::icons::Icon;
 use crate::ui::move_picker::{MovePicker, PickerEvent};
-use crate::ui::text_field::{FieldEvent, TextField, offset_from_utf16, offset_to_utf16};
+use crate::ui::text_field::{
+    Copy, FieldEvent, SelectAll, TextField, offset_from_utf16, offset_to_utf16,
+};
 use crate::ui::theme::{Theme, theme};
 use crate::ui::widgets::{PAGE_WIDTH, Tooltip, icon, icon_button, kbd, modal};
 
@@ -68,6 +70,7 @@ pub fn bindings() -> Vec<KeyBinding> {
     let composer = Some("Composer");
     let edit = Some("CommentEdit");
     let thread = Some("Thread");
+    let log = Some("ThreadLog");
     let outline = Some("Outline");
     let filter = Some("Filter");
     let workspace = Some("Workspace");
@@ -105,6 +108,8 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("backspace", TitleBackspace, title),
         KeyBinding::new("cmd-z", NoAction, thread),
         KeyBinding::new("ctrl-z", NoAction, thread),
+        KeyBinding::new("cmd-c", Copy, log),
+        KeyBinding::new("cmd-a", SelectAll, log),
         KeyBinding::new("enter", PostComment, composer),
         KeyBinding::new("cmd-enter", PostComment, composer),
         KeyBinding::new("ctrl-enter", PostComment, composer),
@@ -155,6 +160,7 @@ pub struct OutlineView {
     comment_field: Entity<TextField>,
     filter_field: Entity<TextField>,
     focus_handle: FocusHandle,
+    log_focus: FocusHandle,
     scroll: ScrollHandle,
     refreshing: bool,
     pending_link: Option<String>,
@@ -400,6 +406,7 @@ impl OutlineView {
             comment_field,
             filter_field,
             focus_handle: cx.focus_handle(),
+            log_focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
             refreshing: false,
             pending_link: None,

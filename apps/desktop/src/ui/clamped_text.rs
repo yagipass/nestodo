@@ -6,8 +6,10 @@ use std::sync::Arc;
 use gpui::{
     App, AvailableSpace, Bounds, ContentMask, Element, ElementId, GlobalElementId, Hsla,
     InspectorElementId, IntoElement, LayoutId, Pixels, Point, SharedString, Style, TextAlign,
-    TextRun, TransformationMatrix, Window, WrappedLine, WrappedLineLayout, point, px, size,
+    TextRun, TransformationMatrix, Window, WrappedLine, WrappedLineLayout, fill, point, px, size,
 };
+
+use crate::ui::text_selection::selection_bounds;
 
 pub const ELLIPSIS: &str = "\u{2026}";
 
@@ -18,6 +20,7 @@ struct Placed {
     paragraphs: Vec<(Point<Pixels>, usize, Arc<WrappedLineLayout>)>,
     line_height: Pixels,
     visible: usize,
+    bounds: Bounds<Pixels>,
 }
 
 impl TextHits {
@@ -31,6 +34,28 @@ impl TextHits {
         let index = start + line.index_for_position(local, placed.line_height).ok()?;
         (index < placed.visible).then_some(index)
     }
+
+    pub fn nearest_index_for(&self, position: Point<Pixels>) -> Option<usize> {
+        let placed = self.0.borrow();
+        let placed = placed.as_ref()?;
+        let line_height = placed.line_height;
+        let (origin, start, line) = placed
+            .paragraphs
+            .iter()
+            .find(|(origin, _, line)| position.y < origin.y + line.size(line_height).height)
+            .or_else(|| placed.paragraphs.last())?;
+        let bottom = (line.size(line_height).height - px(0.5)).max(px(0.));
+        let local = point(
+            position.x - origin.x,
+            (position.y - origin.y).clamp(px(0.), bottom),
+        );
+        let (Ok(index) | Err(index)) = line.closest_index_for_position(local, line_height);
+        Some((start + index).min(placed.visible))
+    }
+
+    pub fn bounds(&self) -> Option<Bounds<Pixels>> {
+        self.0.borrow().as_ref().map(|placed| placed.bounds)
+    }
 }
 
 pub struct ClampedText {
@@ -42,6 +67,8 @@ pub struct ClampedText {
     icons: Vec<Range<usize>>,
     icon_path: SharedString,
     icon_color: Hsla,
+    wrap: bool,
+    selection: Option<(Range<usize>, Hsla)>,
 }
 
 impl ClampedText {
@@ -61,7 +88,19 @@ impl ClampedText {
             icons: Vec::new(),
             icon_path: SharedString::default(),
             icon_color: ellipsis_color,
+            wrap: true,
+            selection: None,
         }
+    }
+
+    pub fn unwrapped(mut self) -> Self {
+        self.wrap = false;
+        self
+    }
+
+    pub fn with_selection(mut self, range: Range<usize>, color: Hsla) -> Self {
+        self.selection = Some((range, color));
+        self
     }
 
     pub fn with_icons(mut self, icons: Vec<Range<usize>>, path: SharedString, color: Hsla) -> Self {
@@ -281,6 +320,43 @@ impl ClampedText {
     }
 }
 
+fn selected_areas(
+    selected: &Range<usize>,
+    start: usize,
+    line: &WrappedLine,
+    origin: Point<Pixels>,
+    line_height: Pixels,
+    bounds: Bounds<Pixels>,
+) -> Vec<Bounds<Pixels>> {
+    let end = start + line.len();
+    if selected.end <= start || selected.start > end {
+        return Vec::new();
+    }
+    let from = selected.start.max(start) - start;
+    let to = selected.end.min(end) - start;
+    let runs_past = selected.end > end;
+    if from == to && !runs_past {
+        return Vec::new();
+    }
+    let (Some(first), Some(mut last)) = (
+        line.position_for_index(from, line_height),
+        line.position_for_index(to, line_height),
+    ) else {
+        return Vec::new();
+    };
+    if runs_past {
+        last.x = bounds.right() - origin.x;
+    }
+    selection_bounds(
+        origin + first,
+        origin + last,
+        line_height,
+        px(0.),
+        origin.x,
+        bounds.right(),
+    )
+}
+
 impl IntoElement for ClampedText {
     type Element = Self;
 
@@ -313,12 +389,16 @@ impl Element for ClampedText {
         let runs = self.runs.clone();
         let clamp = self.clamp;
         let ellipsis_color = self.ellipsis_color;
+        let wrap = self.wrap;
         let layout_id =
             window.request_measured_layout(Style::default(), move |known, available, window, _| {
-                let width = known.width.or(match available.width {
-                    AvailableSpace::Definite(width) => Some(width),
-                    _ => None,
-                });
+                let width = known
+                    .width
+                    .or(match available.width {
+                        AvailableSpace::Definite(width) => Some(width),
+                        _ => None,
+                    })
+                    .filter(|_| wrap);
                 let laid =
                     Self::lay_out(&text, &runs, clamp, ellipsis_color, metrics, width, window);
                 size(width.unwrap_or(laid.width), laid.height)
@@ -343,7 +423,7 @@ impl Element for ClampedText {
             self.clamp,
             self.ellipsis_color,
             metrics,
-            Some(bounds.size.width),
+            self.wrap.then_some(bounds.size.width),
             window,
         );
         let mut top = bounds.top();
@@ -360,6 +440,7 @@ impl Element for ClampedText {
             paragraphs,
             line_height,
             visible: laid.visible,
+            bounds,
         }));
         laid
     }
@@ -380,6 +461,12 @@ impl Element for ClampedText {
             for (start, line) in &laid.paragraphs {
                 line.paint_background(origin, line_height, TextAlign::Left, None, window, cx)
                     .ok();
+                if let Some((selected, color)) = &self.selection {
+                    for area in selected_areas(selected, *start, line, origin, line_height, bounds)
+                    {
+                        window.paint_quad(fill(area, *color));
+                    }
+                }
                 line.paint(origin, line_height, TextAlign::Left, None, window, cx)
                     .ok();
                 for icon in &self.icons {
@@ -536,6 +623,7 @@ mod tests {
             paragraphs: vec![(point(px(0.), px(0.)), 0, Arc::clone(&line))],
             line_height: px(21.),
             visible: text.len(),
+            bounds: Bounds::default(),
         }));
         (hits, line)
     }
@@ -572,6 +660,7 @@ mod tests {
                 paragraphs: vec![(point(px(0.), px(0.)), 0, Arc::clone(&line))],
                 line_height: px(21.),
                 visible: text.len(),
+                bounds: Bounds::default(),
             }));
             (wrapped_at, hits.index_for(point(px(99.), px(5.))))
         });
@@ -596,6 +685,7 @@ mod tests {
                 paragraphs: vec![(point(px(0.), px(0.)), 0, Arc::clone(&line))],
                 line_height: px(21.),
                 visible: cut,
+                bounds: Bounds::default(),
             }));
             hits.index_for(point((start + end) / 2., px(5.)))
         });

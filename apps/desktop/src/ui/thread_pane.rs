@@ -1,7 +1,10 @@
 use std::time::Duration;
 
 use chrono::{Local, Utc};
-use gpui::Div;
+use gpui::{
+    ClipboardItem, CursorStyle, DispatchPhase, Div, HitboxBehavior, MouseMoveEvent, Point,
+    WeakEntity,
+};
 
 use nestodo_desktop::sync::Saved;
 use nestodo_desktop::thread::{Comment, Entry, EventKind, TimelineItem, Via, by_day};
@@ -9,9 +12,11 @@ use nestodo_desktop::thread::{Comment, Entry, EventKind, TimelineItem, Via, by_d
 use super::*;
 use crate::ui::avatar::avatar_circle;
 use crate::ui::markdown_view::markdown_view;
+use crate::ui::text_selection::{Selectable, Selection};
 use crate::ui::widgets::{pill, text_button};
 
 const FETCH_DELAY: Duration = Duration::from_millis(150);
+const AUTOSCROLL_TICK: Duration = Duration::from_millis(16);
 const PANE_WIDTH: f32 = 420.;
 const QUOTE_ROOM: usize = 300;
 
@@ -27,6 +32,11 @@ pub(super) struct Thread {
     loading: Option<Task<()>>,
     scroll: ScrollHandle,
     shown_entries: usize,
+    selection: Option<Selection>,
+    readable: HashMap<SharedString, Rc<Selectable>>,
+    pressed_link: Option<(SharedString, String)>,
+    pointer: Point<Pixels>,
+    autoscrolling: bool,
 }
 
 #[derive(Default)]
@@ -60,6 +70,11 @@ impl Thread {
             loading: None,
             scroll: ScrollHandle::new(),
             shown_entries: 0,
+            selection: None,
+            readable: HashMap::new(),
+            pressed_link: None,
+            pointer: Point::default(),
+            autoscrolling: false,
         }
     }
 
@@ -86,6 +101,80 @@ impl Thread {
             _ => None,
         })
     }
+
+    fn follow_pointer(&mut self) -> bool {
+        let viewport = self.scroll.bounds();
+        let Some(selection) = self
+            .selection
+            .as_mut()
+            .filter(|selection| selection.dragging)
+        else {
+            return false;
+        };
+        let Some(text) = self.readable.get(&selection.owner) else {
+            return false;
+        };
+        let y = self
+            .pointer
+            .y
+            .min(viewport.bottom() - px(1.))
+            .max(viewport.top());
+        selection.drag_to(text.offset_for(point(self.pointer.x, y)), text);
+        viewport.size.height > px(0.)
+            && (self.pointer.y < viewport.top() || self.pointer.y > viewport.bottom())
+    }
+}
+
+fn text_overlay(owner: SharedString, view: WeakEntity<OutlineView>) -> impl IntoElement {
+    canvas(
+        |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+        move |_, hitbox, window, _| {
+            window.set_cursor_style(CursorStyle::IBeam, &hitbox);
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                if event.button != MouseButton::Left {
+                    return;
+                }
+                if !hitbox.is_hovered(window) {
+                    if phase == DispatchPhase::Capture {
+                        view.update(cx, |this, cx| this.forget_text(&owner, cx))
+                            .ok();
+                    }
+                } else if phase == DispatchPhase::Bubble && !window.default_prevented() {
+                    view.update(cx, |this, cx| this.press_text(&owner, event, window, cx))
+                        .ok();
+                    window.prevent_default();
+                }
+            });
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
+fn drag_tracker(view: WeakEntity<OutlineView>) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |_, (), window, _| {
+            window.on_mouse_event({
+                let view = view.clone();
+                move |event: &MouseMoveEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Bubble {
+                        view.update(cx, |this, cx| this.drag_text(event, cx)).ok();
+                    }
+                }
+            });
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
+                    view.update(cx, |this, cx| this.release_text(event.position, cx))
+                        .ok();
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_full()
 }
 
 fn quoted(body: &str) -> String {
@@ -566,8 +655,206 @@ impl OutlineView {
         self.cancel_edit(window, cx);
     }
 
-    fn comment_text(&self, id: &str, text: &str, font: &Font, cx: &App) -> AnyElement {
-        markdown_view(id, text, &self.query, font, &theme(cx))
+    fn comment_text(
+        &self,
+        id: &str,
+        body: &str,
+        font: &Font,
+        readable: &mut HashMap<SharedString, Rc<Selectable>>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let owner = SharedString::from(id.to_owned());
+        let selected = self
+            .thread
+            .as_ref()
+            .and_then(|thread| thread.selection.as_ref())
+            .filter(|selection| selection.owner == owner)
+            .map(Selection::range);
+        let (element, text) = markdown_view(id, body, &self.query, font, &theme(cx), selected);
+        readable.insert(owner.clone(), Rc::new(text));
+        div()
+            .relative()
+            .child(element)
+            .child(text_overlay(owner, cx.entity().downgrade()))
+            .into_any_element()
+    }
+
+    fn press_text(
+        &mut self,
+        owner: &SharedString,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(thread) = self.thread.as_mut() else {
+            return;
+        };
+        let Some(text) = thread.readable.get(owner).cloned() else {
+            return;
+        };
+        let offset = text.offset_for(event.position);
+        let clicks = event.click_count;
+        let extending = event.modifiers.shift
+            && clicks <= 1
+            && thread
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.owner == *owner);
+        thread.pressed_link = None;
+        if extending {
+            if let Some(selection) = thread.selection.as_mut() {
+                selection.extend_to(offset);
+            }
+        } else {
+            let mut selection = Selection::press(owner.clone(), offset, clicks, &text);
+            if clicks <= 1
+                && let Some(href) = text.link_at(event.position)
+            {
+                thread.pressed_link = Some((owner.clone(), href.to_owned()));
+                selection.dragging = false;
+            }
+            thread.selection = Some(selection);
+        }
+        thread.pointer = event.position;
+        window.focus(&self.log_focus, cx);
+        cx.notify();
+    }
+
+    fn forget_text(&mut self, owner: &SharedString, cx: &mut Context<Self>) {
+        let Some(thread) = self.thread.as_mut() else {
+            return;
+        };
+        if thread
+            .selection
+            .as_ref()
+            .is_some_and(|selection| selection.owner == *owner)
+        {
+            thread.selection = None;
+            cx.notify();
+        }
+    }
+
+    fn drag_text(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let Some(thread) = self.thread.as_mut() else {
+            return;
+        };
+        let Some(selection) = thread
+            .selection
+            .as_mut()
+            .filter(|selection| selection.dragging)
+        else {
+            return;
+        };
+        if event.pressed_button != Some(MouseButton::Left) {
+            selection.dragging = false;
+            cx.notify();
+            return;
+        }
+        thread.pointer = event.position;
+        let outside = thread.follow_pointer();
+        if outside && !thread.autoscrolling {
+            thread.autoscrolling = true;
+            cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(AUTOSCROLL_TICK).await;
+                    let going = this.update(cx, Self::autoscroll).unwrap_or(false);
+                    if !going {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    fn autoscroll(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(thread) = self.thread.as_mut() else {
+            return false;
+        };
+        if !thread.follow_pointer() {
+            thread.autoscrolling = false;
+            return false;
+        }
+        let viewport = thread.scroll.bounds();
+        let beyond = if thread.pointer.y < viewport.top() {
+            thread.pointer.y - viewport.top()
+        } else {
+            thread.pointer.y - viewport.bottom()
+        };
+        let step = (beyond.abs() / 2.).max(px(4.)).min(px(40.));
+        let offset = thread.scroll.offset();
+        let y = if beyond < px(0.) {
+            offset.y + step
+        } else {
+            offset.y - step
+        };
+        let lowest = -thread.scroll.max_offset().y;
+        thread
+            .scroll
+            .set_offset(point(offset.x, y.max(lowest).min(px(0.))));
+        cx.notify();
+        true
+    }
+
+    fn release_text(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(thread) = self.thread.as_mut() else {
+            return;
+        };
+        if let Some((owner, href)) = thread.pressed_link.take() {
+            let released_on_it = thread
+                .readable
+                .get(&owner)
+                .and_then(|text| text.link_at(position))
+                == Some(href.as_str());
+            if released_on_it && let Some(target) = link_target(&href) {
+                cx.open_url(&target);
+            }
+            return;
+        }
+        if let Some(selection) = thread
+            .selection
+            .as_mut()
+            .filter(|selection| selection.dragging)
+        {
+            selection.dragging = false;
+            cx.notify();
+        }
+    }
+
+    fn on_copy_text(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(thread) = self.thread.as_ref() else {
+            return;
+        };
+        let Some(selection) = thread.selection.as_ref() else {
+            return;
+        };
+        let range = selection.range();
+        let Some(text) = thread.readable.get(&selection.owner) else {
+            return;
+        };
+        if range.is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(ClipboardItem::new_string(text.text_in(range).to_owned()));
+    }
+
+    fn on_select_all_text(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(thread) = self.thread.as_mut() else {
+            return;
+        };
+        let Some(owner) = thread
+            .selection
+            .as_ref()
+            .map(|selection| selection.owner.clone())
+        else {
+            return;
+        };
+        let Some(text) = thread.readable.get(&owner) else {
+            return;
+        };
+        thread.selection = Some(Selection::whole(owner, text));
+        cx.notify();
     }
 
     fn render_event(kind: EventKind, time: &str, rail: Option<Div>, colors: &Theme) -> AnyElement {
@@ -622,6 +909,7 @@ impl OutlineView {
         time: &str,
         rail: Option<Div>,
         font: &Font,
+        readable: &mut HashMap<SharedString, Rc<Selectable>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let colors = theme(cx);
@@ -753,7 +1041,13 @@ impl OutlineView {
                 )
                 .into_any_element()
         } else {
-            self.comment_text(&format!("comment-text-{id}"), &comment.body, font, cx)
+            self.comment_text(
+                &format!("comment-text-{id}"),
+                &comment.body,
+                font,
+                readable,
+                cx,
+            )
         };
         div()
             .id(SharedString::from(format!("comment-{id}")))
@@ -783,7 +1077,8 @@ impl OutlineView {
         body: &str,
         rail: Option<Div>,
         font: &Font,
-        cx: &App,
+        readable: &mut HashMap<SharedString, Rc<Selectable>>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         let colors = theme(cx);
         div()
@@ -815,7 +1110,13 @@ impl OutlineView {
                             .text_color(colors.muted)
                             .child("Sending\u{2026}"),
                     )
-                    .child(self.comment_text(&format!("pending-text-{ticket}"), body, font, cx)),
+                    .child(self.comment_text(
+                        &format!("pending-text-{ticket}"),
+                        body,
+                        font,
+                        readable,
+                        cx,
+                    )),
             )
             .into_any_element()
     }
@@ -909,6 +1210,7 @@ impl OutlineView {
             );
 
         let mut log: Vec<AnyElement> = Vec::new();
+        let mut readable = HashMap::new();
         if load_failed {
             log.push(
                 div()
@@ -953,10 +1255,10 @@ impl OutlineView {
                         Self::render_event(*kind, time, rail, &colors)
                     }
                     Entry::Logged(TimelineItem::Comment(comment)) => {
-                        self.render_comment(comment, time, rail, &font, cx)
+                        self.render_comment(comment, time, rail, &font, &mut readable, cx)
                     }
                     Entry::Pending { ticket, body, .. } => {
-                        self.render_pending(*ticket, body, rail, &font, cx)
+                        self.render_pending(*ticket, body, rail, &font, &mut readable, cx)
                     }
                 });
             }
@@ -972,6 +1274,14 @@ impl OutlineView {
                     .child("Nothing written yet. Note what you did or found.")
                     .into_any_element(),
             );
+        }
+
+        if let Some(thread) = self.thread.as_mut() {
+            thread.selection = thread.selection.take().and_then(|mut selection| {
+                selection.fit(readable.get(&selection.owner)?.len());
+                Some(selection)
+            });
+            thread.readable = readable;
         }
 
         let composer_focused = self.composer.focus_handle(cx).is_focused(window);
@@ -1058,6 +1368,11 @@ impl OutlineView {
                 .child(
                     div()
                         .id("thread-log")
+                        .debug_selector(|| "thread-log".into())
+                        .key_context("ThreadLog")
+                        .track_focus(&self.log_focus)
+                        .on_action(cx.listener(Self::on_copy_text))
+                        .on_action(cx.listener(Self::on_select_all_text))
                         .flex_1()
                         .min_h_0()
                         .overflow_y_scroll()
@@ -1070,6 +1385,7 @@ impl OutlineView {
                         .children(log),
                 )
                 .child(compose)
+                .child(drag_tracker(cx.entity().downgrade()))
                 .into_any_element(),
         )
     }
