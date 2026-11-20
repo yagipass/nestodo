@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { byDay, isPostKey, snippet, type Entry, type Keys } from "./thread";
+import { byDay, isPostKey, type Entry, type Keys } from "./thread";
 
 function event(at: string): Entry {
   return { type: "event", kind: "completed", at };
@@ -42,30 +42,5 @@ describe("isPostKey", () => {
 
   it("never posts while an input method is composing, since its Enter only confirms the text being typed", () => {
     expect(isPostKey({ ...enter, isComposing: true })).toBe(false);
-  });
-});
-
-describe("snippet", () => {
-  it("shows the part of a long comment around the match, so the row shows why it was found", () => {
-    const body = `${"a".repeat(100)} the quote from B ${"z".repeat(100)}`;
-
-    const shown = snippet(body, "QUOTE", 10);
-
-    expect(shown.startsWith("…")).toBe(true);
-    expect(shown).toContain("the quote from B");
-    expect(shown.length).toBeLessThan(40);
-  });
-
-  it("marks a comment cut before its end, so a shortened snippet does not read as the whole comment", () => {
-    expect(snippet(`the quote from B ${"z".repeat(100)}`, "quote", 10)).toMatch(/^the quote from B z+…$/);
-  });
-
-  it("never cuts an emoji in half at either edge, so the row shows no broken character", () => {
-    const shown = snippet(`${"😀".repeat(20)}quote${"😀".repeat(20)}`, "quote", 3);
-    expect(shown).toBe("…😀😀😀quote😀😀😀…");
-  });
-
-  it("puts a multi-line comment on one line, since the row has room for one", () => {
-    expect(snippet("asked\n\ntwo   companies", "two")).toBe("asked two companies");
   });
 });

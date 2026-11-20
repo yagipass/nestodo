@@ -16,11 +16,13 @@ import {
   mergeIntoPrevious,
   moveBy,
   moveTo,
+  nextHit,
   openUnder,
   outdent,
   parentOf,
   remove,
   rename,
+  searchHits,
   setCollapsed,
   setComments,
   split,
@@ -32,7 +34,6 @@ import {
   type Outline,
 } from "../src/outline";
 import { Sync } from "../src/sync";
-import { snippet } from "../src/thread";
 import { ThreadPane } from "../src/thread-pane";
 import { encodePastedUrl, findLinks, tokens } from "../src/title";
 import { MAX_TITLE_LENGTH, SHOW_DONE_COOKIE } from "../src/todos";
@@ -256,13 +257,11 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
   const [outline, setOutline] = useState(() => fromTodos(todos));
   const [showDone, setShowDone] = useState(startShown);
   const [query, setQuery] = useState("");
-  const [filtering, setFiltering] = useState(false);
-  const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set());
+  const [searching, setSearching] = useState(false);
+  const [current, setCurrent] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [thread, setThread] = useState<string | null>(null);
   const [threadFocus, setThreadFocus] = useState<{ key: string; request: number } | null>(null);
-  const [commentHits, setCommentHits] = useState<ReadonlyMap<string, string>>(() => new Map());
-  const [searchRevision, setSearchRevision] = useState(0);
   const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [, setTracked] = useState(0);
   const [moving, setMoving] = useState<Focus | null>(null);
@@ -283,38 +282,17 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
   const clickCaret = useRef<number | null>(null);
   const refreshing = useRef(false);
   const reloading = useRef(false);
-  const filterInput = useRef<HTMLInputElement>(null);
-  const searchedFor = useRef("");
-  const filterButton = useRef<HTMLButtonElement>(null);
+  const searchInput = useRef<HTMLInputElement>(null);
+  const searchButton = useRef<HTMLButtonElement>(null);
 
-  const rows = visibleRows(outline, showDone, query, commentHits.size === 0 ? kept : new Set([...kept, ...commentHits.keys()]));
+  const rows = visibleRows(outline, showDone);
   const lines = guides(rows);
   const shownKeys = new Set(rows.map((row) => row.key));
-  const match = query.trim().toLowerCase();
+  const text = query.trim();
+  const hits = searchHits(outline, rows, text);
+  const at = current === null ? -1 : hits.indexOf(current);
   const threadItem = thread === null ? undefined : outline[thread];
   const avatarUrl = useShared()?.auth?.profile?.avatarUrl ?? null;
-
-  useEffect(() => {
-    const text = query.trim();
-    if (searchedFor.current !== text) {
-      searchedFor.current = text;
-      setCommentHits(new Map());
-    }
-    if (text === "") return;
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      fetch(`/api/v1/search?q=${encodeURIComponent(text)}`, { headers: { Accept: "application/json" }, signal: controller.signal })
-        .then((res) => (res.ok ? (res.json() as Promise<{ todos: { id: number; comment: string }[] }>) : null))
-        .then((found) => {
-          if (found && !controller.signal.aborted) setCommentHits(new Map(found.todos.map(({ id, comment }) => [sync.keyOf(id) ?? keyFor(id), comment])));
-        })
-        .catch(() => {});
-    }, 300);
-    return () => {
-      controller.abort();
-      clearTimeout(timer);
-    };
-  }, [query, searchRevision, sync]);
 
   useEffect(() => {
     const refresh = async () => {
@@ -380,14 +358,9 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     return true;
   }
 
-  function keep(keys: readonly string[]) {
-    if (query) setKept((previous) => (keys.every((key) => previous.has(key)) ? previous : new Set([...previous, ...keys])));
-  }
-
   function commit(change: Change, focus?: Focus) {
     setOutline(change.outline);
     sync.apply(change.ops);
-    keep(change.ops.map((op) => op.key));
     pendingFocus.current = focus ?? change.focus ?? null;
   }
 
@@ -408,18 +381,38 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     rememberShowDone(shown);
   }
 
-  function openFilter() {
-    flushSync(() => setFiltering(true));
-    filterInput.current?.focus();
+  function reveal(key: string) {
+    inputs.current.get(key)?.scrollIntoView({ block: "nearest" });
   }
 
-  function closeFilter() {
+  function search(value: string) {
+    setQuery(value);
+    const found = searchHits(outline, rows, value);
+    const next = current !== null && found.includes(current) ? current : nextHit(rows, found, current, 1);
+    setCurrent(next);
+    if (next !== null) reveal(next);
+  }
+
+  function openSearch() {
+    flushSync(() => setSearching(true));
+    searchInput.current?.focus();
+  }
+
+  function step(by: 1 | -1) {
+    const next = nextHit(rows, hits, current, by);
+    setCurrent(next);
+    if (next !== null) reveal(next);
+  }
+
+  function closeSearch() {
+    const found = at < 0 ? null : current;
     flushSync(() => {
       setQuery("");
-      setKept(new Set());
-      setFiltering(false);
+      setCurrent(null);
+      setSearching(false);
     });
-    filterButton.current?.focus();
+    if (found === null) return searchButton.current?.focus();
+    focusRow({ key: found, pos: outline[found].title.toLowerCase().indexOf(text.toLowerCase()) });
   }
 
   useEffect(() => {
@@ -439,7 +432,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
       }
       if (event.key !== "/" || event.metaKey || event.ctrlKey) return;
       event.preventDefault();
-      openFilter();
+      openSearch();
     };
     const onBeforeInput = (event: InputEvent) => {
       if (event.inputType !== "historyUndo" || !(event.target instanceof Element && event.target.closest(".outline"))) return;
@@ -524,7 +517,6 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     history.type(outline, next, key, composing);
     setOutline(next);
     sync.title(key, title);
-    keep([key]);
   }
 
   function openThread(key: string) {
@@ -627,36 +619,67 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     <>
       <AppHeader>
         <div className="outline-tools">
-          {filtering ? (
+          {searching ? (
             <label
               className="search"
               onBlur={(event) => {
-                if (!query && !event.currentTarget.contains(event.relatedTarget)) setFiltering(false);
+                if (!query && !event.currentTarget.contains(event.relatedTarget)) setSearching(false);
               }}
             >
               <Icon name="filter" size={18} />
               <input
-                ref={filterInput}
+                ref={searchInput}
                 type="search"
-                aria-label="Filter"
-                placeholder="Filter"
+                aria-label="Search"
+                placeholder="Search"
                 value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setKept(new Set());
-                }}
+                onChange={(event) => search(event.target.value)}
                 onKeyDown={(event) => {
-                  if (composingKey(event.nativeEvent) || event.key !== "Escape") return;
-                  event.preventDefault();
-                  closeFilter();
+                  if (composingKey(event.nativeEvent) || event.altKey || event.metaKey || event.ctrlKey) return;
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    step(event.shiftKey ? -1 : 1);
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    closeSearch();
+                  }
                 }}
               />
-              <button type="button" className="icon-button" aria-label="Close filter" onClick={closeFilter}>
+              {text && (
+                <>
+                  <span className="search-count" aria-live="polite">
+                    {at + 1} / {hits.length}
+                  </span>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label="Previous match"
+                    data-tip="Previous match (⇧ Enter)"
+                    disabled={hits.length === 0}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => step(-1)}
+                  >
+                    <Icon name="up" size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label="Next match"
+                    data-tip="Next match (Enter)"
+                    disabled={hits.length === 0}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => step(1)}
+                  >
+                    <Icon name="down" size={16} />
+                  </button>
+                </>
+              )}
+              <button type="button" className="icon-button" aria-label="Close search" onClick={closeSearch}>
                 <Icon name="close" size={16} />
               </button>
             </label>
           ) : (
-            <button ref={filterButton} type="button" className="icon-button" aria-label="Filter" data-tip="Filter (/)" onClick={openFilter}>
+            <button ref={searchButton} type="button" className="icon-button" aria-label="Search" data-tip="Search (/)" onClick={openSearch}>
               <Icon name="filter" size={20} />
             </button>
           )}
@@ -683,15 +706,6 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
           </p>
         )}
 
-        {query && (
-          <p className="filter-note">
-            Matches are shown with their parents.
-            <button type="button" className="text-button" onClick={closeFilter}>
-              Clear filter
-            </button>
-          </p>
-        )}
-
         <ul className="outline">
           {rows.map((row, index) => {
             const item = outline[row.key];
@@ -702,7 +716,9 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
             return (
               <li
                 key={row.key}
-                className={["row", hasChildren && "parent", item.done ? "done" : row.under && "under", thread === row.key && "threaded"].filter(Boolean).join(" ")}
+                className={["row", hasChildren && "parent", item.done ? "done" : row.under && "under", thread === row.key && "threaded", at >= 0 && current === row.key && "current-match"]
+                  .filter(Boolean)
+                  .join(" ")}
               >
                 {through.map((continues, level) => (
                   <span key={level} className={["guide", continues && "continues", level === row.depth - 1 && "branch"].filter(Boolean).join(" ")} aria-hidden="true" />
@@ -765,14 +781,6 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
                       <Tokens text={item.title} query={query} />
                     </span>
                   </span>
-                  {match && commentHits.has(row.key) && (
-                    <span className="comment-match">
-                      <Icon name="comment" size={13} />
-                      <span>
-                        <Tokens text={snippet(commentHits.get(row.key)!, match)} query={query} />
-                      </span>
-                    </span>
-                  )}
                 </span>
                 <button
                   type="button"
@@ -800,8 +808,6 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
           })}
         </ul>
 
-        {query && rows.length === 0 && <p className="empty">No matches.</p>}
-
         <button type="button" className="add-item" onClick={() => apply(append(outline, ROOT, fresh()))}>
           <Icon name="add" size={18} />
           Add item
@@ -825,7 +831,6 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
           draft={drafts.get(thread) ?? ""}
           onDraft={editDraft}
           onCount={countComments}
-          onChanged={() => setSearchRevision((n) => n + 1)}
           onBack={() => focusRow({ key: thread, pos: -1 })}
           onClose={() => {
             setThread(null);

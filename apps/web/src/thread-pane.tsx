@@ -36,7 +36,6 @@ type Props = {
   draft: string;
   onDraft: (key: string, update: (current: string) => string) => void;
   onCount: (key: string, delta: number) => void;
-  onChanged: () => void;
   onBack: () => void;
   onClose: () => void;
 };
@@ -107,7 +106,6 @@ export function ThreadPane({
   draft,
   onDraft,
   onCount,
-  onChanged,
   onBack,
   onClose,
 }: Props) {
@@ -217,7 +215,6 @@ export function ThreadPane({
         mutations.current += 1;
         settled();
         setItems((current) => [...(current ?? []), { type: "comment", ...comment }]);
-        onChanged();
       },
       () => {
         settled();
@@ -239,7 +236,6 @@ export function ThreadPane({
       (comment) => {
         mutations.current += 1;
         setItems((current) => current?.map((item) => (item.type === "comment" && item.id === id ? { type: "comment", ...comment } : item)) ?? null);
-        onChanged();
       },
       () => {},
     );
@@ -253,7 +249,6 @@ export function ThreadPane({
     sync.deleteComment(comment.id).then(
       () => {
         mutations.current += 1;
-        onChanged();
       },
       () => {},
     );

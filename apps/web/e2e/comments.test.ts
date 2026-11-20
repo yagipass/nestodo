@@ -213,7 +213,7 @@ describe("undoing a delete", () => {
 });
 
 describe("searching comments", () => {
-  it("finds todos by what their comments say, with the first comment that matches, so the filter covers the work log too", async () => {
+  it("finds todos by what their comments say, with the first comment that matches, so the search covers the work log too", async () => {
     const client = await signedInUser();
     const kitchen = await client.createTodo("kitchen");
     await client.comment(kitchen.id, "asked for a quote");

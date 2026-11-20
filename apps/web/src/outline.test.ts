@@ -11,9 +11,11 @@ import {
   mergeIntoPrevious,
   moveBy,
   moveTo,
+  nextHit,
   openUnder,
   outdent,
   remove,
+  searchHits,
   setCollapsed,
   split,
   subtree,
@@ -46,8 +48,8 @@ function titles(outline: Outline, parent = ROOT): unknown[] {
   );
 }
 
-function shown(outline: Outline, showDone = true, query = "") {
-  return new Set(visibleRows(outline, showDone, query).map((row) => row.key));
+function shown(outline: Outline, showDone = true) {
+  return new Set(visibleRows(outline, showDone).map((row) => row.key));
 }
 
 const sample = fromTodos([
@@ -135,12 +137,6 @@ describe("split", () => {
     ]);
   });
 
-  it("adds a sibling at the end of a parent whose children the filter hides, so Enter follows the rows on screen as it does on a row without children", () => {
-    const outline = fromTodos([todo(1, "trip"), todo(2, "tickets", 1), todo(3, "home")]);
-    const change = split(outline, "t1", "trip".length, "n1", shown(outline, true, "trip"));
-    expect(change.ops).toEqual([{ type: "create", key: "n1", parent: ROOT, index: 1, title: "" }]);
-  });
-
   it("starts the first child when some of the parent's children are on screen, even with others hidden, so the new row appears right under it", () => {
     const outline = fromTodos([todo(1, "trip"), todo(2, "tickets", 1, { done: true }), todo(3, "passport", 1), todo(4, "home")]);
     const change = split(outline, "t1", "trip".length, "n1", shown(outline, false));
@@ -174,11 +170,6 @@ describe("indent and outdent", () => {
   it("does nothing when the only rows above are hidden as completed, rather than nesting into one nobody can see", () => {
     const outline = fromTodos([todo(1, "hidden", null, { done: true }), todo(2, "row")]);
     expect(indent(outline, "t2", shown(outline, false))).toBeNull();
-  });
-
-  it("skips rows the filter hides, so a row is nested under the match the user sees above it", () => {
-    const outline = fromTodos([todo(1, "buy milk"), todo(2, "call mom"), todo(3, "buy eggs")]);
-    expect(indent(outline, "t3", shown(outline, true, "buy"))!.ops).toEqual([{ type: "move", key: "t3", parent: "t1", index: 0 }]);
   });
 
   it("does nothing for the first row in its list", () => {
@@ -228,13 +219,6 @@ describe("moveBy", () => {
   it("does nothing when the only siblings that way are hidden as completed, rather than making a move nobody can see", () => {
     const outline = fromTodos([todo(1, "A"), todo(2, "Done", null, { done: true })]);
     expect(moveBy(outline, "t1", 1, shown(outline, false))).toBeNull();
-  });
-
-  it("skips siblings the filter hides, so the row moves past the next match the user can see", () => {
-    const outline = fromTodos([todo(1, "buy milk"), todo(2, "call mom"), todo(3, "buy eggs")]);
-    const down = moveBy(outline, "t1", 1, shown(outline, true, "buy"))!;
-    expect(visibleRows(down.outline, true, "buy").map((row) => row.key)).toEqual(["t3", "t1"]);
-    expect(down.ops).toEqual([{ type: "move", key: "t1", parent: ROOT, index: 2 }]);
   });
 });
 
@@ -487,18 +471,55 @@ describe("visibleRows", () => {
   it("hides a completed row together with its subtree when completed rows are hidden", () => {
     expect(visibleRows(outline, false).map((row) => row.key)).toEqual(["t3"]);
   });
+});
 
-  it("shows filter matches with their parents even inside collapsed rows", () => {
-    expect(visibleRows(outline, true, "INSIDE").map((row) => row.key)).toEqual(["t3", "t4"]);
+describe("search", () => {
+  const outline = fromTodos([
+    todo(1, "Trip to Kyoto"),
+    todo(2, "book hotel", 1),
+    todo(3, "trip insurance", 1, { done: true }),
+    todo(4, "groceries", null, { collapsed: true }),
+    todo(5, "trip snacks", 4),
+    todo(6, "dentist"),
+    todo(7, "pack for the TRIP"),
+  ]);
+  const rows = visibleRows(outline, false);
+
+  it("marks the rows on screen whose titles contain the words, whatever their case, in the order they appear", () => {
+    expect(searchHits(outline, rows, " trip ")).toEqual(["t1", "t7"]);
   });
 
-  it("shows rows the server found by their comments, with their parents, since comments are not kept in the outline", () => {
-    const nested = fromTodos([todo(1, "health"), todo(2, "dentist", 1), todo(3, "milk")]);
-    expect(visibleRows(nested, true, "weekday", new Set(["t2"])).map((row) => row.key)).toEqual(["t1", "t2"]);
+  it("leaves out matches inside collapsed rows and hidden completed rows, so every match is a row the user can see", () => {
+    expect(searchHits(outline, rows, "trip")).not.toContain("t5");
+    expect(searchHits(outline, rows, "trip")).not.toContain("t3");
+    expect(searchHits(outline, visibleRows(outline, true), "trip")).toEqual(["t1", "t3", "t7"]);
   });
 
-  it("keeps rows created during a filter visible even though their text does not match yet", () => {
-    expect(visibleRows(outline, true, "inside", new Set(["t1"])).map((row) => row.key)).toEqual(["t1", "t3", "t4"]);
+  it("marks nothing while the words are blank, so opening the search leaves the outline as it was", () => {
+    expect(searchHits(outline, rows, "  ")).toEqual([]);
+  });
+
+  it("steps to the next match below and wraps around to the first after the last", () => {
+    const hits = ["t1", "t6", "t7"];
+    expect(nextHit(rows, hits, "t1", 1)).toBe("t6");
+    expect(nextHit(rows, hits, "t7", 1)).toBe("t1");
+  });
+
+  it("steps to the previous match above and wraps around to the last before the first", () => {
+    const hits = ["t1", "t6", "t7"];
+    expect(nextHit(rows, hits, "t6", -1)).toBe("t1");
+    expect(nextHit(rows, hits, "t1", -1)).toBe("t7");
+  });
+
+  it("goes on from the row of the current match after it stops matching, so editing it does not send the user back to the top", () => {
+    expect(nextHit(rows, ["t1", "t7"], "t6", 1)).toBe("t7");
+    expect(nextHit(rows, ["t1", "t7"], "t6", -1)).toBe("t1");
+  });
+
+  it("starts from the first match, or the last when going back, when there is no current match on screen", () => {
+    expect(nextHit(rows, ["t1", "t7"], null, 1)).toBe("t1");
+    expect(nextHit(rows, ["t1", "t7"], "t5", -1)).toBe("t7");
+    expect(nextHit(rows, [], null, 1)).toBeNull();
   });
 });
 

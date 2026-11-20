@@ -47,7 +47,8 @@ const SHORTCUTS: { name: string; shortcuts: Shortcut[] }[] = [
       ["Previous / next item", "↑ / ↓"],
       ["Previous / next item", "Ctrl P / Ctrl N"],
       ["Show / hide completed", "Ctrl/⌘ O"],
-      ["Filter", "/", "outside an item"],
+      ["Search", "/", "outside an item"],
+      ["Next / previous match", "Enter / ⇧ Enter", "in search"],
     ],
   },
 ];
@@ -191,7 +192,7 @@ export function AppHeader({ children }: { children?: ReactNode }) {
     <header className="app-header">
       <Link href="/" className="brand">
         <img src="/icon.svg" alt="" width="32" height="32" />
-        Nestodo
+        <span className="brand-name">Nestodo</span>
       </Link>
       {children}
       {user && <AccountMenu email={user.email} profile={auth?.profile ?? null} />}
