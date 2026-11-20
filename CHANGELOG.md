@@ -1,5 +1,15 @@
 # Changelog
 
+## [v0.14.0](https://github.com/yagipass/nestodo/compare/v0.13.1...v0.14.0) - 2026-11-20
+
+### Web
+- feat(web): highlight search matches in place and step through them by @yagipass in https://github.com/yagipass/nestodo/pull/167
+### Desktop
+- feat(desktop): highlight search matches in place and step through them by @yagipass in https://github.com/yagipass/nestodo/pull/168
+- feat(desktop): open the search with Cmd+F, even while editing a todo by @yagipass in https://github.com/yagipass/nestodo/pull/172
+### Documentation
+- docs: describe the Android app and drop the web app's desktop install by @yagipass in https://github.com/yagipass/nestodo/pull/170
+
 ## [v0.13.1](https://github.com/yagipass/nestodo/compare/v0.13.0...v0.13.1) - 2026-11-19
 
 ### Web
