@@ -16,6 +16,7 @@
   --on-accent: light-dark(#ffffff, #2a2150);
   --danger: light-dark(#c4372b, #f07468);
   --match: light-dark(#fbe3a1, #6b5310);
+  --match-current: light-dark(#f6b34c, #9a5a08);
   --grid: light-dark(#efebf7, #2e2648);
   --added: light-dark(#e07a2e, #e8894a);
   --added-strong: light-dark(#b05a1c, #f6b585);
@@ -64,6 +65,17 @@ body {
   align-items: center;
   gap: 6px;
   padding: 4px 4px 18px;
+}
+
+.app-header:has(.search) {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+}
+
+:root:has(.app-header .search) {
+  scroll-padding-top: 64px;
 }
 
 .brand {
@@ -461,7 +473,7 @@ a {
 
 .search {
   display: flex;
-  flex: 0 1 280px;
+  flex: 0 1 340px;
   align-items: center;
   gap: 8px;
   min-width: 120px;
@@ -499,6 +511,29 @@ a {
   width: 26px;
   height: 26px;
   border-radius: 7px;
+}
+
+.search .icon-button:disabled {
+  background: none;
+  color: var(--muted);
+  opacity: 0.4;
+}
+
+.search-count {
+  flex: none;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 560px) {
+  .app-header:has(.search) .brand-name,
+  .outline-tools .search > svg {
+    display: none;
+  }
+
+  .outline-tools .search {
+    gap: 4px;
+  }
 }
 
 .pill {
@@ -541,24 +576,6 @@ a {
   margin: 0 0 12px 32px;
   color: var(--danger);
   font-size: 0.875rem;
-}
-
-.filter-note,
-.empty {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: 0.8125rem;
-}
-
-.filter-note {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 10px 32px;
-}
-
-.empty {
-  margin-left: 32px;
 }
 
 .outline-page {
@@ -784,39 +801,13 @@ a {
   background: var(--guide);
 }
 
-.comment-match .link {
-  padding-block: 0;
-  font-size: inherit;
-  line-height: inherit;
-  vertical-align: top;
-}
-
 .match {
   border-radius: 2px;
   background: var(--match);
 }
 
-.comment-match {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  margin: -4px 0 6px;
-  padding: 0 4px;
-  color: var(--muted);
-  font-size: 0.8125rem;
-  line-height: 1.5;
-}
-
-.comment-match svg {
-  flex: none;
-}
-
-.comment-match > span {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+.current-match .match {
+  background: var(--match-current);
 }
 
 .comment-button,

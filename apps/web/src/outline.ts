@@ -105,28 +105,33 @@ function heightOf(outline: Outline, key: string): number {
   return outline[key].children.reduce((height, child) => Math.max(height, heightOf(outline, child)), 0) + 1;
 }
 
-export function visibleRows(outline: Outline, showDone: boolean, query = "", keep: ReadonlySet<string> = new Set()): Row[] {
-  const q = query.trim().toLowerCase();
-  const hit = new Set<string>();
-  const mark = (key: string): boolean => {
-    let any = outline[key].title.toLowerCase().includes(q) || keep.has(key);
-    for (const child of outline[key].children) if (mark(child)) any = true;
-    if (any) hit.add(key);
-    return any;
-  };
-  if (q) outline[ROOT].children.forEach(mark);
+export function visibleRows(outline: Outline, showDone: boolean): Row[] {
   const rows: Row[] = [];
   const walk = (key: string, depth: number, under: boolean) => {
     for (const child of outline[key].children) {
       const item = outline[child];
       if (!showDone && item.done) continue;
-      if (q && !hit.has(child)) continue;
       rows.push({ key: child, depth, under });
-      if (q || !item.collapsed) walk(child, depth + 1, under || item.done);
+      if (!item.collapsed) walk(child, depth + 1, under || item.done);
     }
   };
   walk(ROOT, 0, false);
   return rows;
+}
+
+export function searchHits(outline: Outline, rows: readonly Row[], query: string): string[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  return rows.filter((row) => outline[row.key].title.toLowerCase().includes(q)).map((row) => row.key);
+}
+
+export function nextHit(rows: readonly Row[], hits: readonly string[], from: string | null, step: 1 | -1): string | null {
+  if (hits.length === 0) return null;
+  const at = from === null ? -1 : rows.findIndex((row) => row.key === from);
+  const wrap = step === 1 ? hits[0] : hits[hits.length - 1];
+  if (at < 0) return wrap;
+  const order = new Map(rows.map((row, index) => [row.key, index]));
+  return (step === 1 ? hits : [...hits].reverse()).find((hit) => (order.get(hit)! - at) * step > 0) ?? wrap;
 }
 
 export type Guide = { through: boolean[]; stem: boolean };
