@@ -49,7 +49,7 @@ fn open<'a>(
 
 fn key_of(view: &Entity<OutlineView>, cx: &mut VisualTestContext, title: &str) -> Key {
     view.read_with(cx, |view, _| {
-        visible_rows(&view.outline, true, "", &HashSet::new())
+        visible_rows(&view.outline, true)
             .into_iter()
             .find(|row| view.outline.item(&row.key).title == title)
             .map_or_else(|| panic!("no row titled {title:?}"), |row| row.key)
@@ -74,6 +74,31 @@ fn focused(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> Option<(St
 fn settle(cx: &mut VisualTestContext) {
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
+}
+
+fn matches(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> Vec<String> {
+    view.read_with(cx, |view, _| {
+        view.hits(&view.rows())
+            .into_iter()
+            .map(|key| view.outline.item(&key).title.clone())
+            .collect()
+    })
+}
+
+fn current_match(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> Option<String> {
+    view.read_with(cx, |view, _| {
+        view.current_match(&view.hits(&view.rows()))
+            .map(|key| view.outline.item(&key).title.clone())
+    })
+}
+
+fn searching(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> bool {
+    view.read_with(cx, |view, _| view.searching)
+}
+
+fn search_focused(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> bool {
+    let field = view.read_with(cx, |view, _| view.search_field.clone());
+    cx.update(|window, cx| field.focus_handle(cx).is_focused(window))
 }
 
 fn titles(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> Vec<String> {
@@ -368,20 +393,76 @@ fn moving_the_caret_past_the_window_edge_scrolls_its_row_into_view_so_typing_is_
 }
 
 #[gpui::test]
-fn the_filter_banner_above_the_rows_does_not_shift_which_row_is_scrolled_into_view(
+fn enter_in_the_search_steps_through_the_matches_and_scrolls_each_into_view_while_every_row_stays_in_place(
     cx: &mut TestAppContext,
 ) {
     let server = long_list();
     let (view, cx) = open(cx, &server, true);
     cx.simulate_resize(gpui::size(px(600.), px(400.)));
-    view.update_in(cx, OutlineView::open_filter);
-    cx.simulate_input("Row");
-    focus(&view, cx, "Row 1", 0);
+    view.update_in(cx, OutlineView::open_search);
+    cx.simulate_input("row 4");
+    assert_eq!(titles(&view, cx).len(), 40);
+    assert_eq!(matches(&view, cx), ["Row 4", "Row 40"]);
+    assert_eq!(current_match(&view, cx), Some("Row 4".into()));
 
-    press(cx, "ctrl-n", 29);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(current_match(&view, cx), Some("Row 40".into()));
+    assert!(on_screen(&view, cx, "title-t40"));
+    assert!(search_focused(&view, cx));
 
-    assert_eq!(focused(&view, cx), Some(("Row 30".into(), 0)));
-    assert!(on_screen(&view, cx, "title-t30"));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(current_match(&view, cx), Some("Row 4".into()));
+    assert!(on_screen(&view, cx, "title-t4"));
+
+    cx.simulate_keystrokes("shift-enter");
+    assert_eq!(current_match(&view, cx), Some("Row 40".into()));
+
+    click_on(cx, "previous-match");
+    assert_eq!(current_match(&view, cx), Some("Row 4".into()));
+    assert!(search_focused(&view, cx));
+}
+
+#[gpui::test]
+fn escape_closes_the_search_and_puts_the_caret_on_the_current_match_so_what_was_found_can_be_edited(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    view.update_in(cx, OutlineView::open_search);
+    cx.simulate_input("EAD");
+    assert_eq!(current_match(&view, cx), Some("Bread".into()));
+
+    cx.simulate_keystrokes("escape");
+
+    assert!(!searching(&view, cx));
+    assert_eq!(focused(&view, cx), Some(("Bread".into(), 2)));
+    assert_eq!(matches(&view, cx), [] as [String; 0]);
+}
+
+#[gpui::test]
+fn editing_the_current_match_so_it_no_longer_matches_lets_enter_carry_on_from_that_row_instead_of_starting_over(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Bread flour"),
+        seed("Buy bread"),
+        seed("Milk"),
+        seed("Bread rolls"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    view.update_in(cx, OutlineView::open_search);
+    cx.simulate_input("bread");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(current_match(&view, cx), Some("Buy bread".into()));
+
+    focus(&view, cx, "Buy bread", END);
+    press(cx, "backspace", "bread".len());
+    assert_eq!(matches(&view, cx), ["Bread flour", "Bread rolls"]);
+    assert_eq!(current_match(&view, cx), None);
+
+    view.update_in(cx, OutlineView::open_search);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(current_match(&view, cx), Some("Bread rolls".into()));
 }
 
 fn thread_of(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> Option<String> {
@@ -685,33 +766,22 @@ fn cmd_z_after_joining_rows_brings_back_the_joined_todo_itself_so_its_id_and_his
 }
 
 #[gpui::test]
-fn the_filter_also_finds_rows_by_their_comments_once_typing_pauses_and_shows_the_matching_comment_under_the_title(
+fn the_search_matches_only_what_the_outline_shows_so_words_found_only_in_a_comment_count_as_no_match(
     cx: &mut TestAppContext,
 ) {
     let server = Arc::new(FakeServer::with(vec![
         seed("Health"),
         seed("Dentist").under(1).comment("Only weekday mornings"),
-        seed("Milk"),
+        seed("Weekday chores"),
     ]));
     let (view, cx) = open(cx, &server, true);
-    view.update_in(cx, OutlineView::open_filter);
+    view.update_in(cx, OutlineView::open_search);
 
-    for typed in ["w", "e", "e", "k", "day"] {
-        cx.simulate_input(typed);
-        cx.executor().advance_clock(Duration::from_millis(100));
-        cx.run_until_parked();
-    }
-    assert_eq!(server.searches(), [] as [String; 0]);
-    assert_eq!(titles(&view, cx), [] as [String; 0]);
+    cx.simulate_input("weekday");
+    settle(cx);
 
-    cx.executor().advance_clock(Duration::from_millis(300));
-    cx.run_until_parked();
-    assert_eq!(server.searches(), ["weekday"]);
-    assert_eq!(titles(&view, cx), ["Health", "  Dentist"]);
-    assert!(cx.debug_bounds("comment-hit-t2").is_some());
-
-    cx.simulate_keystrokes("escape");
-    assert_eq!(titles(&view, cx), ["Health", "  Dentist", "Milk"]);
+    assert_eq!(matches(&view, cx), ["Weekday chores"]);
+    assert_eq!(current_match(&view, cx), Some("Weekday chores".into()));
 }
 
 #[gpui::test]
@@ -1063,32 +1133,6 @@ fn a_row_the_server_has_not_created_yet_shows_no_made_up_creation_time_until_the
 }
 
 #[gpui::test]
-fn the_filter_forgets_rows_found_through_the_previous_words_comments_as_soon_as_the_words_change_but_not_for_a_trailing_space(
-    cx: &mut TestAppContext,
-) {
-    let server = Arc::new(FakeServer::with(vec![
-        seed("Health"),
-        seed("Dentist").under(1).comment("Only weekday mornings"),
-        seed("Milk"),
-    ]));
-    let (view, cx) = open(cx, &server, true);
-    view.update_in(cx, OutlineView::open_filter);
-    cx.simulate_input("weekday");
-    cx.executor().advance_clock(Duration::from_millis(300));
-    cx.run_until_parked();
-    assert_eq!(titles(&view, cx), ["Health", "  Dentist"]);
-
-    cx.simulate_input(" ");
-    cx.executor().advance_clock(Duration::from_millis(300));
-    cx.run_until_parked();
-    assert_eq!(titles(&view, cx), ["Health", "  Dentist"]);
-    assert_eq!(server.searches(), ["weekday"]);
-
-    cx.simulate_input("s");
-    assert_eq!(titles(&view, cx), [] as [String; 0]);
-}
-
-#[gpui::test]
 fn cmd_shift_m_moves_the_row_under_the_chosen_todo(cx: &mut TestAppContext) {
     let server = groceries();
     let (view, cx) = open(cx, &server, true);
@@ -1436,7 +1480,7 @@ fn an_ime_conversion_is_taken_back_in_one_undo_step(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn slash_opens_the_filter_only_outside_a_title_so_it_can_still_be_typed(cx: &mut TestAppContext) {
+fn slash_opens_the_search_only_outside_a_title_so_it_can_still_be_typed(cx: &mut TestAppContext) {
     let server = groceries();
     let (view, cx) = open(cx, &server, true);
     focus(&view, cx, "Trip", END);
@@ -1444,39 +1488,17 @@ fn slash_opens_the_filter_only_outside_a_title_so_it_can_still_be_typed(cx: &mut
     cx.simulate_input("/");
     settle(cx);
     assert_eq!(server.tree(), "Groceries\n  Milk\n  Bread\nTrip/");
-    assert!(!view.read_with(cx, |view, _| view.filtering));
+    assert!(!searching(&view, cx));
 
     view.update_in(cx, super::OutlineView::blur_editor);
     cx.simulate_input("/");
-    assert!(view.read_with(cx, |view, _| view.filtering));
+    assert!(searching(&view, cx));
     cx.simulate_input("bre");
-    assert_eq!(titles(&view, cx), ["Groceries", "  Bread"]);
-
-    cx.simulate_keystrokes("escape");
-    assert!(!view.read_with(cx, |view, _| view.filtering));
+    assert_eq!(matches(&view, cx), ["Bread"]);
     assert_eq!(
         titles(&view, cx),
         ["Groceries", "  Milk", "  Bread", "Trip/"]
     );
-}
-
-#[gpui::test]
-fn a_row_added_during_a_filter_stays_visible_until_the_query_changes(cx: &mut TestAppContext) {
-    let server = groceries();
-    let (view, cx) = open(cx, &server, true);
-    view.update_in(cx, super::OutlineView::open_filter);
-    cx.simulate_input("bread");
-    focus(&view, cx, "Bread", END);
-
-    cx.simulate_keystrokes("enter");
-    cx.simulate_input("Jam");
-    settle(cx);
-    assert_eq!(titles(&view, cx), ["Groceries", "  Bread", "  Jam"]);
-
-    view.update_in(cx, super::OutlineView::open_filter);
-    cx.simulate_keystrokes("backspace");
-
-    assert_eq!(titles(&view, cx), ["Groceries", "  Bread"]);
 }
 
 #[gpui::test]
@@ -1674,14 +1696,14 @@ fn enter_right_after_typing_saves_the_typing_before_the_new_row_so_a_failed_add_
 }
 
 #[gpui::test]
-fn switching_to_another_app_with_the_empty_filter_open_keeps_it_open_so_a_search_term_copied_there_can_be_typed_on_return(
+fn switching_to_another_app_with_the_empty_search_open_keeps_it_open_so_a_search_term_copied_there_can_be_typed_on_return(
     cx: &mut TestAppContext,
 ) {
     let server = groceries();
     let (view, cx) = open(cx, &server, true);
     cx.update(|window, _| window.activate_window());
     cx.run_until_parked();
-    view.update_in(cx, super::OutlineView::open_filter);
+    view.update_in(cx, super::OutlineView::open_search);
     cx.run_until_parked();
 
     cx.deactivate_window();
@@ -1689,7 +1711,7 @@ fn switching_to_another_app_with_the_empty_filter_open_keeps_it_open_so_a_search
     cx.run_until_parked();
     cx.simulate_input("milk");
 
-    assert_eq!(titles(&view, cx), ["Groceries", "  Milk"]);
+    assert_eq!(matches(&view, cx), ["Milk"]);
 }
 
 #[gpui::test]

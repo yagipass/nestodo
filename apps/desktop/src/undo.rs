@@ -158,7 +158,7 @@ mod tests {
     }
 
     fn all(outline: &Outline) -> std::collections::HashSet<Key> {
-        shown(outline, true, "")
+        shown(outline, true)
     }
 
     fn at(key: &str, pos: usize) -> Focus {

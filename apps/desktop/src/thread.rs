@@ -63,17 +63,6 @@ pub struct Timeline {
     pub items: Vec<TimelineItem>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub struct SearchHit {
-    pub id: u64,
-    pub comment: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub struct SearchHits {
-    pub todos: Vec<SearchHit>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Entry {
     Logged(TimelineItem),
@@ -150,37 +139,6 @@ where
         }
     }
     days
-}
-
-#[must_use]
-pub fn snippet(body: &str, query: &str, room: usize) -> String {
-    let q = query.trim().to_lowercase();
-    let chars: Vec<char> = body.chars().collect();
-    let mut lowered = String::new();
-    let mut origin = Vec::new();
-    for (index, c) in chars.iter().enumerate() {
-        for lower in c.to_lowercase() {
-            lowered.push(lower);
-            origin.extend(std::iter::repeat_n(index, lower.len_utf8()));
-        }
-    }
-    let at = if q.is_empty() {
-        None
-    } else {
-        lowered.find(&q).map(|found| origin[found])
-    };
-    let start = at.map_or(0, |at| at.saturating_sub(room));
-    let end = (start + room * 2 + q.chars().count()).min(chars.len());
-    let text: String = chars[start..end].iter().collect();
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let cut = |rest: &[char]| {
-        if rest.iter().any(|c| !c.is_whitespace()) {
-            "\u{2026}"
-        } else {
-            ""
-        }
-    };
-    format!("{}{text}{}", cut(&chars[..start]), cut(&chars[end..]))
 }
 
 #[cfg(test)]
@@ -320,53 +278,5 @@ mod tests {
 
         assert_eq!(days.len(), 1);
         assert_eq!(days[0].entries.len(), 2);
-    }
-
-    #[test]
-    fn shows_the_part_of_a_long_comment_around_the_match_so_the_row_shows_why_it_was_found() {
-        let body = format!("{} the quote from B {}", "a".repeat(100), "z".repeat(100));
-
-        let shown = snippet(&body, "QUOTE", 10);
-
-        assert!(shown.starts_with('\u{2026}'));
-        assert!(shown.contains("the quote from B"));
-        assert!(shown.chars().count() < 40);
-    }
-
-    #[test]
-    fn marks_a_cut_at_the_end_too_so_a_comment_cut_short_does_not_look_complete() {
-        let body = format!("asked about the quote {}", "z ".repeat(100));
-
-        assert!(snippet(&body, "quote", 10).ends_with('\u{2026}'));
-        assert_eq!(snippet("quote it   \n", "quote", 2), "quote it");
-    }
-
-    #[test]
-    fn counts_the_room_around_the_match_in_characters_so_japanese_gets_as_much_context_as_english()
-    {
-        assert_eq!(
-            snippet(
-                "\u{3042}\u{3044}\u{3046}\u{3048}\u{304a}\u{304b}\u{304d}\u{304f}\u{3051}\u{3053}",
-                "\u{304b}",
-                2
-            ),
-            "\u{2026}\u{3048}\u{304a}\u{304b}\u{304d}\u{304f}\u{2026}"
-        );
-    }
-
-    #[test]
-    fn puts_a_multi_line_comment_on_one_line_since_the_row_has_room_for_one() {
-        assert_eq!(
-            snippet("asked\n\ntwo   companies", "two", 60),
-            "asked two companies"
-        );
-    }
-
-    #[test]
-    fn finds_the_match_after_text_that_changes_length_when_lowercased_so_the_snippet_never_misses_it()
-     {
-        let shown = snippet("\u{130}stanbul trip, ask about the hotel", "hotel", 3);
-
-        assert!(shown.contains("hotel"));
     }
 }
