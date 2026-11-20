@@ -2,10 +2,6 @@
 
 Manage your todos in the browser.
 
-## Desktop app
-
-On macOS or Windows, open the site in Chrome or Edge and click the install icon in the address bar. The app then opens in its own window with an icon in the Dock or taskbar, and updates with the site.
-
 ## Webhook
 
 In **Settings**, enter a URL, an optional bearer token or other headers, and the title of a top-level todo. Within 13 minutes of adding a todo under it with no comments or only a link, the server receives its id, title and comments:
