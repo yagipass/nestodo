@@ -13,8 +13,8 @@ I publish the code as it is. There is no public instance to sign up for, and no 
 
 ## Apps
 
-- [Web](apps/web/README.md): use it in the browser or install it as a desktop app.
-- [Android](apps/android/README.md)
+- [Web](apps/web/README.md): use it in the browser.
+- [Android](apps/android/README.md): a native app for Android phones.
 - [Desktop](apps/desktop/README.md): a native app for macOS.
 - [CLI](apps/cli/README.md): manage todos from the terminal.
 
