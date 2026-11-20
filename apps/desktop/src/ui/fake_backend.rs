@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use nestodo_desktop::api::StatsResponse;
 use nestodo_desktop::error::Error;
 use nestodo_desktop::profile::Profile;
-use nestodo_desktop::thread::{SearchHit, Timeline, TimelineItem};
+use nestodo_desktop::thread::{Timeline, TimelineItem};
 use nestodo_desktop::webhook::{Analytics, WebhookEdit, Webhooks};
 use nestodo_desktop::wire::{Reply, Request, Todo};
 
@@ -44,7 +44,6 @@ struct State {
     signed_out: bool,
     sent: Vec<Request>,
     timelines: Vec<u64>,
-    searches: Vec<String>,
 }
 
 impl State {
@@ -175,10 +174,6 @@ impl FakeServer {
 
     pub fn timelines(&self) -> Vec<u64> {
         self.state.lock().unwrap().timelines.clone()
-    }
-
-    pub fn searches(&self) -> Vec<String> {
-        self.state.lock().unwrap().searches.clone()
     }
 
     pub fn expire_sign_in(&self) {
@@ -532,27 +527,6 @@ impl Backend for FakeServer {
         let timeline: Timeline = serde_json::from_value(json!({ "items": items }))
             .map_err(|error| Error::Invalid(error.to_string()))?;
         Ok(timeline.items)
-    }
-
-    fn search(&self, query: &str) -> Result<Vec<SearchHit>, Error> {
-        let mut state = self.state.lock().unwrap();
-        if state.signed_out {
-            return Err(Error::NotSignedIn);
-        }
-        state.searches.push(query.to_string());
-        let q = query.to_lowercase();
-        Ok(Self::ordered(&state)
-            .into_iter()
-            .filter_map(|todo| {
-                state
-                    .comments_of(todo.id)
-                    .find(|comment| comment.body.to_lowercase().contains(&q))
-                    .map(|comment| SearchHit {
-                        id: todo.id,
-                        comment: comment.body.clone(),
-                    })
-            })
-            .collect())
     }
 
     fn stats(&self, time_zone: &str) -> Result<StatsResponse, Error> {

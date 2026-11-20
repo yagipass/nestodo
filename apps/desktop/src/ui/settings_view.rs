@@ -1456,7 +1456,7 @@ mod tests {
 
     use gpui::{Focusable, TestAppContext, VisualTestContext};
     use nestodo_desktop::api::StatsResponse;
-    use nestodo_desktop::thread::{SearchHit, TimelineItem};
+    use nestodo_desktop::thread::TimelineItem;
     use nestodo_desktop::webhook::WebhookEdit;
     use nestodo_desktop::wire::{Reply, Request, Todo};
 
@@ -1544,10 +1544,6 @@ mod tests {
         }
 
         fn timeline(&self, _: u64) -> Result<Vec<TimelineItem>, Error> {
-            Err(Error::Invalid("not used".into()))
-        }
-
-        fn search(&self, _: &str) -> Result<Vec<SearchHit>, Error> {
             Err(Error::Invalid("not used".into()))
         }
 

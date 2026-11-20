@@ -2305,19 +2305,67 @@ mod tests {
     }
 
     #[gpui::test]
-    fn the_title_bar_controls_neither_overlap_nor_leave_the_narrowest_window_while_the_filter_is_open(
+    fn the_title_bar_controls_neither_overlap_nor_leave_the_narrowest_window_while_the_search_is_open(
         cx: &mut TestAppContext,
     ) {
         let server = refusing_saves();
         let prefs = TempDir::new();
         let (_, outline, cx) = open(cx, &server, &prefs);
         cx.simulate_resize(gpui::size(px(MIN_WINDOW_WIDTH), px(400.)));
-        outline.update_in(cx, OutlineView::open_filter);
+        outline.update_in(cx, OutlineView::open_search);
+        cx.simulate_input("milk");
         cx.run_until_parked();
 
+        assert_in_a_row(cx, ["brand", "search", "show-completed", "account"]);
+        assert_in_a_row(cx, ["previous-match", "next-match", "close-search"]);
+        let search = cx.debug_bounds("search").expect("the search was drawn");
+        let close = cx
+            .debug_bounds("close-search")
+            .expect("the close button was drawn");
+        assert!(
+            close.right() <= search.right() && close.size.width >= px(24.),
+            "the close button spans {:?}..{:?}, cut by the search box ending at {:?}",
+            close.left(),
+            close.right(),
+            search.right()
+        );
+    }
+
+    #[gpui::test]
+    fn the_search_shows_how_many_matches_there_are_once_the_window_is_wide_enough_without_crowding_the_title_bar(
+        cx: &mut TestAppContext,
+    ) {
+        let server = refusing_saves();
+        let prefs = TempDir::new();
+        let (_, outline, cx) = open(cx, &server, &prefs);
+        cx.simulate_resize(gpui::size(px(NAMED_TITLE_BAR_WIDTH), px(400.)));
+        outline.update_in(cx, OutlineView::open_search);
+        cx.simulate_input("milk");
+        cx.run_until_parked();
+
+        assert_in_a_row(cx, ["brand", "search", "show-completed", "account"]);
+        assert_in_a_row(
+            cx,
+            [
+                "match-count",
+                "previous-match",
+                "next-match",
+                "close-search",
+            ],
+        );
+        let search = cx.debug_bounds("search").expect("the search was drawn");
+        let close = cx
+            .debug_bounds("close-search")
+            .expect("the close button was drawn");
+        assert!(close.right() <= search.right());
+    }
+
+    fn assert_in_a_row<const N: usize>(cx: &mut VisualTestContext, controls: [&'static str; N]) {
         let mut edge = px(0.);
-        for control in ["brand", "filter", "show-completed", "account"] {
-            let bounds = cx.debug_bounds(control).expect("the control was drawn");
+        for control in controls {
+            let bounds = cx
+                .debug_bounds(control)
+                .unwrap_or_else(|| panic!("{control} was not drawn"));
             assert!(
                 bounds.left() >= edge,
                 "{control} starts at {:?}, over what ends at {edge:?}",
@@ -2325,9 +2373,11 @@ mod tests {
             );
             edge = bounds.right();
         }
+        let width = cx.update(|window, _| window.viewport_size().width);
         assert!(
-            edge <= px(MIN_WINDOW_WIDTH),
-            "the account button ends at {edge:?}, past the window's {MIN_WINDOW_WIDTH}px"
+            edge <= width,
+            "{} ends at {edge:?}, past the window's {width:?}",
+            controls[N - 1]
         );
     }
 

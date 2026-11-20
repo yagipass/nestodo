@@ -277,30 +277,9 @@ pub fn open_under(outline: &Outline, key: &str) -> Vec<Key> {
         .collect()
 }
 
-fn mark(
-    outline: &Outline,
-    key: &str,
-    q: &str,
-    keep: &HashSet<Key>,
-    hit: &mut HashSet<Key>,
-) -> bool {
-    let item = outline.item(key);
-    let mut any = item.title.to_lowercase().contains(q) || keep.contains(key);
-    for child in &item.children {
-        if mark(outline, child, q, keep, hit) {
-            any = true;
-        }
-    }
-    if any {
-        hit.insert(key.to_owned());
-    }
-    any
-}
-
 struct RowWalk<'a> {
     outline: &'a Outline,
     show_done: bool,
-    hit: Option<HashSet<Key>>,
     rows: Vec<Row>,
 }
 
@@ -312,15 +291,12 @@ impl RowWalk<'_> {
             if !self.show_done && item.done {
                 continue;
             }
-            if self.hit.as_ref().is_some_and(|hit| !hit.contains(child)) {
-                continue;
-            }
             self.rows.push(Row {
                 key: child.clone(),
                 depth,
                 under,
             });
-            if self.hit.is_some() || !item.collapsed {
+            if !item.collapsed {
                 self.walk(child, depth + 1, under || item.done);
             }
         }
@@ -328,28 +304,50 @@ impl RowWalk<'_> {
 }
 
 #[must_use]
-pub fn visible_rows(
-    outline: &Outline,
-    show_done: bool,
-    query: &str,
-    keep: &HashSet<Key>,
-) -> Vec<Row> {
-    let q = query.trim().to_lowercase();
-    let hit = (!q.is_empty()).then(|| {
-        let mut hit = HashSet::new();
-        for child in &outline.item(ROOT).children {
-            mark(outline, child, &q, keep, &mut hit);
-        }
-        hit
-    });
+pub fn visible_rows(outline: &Outline, show_done: bool) -> Vec<Row> {
     let mut walk = RowWalk {
         outline,
         show_done,
-        hit,
         rows: Vec::new(),
     };
     walk.walk(ROOT, 0, false);
     walk.rows
+}
+
+#[must_use]
+pub fn search_hits(outline: &Outline, rows: &[Row], query: &str) -> Vec<Key> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Vec::new();
+    }
+    rows.iter()
+        .filter(|row| outline.item(&row.key).title.to_lowercase().contains(&q))
+        .map(|row| row.key.clone())
+        .collect()
+}
+
+#[must_use]
+pub fn next_hit(rows: &[Row], hits: &[Key], from: Option<&str>, step: isize) -> Option<Key> {
+    let wrap = if step > 0 { hits.first() } else { hits.last() }?;
+    let Some(at) = from.and_then(|from| rows.iter().position(|row| row.key == from)) else {
+        return Some(wrap.clone());
+    };
+    let order: HashMap<&str, usize> = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| (row.key.as_str(), index))
+        .collect();
+    let ahead = |hit: &&Key| {
+        order
+            .get(hit.as_str())
+            .is_some_and(|&index| if step > 0 { index > at } else { index < at })
+    };
+    let found = if step > 0 {
+        hits.iter().find(ahead)
+    } else {
+        hits.iter().rev().find(ahead)
+    };
+    Some(found.unwrap_or(wrap).clone())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -953,8 +951,8 @@ pub(crate) mod fixtures {
         Outline::from_todos(todos, key_for)
     }
 
-    pub(crate) fn shown(outline: &Outline, show_done: bool, query: &str) -> HashSet<Key> {
-        visible_rows(outline, show_done, query, &HashSet::new())
+    pub(crate) fn shown(outline: &Outline, show_done: bool) -> HashSet<Key> {
+        visible_rows(outline, show_done)
             .into_iter()
             .map(|row| row.key)
             .collect()
@@ -1033,12 +1031,12 @@ mod tests {
         )
     }
 
-    fn rows(outline: &Outline, show_done: bool, query: &str) -> Vec<Row> {
-        visible_rows(outline, show_done, query, &HashSet::new())
+    fn rows(outline: &Outline, show_done: bool) -> Vec<Row> {
+        visible_rows(outline, show_done)
     }
 
-    fn row_keys(outline: &Outline, show_done: bool, query: &str) -> Vec<Key> {
-        rows(outline, show_done, query)
+    fn row_keys(outline: &Outline, show_done: bool) -> Vec<Key> {
+        rows(outline, show_done)
             .into_iter()
             .map(|row| row.key)
             .collect()
@@ -1055,7 +1053,7 @@ mod tests {
     }
 
     fn all(outline: &Outline) -> HashSet<Key> {
-        shown(outline, true, "")
+        shown(outline, true)
     }
 
     fn moving() -> Outline {
@@ -1190,16 +1188,10 @@ mod tests {
                 todo(2, "tickets", Some(1)).done(),
                 todo(3, "home", None),
             ]);
-            let change = split(
-                &outline,
-                "t1",
-                "trip".len(),
-                "n1",
-                &shown(&outline, false, ""),
-            );
+            let change = split(&outline, "t1", "trip".len(), "n1", &shown(&outline, false));
             assert_eq!(change.ops, [create_op("n1", ROOT, 1, "")]);
             assert_eq!(
-                rows(&change.outline, false, ""),
+                rows(&change.outline, false),
                 [
                     Row {
                         key: "t1".into(),
@@ -1221,24 +1213,6 @@ mod tests {
         }
 
         #[test]
-        fn adds_a_sibling_at_the_end_of_a_parent_whose_children_the_filter_hides_so_enter_follows_the_rows_on_screen_as_it_does_on_a_row_without_children()
-         {
-            let outline = outline_of(&[
-                todo(1, "trip", None),
-                todo(2, "tickets", Some(1)),
-                todo(3, "home", None),
-            ]);
-            let change = split(
-                &outline,
-                "t1",
-                "trip".len(),
-                "n1",
-                &shown(&outline, true, "trip"),
-            );
-            assert_eq!(change.ops, [create_op("n1", ROOT, 1, "")]);
-        }
-
-        #[test]
         fn starts_the_first_child_when_some_of_the_parents_children_are_on_screen_even_with_others_hidden_so_the_new_row_appears_right_under_it()
          {
             let outline = outline_of(&[
@@ -1247,13 +1221,7 @@ mod tests {
                 todo(3, "passport", Some(1)),
                 todo(4, "home", None),
             ]);
-            let change = split(
-                &outline,
-                "t1",
-                "trip".len(),
-                "n1",
-                &shown(&outline, false, ""),
-            );
+            let change = split(&outline, "t1", "trip".len(), "n1", &shown(&outline, false));
             assert_eq!(change.ops, [create_op("n1", "t1", 0, "")]);
         }
 
@@ -1310,7 +1278,7 @@ mod tests {
                 todo(2, "hidden", None).done(),
                 todo(3, "row", None),
             ]);
-            let change = indent(&outline, "t3", &shown(&outline, false, "")).unwrap();
+            let change = indent(&outline, "t3", &shown(&outline, false)).unwrap();
             assert_eq!(change.ops, [move_op("t3", "t1", 0)]);
         }
 
@@ -1318,18 +1286,7 @@ mod tests {
         fn does_nothing_when_the_only_rows_above_are_hidden_as_completed_rather_than_nesting_into_one_nobody_can_see()
          {
             let outline = outline_of(&[todo(1, "hidden", None).done(), todo(2, "row", None)]);
-            assert_eq!(indent(&outline, "t2", &shown(&outline, false, "")), None);
-        }
-
-        #[test]
-        fn skips_rows_the_filter_hides_so_a_row_is_nested_under_the_match_the_user_sees_above_it() {
-            let outline = outline_of(&[
-                todo(1, "buy milk", None),
-                todo(2, "call mom", None),
-                todo(3, "buy eggs", None),
-            ]);
-            let change = indent(&outline, "t3", &shown(&outline, true, "buy")).unwrap();
-            assert_eq!(change.ops, [move_op("t3", "t1", 0)]);
+            assert_eq!(indent(&outline, "t2", &shown(&outline, false)), None);
         }
 
         #[test]
@@ -1402,11 +1359,11 @@ mod tests {
                 todo(2, "Done", None).done(),
                 todo(3, "B", None),
             ]);
-            let down = move_by(&outline, "t1", 1, &shown(&outline, false, "")).unwrap();
-            assert_eq!(row_keys(&down.outline, false, ""), ["t3", "t1"]);
+            let down = move_by(&outline, "t1", 1, &shown(&outline, false)).unwrap();
+            assert_eq!(row_keys(&down.outline, false), ["t3", "t1"]);
             assert_eq!(down.ops, [move_op("t1", ROOT, 2)]);
-            let up = move_by(&outline, "t3", -1, &shown(&outline, false, "")).unwrap();
-            assert_eq!(row_keys(&up.outline, false, ""), ["t3", "t1"]);
+            let up = move_by(&outline, "t3", -1, &shown(&outline, false)).unwrap();
+            assert_eq!(row_keys(&up.outline, false), ["t3", "t1"]);
             assert_eq!(up.ops, [move_op("t3", ROOT, 0)]);
         }
 
@@ -1414,22 +1371,7 @@ mod tests {
         fn does_nothing_when_the_only_siblings_that_way_are_hidden_as_completed_rather_than_making_a_move_nobody_can_see()
          {
             let outline = outline_of(&[todo(1, "A", None), todo(2, "Done", None).done()]);
-            assert_eq!(
-                move_by(&outline, "t1", 1, &shown(&outline, false, "")),
-                None
-            );
-        }
-
-        #[test]
-        fn skips_siblings_the_filter_hides_so_the_row_moves_past_the_next_match_the_user_can_see() {
-            let outline = outline_of(&[
-                todo(1, "buy milk", None),
-                todo(2, "call mom", None),
-                todo(3, "buy eggs", None),
-            ]);
-            let down = move_by(&outline, "t1", 1, &shown(&outline, true, "buy")).unwrap();
-            assert_eq!(row_keys(&down.outline, true, "buy"), ["t3", "t1"]);
-            assert_eq!(down.ops, [move_op("t1", ROOT, 2)]);
+            assert_eq!(move_by(&outline, "t1", 1, &shown(&outline, false)), None);
         }
     }
 
@@ -1567,7 +1509,7 @@ mod tests {
         use super::*;
 
         fn merge(outline: &Outline, key: &str) -> Option<Change> {
-            merge_into_previous(outline, &rows(outline, true, ""), key)
+            merge_into_previous(outline, &rows(outline, true), key)
         }
 
         #[test]
@@ -1805,7 +1747,7 @@ mod tests {
                 (
                     "merge",
                     pair.clone(),
-                    merge_into_previous(&pair, &rows(&pair, true, ""), "t2").unwrap(),
+                    merge_into_previous(&pair, &rows(&pair, true), "t2").unwrap(),
                 ),
             ]
         }
@@ -1863,7 +1805,7 @@ mod tests {
         fn undoes_a_join_by_restoring_the_joined_row_and_its_old_title_so_backspace_at_the_start_of_a_row_can_be_taken_back()
          {
             let outline = outline_of(&[todo(1, "buy ", None), todo(2, "milk", None)]);
-            let joined = merge_into_previous(&outline, &rows(&outline, true, ""), "t2").unwrap();
+            let joined = merge_into_previous(&outline, &rows(&outline, true), "t2").unwrap();
 
             let undo = undo_for(&outline, &joined.ops);
 
@@ -1976,7 +1918,7 @@ mod tests {
 
         #[test]
         fn greys_the_rows_under_a_completed_row_without_marking_them_done_themselves() {
-            let under: Vec<(Key, bool)> = rows(&outline(), true, "")
+            let under: Vec<(Key, bool)> = rows(&outline(), true)
                 .into_iter()
                 .map(|row| (row.key, row.under))
                 .collect();
@@ -1992,38 +1934,104 @@ mod tests {
 
         #[test]
         fn hides_a_completed_row_together_with_its_subtree_when_completed_rows_are_hidden() {
-            assert_eq!(row_keys(&outline(), false, ""), ["t3"]);
+            assert_eq!(row_keys(&outline(), false), ["t3"]);
+        }
+    }
+
+    mod search {
+        use super::*;
+
+        fn outline() -> Outline {
+            outline_of(&[
+                todo(1, "Trip to Kyoto", None),
+                todo(2, "book hotel", Some(1)),
+                todo(3, "trip insurance", Some(1)).done(),
+                todo(4, "groceries", None).folded(),
+                todo(5, "trip snacks", Some(4)),
+                todo(6, "dentist", None),
+                todo(7, "pack for the TRIP", None),
+            ])
+        }
+
+        fn keys(keys: &[&str]) -> Vec<Key> {
+            keys.iter().map(|&key| key.to_owned()).collect()
         }
 
         #[test]
-        fn shows_filter_matches_with_their_parents_even_inside_collapsed_rows() {
-            assert_eq!(row_keys(&outline(), true, "INSIDE"), ["t3", "t4"]);
-        }
-
-        #[test]
-        fn shows_rows_the_server_found_by_their_comments_with_their_parents_since_comments_are_not_kept_in_the_outline()
+        fn marks_the_rows_on_screen_whose_titles_contain_the_words_whatever_their_case_in_the_order_they_appear()
          {
-            let nested = outline_of(&[
-                todo(1, "health", None),
-                todo(2, "dentist", Some(1)),
-                todo(3, "milk", None),
-            ]);
-            let found = HashSet::from(["t2".to_owned()]);
-            let keys: Vec<Key> = visible_rows(&nested, true, "weekday", &found)
-                .into_iter()
-                .map(|row| row.key)
-                .collect();
-            assert_eq!(keys, ["t1", "t2"]);
+            let outline = outline();
+            let rows = rows(&outline, false);
+            assert_eq!(search_hits(&outline, &rows, " trip "), ["t1", "t7"]);
         }
 
         #[test]
-        fn keeps_rows_created_during_a_filter_visible_even_though_their_text_does_not_match_yet() {
-            let keep = HashSet::from(["t1".to_owned()]);
-            let keys: Vec<Key> = visible_rows(&outline(), true, "inside", &keep)
-                .into_iter()
-                .map(|row| row.key)
-                .collect();
-            assert_eq!(keys, ["t1", "t3", "t4"]);
+        fn leaves_out_matches_inside_collapsed_rows_and_hidden_completed_rows_so_every_match_is_a_row_the_user_can_see()
+         {
+            let outline = outline();
+            assert_eq!(
+                search_hits(&outline, &rows(&outline, false), "trip"),
+                ["t1", "t7"]
+            );
+            assert_eq!(
+                search_hits(&outline, &rows(&outline, true), "trip"),
+                ["t1", "t3", "t7"]
+            );
+        }
+
+        #[test]
+        fn marks_nothing_while_the_words_are_blank_so_opening_the_search_leaves_the_outline_as_it_was()
+         {
+            let outline = outline();
+            let rows = rows(&outline, false);
+            assert_eq!(search_hits(&outline, &rows, "  "), [] as [Key; 0]);
+        }
+
+        #[test]
+        fn steps_to_the_next_match_below_and_wraps_around_to_the_first_after_the_last() {
+            let rows = rows(&outline(), false);
+            let hits = keys(&["t1", "t6", "t7"]);
+            assert_eq!(next_hit(&rows, &hits, Some("t1"), 1).as_deref(), Some("t6"));
+            assert_eq!(next_hit(&rows, &hits, Some("t7"), 1).as_deref(), Some("t1"));
+        }
+
+        #[test]
+        fn steps_to_the_previous_match_above_and_wraps_around_to_the_last_before_the_first() {
+            let rows = rows(&outline(), false);
+            let hits = keys(&["t1", "t6", "t7"]);
+            assert_eq!(
+                next_hit(&rows, &hits, Some("t6"), -1).as_deref(),
+                Some("t1")
+            );
+            assert_eq!(
+                next_hit(&rows, &hits, Some("t1"), -1).as_deref(),
+                Some("t7")
+            );
+        }
+
+        #[test]
+        fn goes_on_from_the_row_of_the_current_match_after_it_stops_matching_so_editing_it_does_not_send_the_user_back_to_the_top()
+         {
+            let rows = rows(&outline(), false);
+            let hits = keys(&["t1", "t7"]);
+            assert_eq!(next_hit(&rows, &hits, Some("t6"), 1).as_deref(), Some("t7"));
+            assert_eq!(
+                next_hit(&rows, &hits, Some("t6"), -1).as_deref(),
+                Some("t1")
+            );
+        }
+
+        #[test]
+        fn starts_from_the_first_match_or_the_last_when_going_back_when_there_is_no_current_match_on_screen()
+         {
+            let rows = rows(&outline(), false);
+            let hits = keys(&["t1", "t7"]);
+            assert_eq!(next_hit(&rows, &hits, None, 1).as_deref(), Some("t1"));
+            assert_eq!(
+                next_hit(&rows, &hits, Some("t5"), -1).as_deref(),
+                Some("t7")
+            );
+            assert_eq!(next_hit(&rows, &[], None, 1), None);
         }
     }
 
@@ -2051,7 +2059,7 @@ mod tests {
 
         #[test]
         fn each_line_runs_from_a_parents_bullet_down_to_its_last_child_and_no_further() {
-            let rows = visible_rows(&outline(), true, "", &HashSet::new());
+            let rows = visible_rows(&outline(), true);
             assert_eq!(
                 guides(&rows),
                 [
@@ -2068,7 +2076,7 @@ mod tests {
 
         #[test]
         fn a_parent_whose_children_are_all_hidden_gets_no_stem_so_no_line_leads_to_nothing() {
-            let rows = visible_rows(&outline(), false, "", &HashSet::new());
+            let rows = visible_rows(&outline(), false);
             let stems: Vec<(Key, bool)> = rows
                 .iter()
                 .zip(guides(&rows))

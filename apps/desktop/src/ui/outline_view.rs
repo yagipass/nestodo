@@ -15,11 +15,11 @@ use unicode_segmentation::UnicodeSegmentation;
 use nestodo_desktop::error::Error;
 use nestodo_desktop::outline::{
     END, Focus, Guide, Key, Outline, ROOT, Row, append, caret_in, destinations, guides, indent,
-    key_for, merge_into_previous, move_by, move_to, open_under, outdent, parent_of, remove, rename,
-    set_collapsed, set_comments, split, subtree, toggle_done, visible_rows,
+    key_for, merge_into_previous, move_by, move_to, next_hit, open_under, outdent, parent_of,
+    remove, rename, search_hits, set_collapsed, set_comments, split, subtree, toggle_done,
+    visible_rows,
 };
 use nestodo_desktop::sync::Sync;
-use nestodo_desktop::thread::snippet;
 use nestodo_desktop::title::{link_label, link_target, tokens};
 use nestodo_desktop::todos::{MAX_COMMENT_LENGTH, MAX_TITLE_LENGTH};
 use nestodo_desktop::undo::UndoHistory;
@@ -27,14 +27,15 @@ use nestodo_desktop::wire::Todo;
 
 use crate::ui::avatar::Avatar;
 use crate::ui::backend::Backend;
-use crate::ui::clamped_text::{ClampedText, TextHits};
 use crate::ui::icons::Icon;
 use crate::ui::move_picker::{MovePicker, PickerEvent};
 use crate::ui::text_field::{
     Copy, FieldEvent, SelectAll, TextField, offset_from_utf16, offset_to_utf16,
 };
 use crate::ui::theme::{Theme, theme};
-use crate::ui::widgets::{PAGE_WIDTH, Tooltip, icon, icon_button, kbd, modal};
+use crate::ui::widgets::{
+    NAMED_TITLE_BAR_WIDTH, PAGE_WIDTH, Tooltip, icon, icon_button, kbd, modal,
+};
 
 actions!(
     outline,
@@ -60,7 +61,9 @@ actions!(
         BackToItem,
         SaveComment,
         CancelEdit,
-        CloseFilter,
+        CloseSearch,
+        NextMatch,
+        PreviousMatch,
         ToggleShowDone,
     ]
 );
@@ -72,7 +75,7 @@ pub fn bindings() -> Vec<KeyBinding> {
     let thread = Some("Thread");
     let log = Some("ThreadLog");
     let outline = Some("Outline");
-    let filter = Some("Filter");
+    let search = Some("Search");
     let workspace = Some("Workspace");
     vec![
         KeyBinding::new("cmd-z", Undo, outline),
@@ -118,7 +121,9 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-enter", SaveComment, edit),
         KeyBinding::new("ctrl-enter", SaveComment, edit),
         KeyBinding::new("escape", CancelEdit, edit),
-        KeyBinding::new("escape", CloseFilter, filter),
+        KeyBinding::new("escape", CloseSearch, search),
+        KeyBinding::new("enter", NextMatch, search),
+        KeyBinding::new("shift-enter", PreviousMatch, search),
         KeyBinding::new("cmd-o", ToggleShowDone, workspace),
         KeyBinding::new("ctrl-o", ToggleShowDone, workspace),
     ]
@@ -141,11 +146,8 @@ pub struct OutlineView {
     outline: Outline,
     show_done: bool,
     query: String,
-    filtering: bool,
-    kept: HashSet<Key>,
-    comment_hits: HashMap<Key, String>,
-    searched_for: String,
-    search_task: Option<Task<()>>,
+    searching: bool,
+    current: Option<Key>,
     thread: Option<thread_pane::Thread>,
     drafts: HashMap<Key, thread_pane::Draft>,
     avatar: Option<Avatar>,
@@ -158,7 +160,7 @@ pub struct OutlineView {
     title_field: Entity<TextField>,
     composer: Entity<TextField>,
     comment_field: Entity<TextField>,
-    filter_field: Entity<TextField>,
+    search_field: Entity<TextField>,
     focus_handle: FocusHandle,
     log_focus: FocusHandle,
     scroll: ScrollHandle,
@@ -213,7 +215,6 @@ impl Mirror {
 }
 
 const THIN: &str = "\u{2009}";
-const SEARCH_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
 const ICON_SLOT: &str = "\u{2003}";
 
 fn mirror_for(
@@ -346,15 +347,15 @@ impl OutlineView {
                 .max_len(MAX_COMMENT_LENGTH)
                 .encode_urls()
         });
-        let filter_field = cx.new(|cx| TextField::new("Filter", cx).placeholder("Filter"));
+        let search_field = cx.new(|cx| TextField::new("Search", cx).placeholder("Search"));
         let mut subscriptions = vec![
             cx.subscribe_in(&title_field, window, Self::on_title_event),
-            cx.subscribe_in(&filter_field, window, Self::on_filter_event),
+            cx.subscribe_in(&search_field, window, Self::on_search_event),
             cx.subscribe(&composer, |_, _, _: &FieldEvent, cx| cx.notify()),
             cx.subscribe(&comment_field, |_, _, _: &FieldEvent, cx| cx.notify()),
         ];
         let title_focus = title_field.read(cx).focus_handle(cx);
-        let filter_focus = filter_field.read(cx).focus_handle(cx);
+        let search_focus = search_field.read(cx).focus_handle(cx);
         subscriptions.push(cx.on_blur(&title_focus, window, |this, window, cx| {
             if window.is_window_active() && this.editing.is_some() {
                 this.leave_editor(window, cx);
@@ -362,9 +363,9 @@ impl OutlineView {
                 cx.notify();
             }
         }));
-        subscriptions.push(cx.on_blur(&filter_focus, window, |this, window, cx| {
-            if window.is_window_active() && this.query.is_empty() && this.filtering {
-                this.filtering = false;
+        subscriptions.push(cx.on_blur(&search_focus, window, |this, window, cx| {
+            if window.is_window_active() && this.query.is_empty() && this.searching {
+                this.searching = false;
                 cx.notify();
             }
         }));
@@ -387,11 +388,8 @@ impl OutlineView {
             outline,
             show_done,
             query: String::new(),
-            filtering: false,
-            kept: HashSet::new(),
-            comment_hits: HashMap::new(),
-            searched_for: String::new(),
-            search_task: None,
+            searching: false,
+            current: None,
             thread: None,
             drafts: HashMap::new(),
             avatar: None,
@@ -404,7 +402,7 @@ impl OutlineView {
             title_field,
             composer,
             comment_field,
-            filter_field,
+            search_field,
             focus_handle: cx.focus_handle(),
             log_focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
@@ -435,12 +433,17 @@ impl OutlineView {
     }
 
     fn rows(&self) -> Vec<Row> {
-        if self.comment_hits.is_empty() {
-            return visible_rows(&self.outline, self.show_done, &self.query, &self.kept);
-        }
-        let mut keep = self.kept.clone();
-        keep.extend(self.comment_hits.keys().cloned());
-        visible_rows(&self.outline, self.show_done, &self.query, &keep)
+        visible_rows(&self.outline, self.show_done)
+    }
+
+    fn hits(&self, rows: &[Row]) -> Vec<Key> {
+        search_hits(&self.outline, rows, &self.query)
+    }
+
+    fn current_match(&self, hits: &[Key]) -> Option<Key> {
+        self.current
+            .clone()
+            .filter(|current| hits.contains(current))
     }
 
     fn is_shown(&self, key: &str) -> bool {
@@ -497,7 +500,34 @@ impl OutlineView {
     }
 
     fn row_child_offset(&self) -> usize {
-        usize::from(self.sync.failed) + usize::from(!self.query.is_empty())
+        usize::from(self.sync.failed)
+    }
+
+    fn reveal(&self, key: &str, rows: &[Row]) {
+        if let Some(index) = rows.iter().position(|row| row.key == key) {
+            self.scroll.scroll_to_item(self.row_child_offset() + index);
+        }
+    }
+
+    fn choose_match(&mut self) {
+        let rows = self.rows();
+        let hits = self.hits(&rows);
+        if self.current_match(&hits).is_none() {
+            self.current = next_hit(&rows, &hits, self.current.as_deref(), 1);
+        }
+        if let Some(current) = &self.current {
+            self.reveal(current, &rows);
+        }
+    }
+
+    fn step_match(&mut self, step: isize, cx: &mut Context<Self>) {
+        let rows = self.rows();
+        let hits = self.hits(&rows);
+        self.current = next_hit(&rows, &hits, self.current.as_deref(), step);
+        if let Some(current) = &self.current {
+            self.reveal(current, &rows);
+        }
+        cx.notify();
     }
 
     fn detach_if_hidden(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -537,12 +567,6 @@ impl OutlineView {
         true
     }
 
-    fn keep(&mut self, keys: impl IntoIterator<Item = Key>) {
-        if !self.query.is_empty() {
-            self.kept.extend(keys);
-        }
-    }
-
     fn commit(
         &mut self,
         change: nestodo_desktop::outline::Change,
@@ -550,11 +574,9 @@ impl OutlineView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let keys: Vec<Key> = change.ops.iter().map(|op| op.key().clone()).collect();
         self.outline = change.outline;
         self.sync.apply(&change.ops);
         self.pump(cx);
-        self.keep(keys);
         let next = focus.or(change.focus);
         self.detach_if_hidden(window, cx);
         if let Some(next) = next {
@@ -580,58 +602,31 @@ impl OutlineView {
         cx.notify();
     }
 
-    pub fn open_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.filtering = true;
-        window.focus(&self.filter_field.focus_handle(cx), cx);
+    pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.searching = true;
+        window.focus(&self.search_field.focus_handle(cx), cx);
         cx.notify();
     }
 
-    fn close_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let rows = self.rows();
+        let found = self.current_match(&self.hits(&rows)).map(|key| {
+            let pos = tokens(&self.outline.item(&key).title, &self.query)
+                .into_iter()
+                .find(|part| part.matched)
+                .map_or(END, |part| part.from);
+            Focus { key, pos }
+        });
         self.query.clear();
-        self.kept.clear();
-        self.comment_hits.clear();
-        self.searched_for.clear();
-        self.search_task = None;
-        self.filtering = false;
-        self.filter_field
+        self.current = None;
+        self.searching = false;
+        self.search_field
             .update(cx, |field, cx| field.set_text("", 0, cx));
-        window.focus(&self.focus_handle, cx);
+        match found {
+            Some(focus) => self.focus_row(focus, window, cx),
+            None => window.focus(&self.focus_handle, cx),
+        }
         cx.notify();
-    }
-
-    fn search_comments(&mut self, cx: &mut Context<Self>) {
-        let text = self.query.trim().to_string();
-        if text == self.searched_for {
-            return;
-        }
-        self.searched_for.clone_from(&text);
-        self.comment_hits.clear();
-        if text.is_empty() {
-            self.search_task = None;
-            return;
-        }
-        let backend = self.backend.clone();
-        self.search_task = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(SEARCH_DELAY).await;
-            let query = text.clone();
-            let found = cx
-                .background_spawn(async move { backend.search(&query) })
-                .await;
-            this.update(cx, |this, cx| {
-                let Ok(found) = found else {
-                    return;
-                };
-                this.comment_hits = found
-                    .into_iter()
-                    .map(|hit| {
-                        let key = this.sync.key_of(hit.id).unwrap_or_else(|| key_for(hit.id));
-                        (key, hit.comment)
-                    })
-                    .collect();
-                cx.notify();
-            })
-            .ok();
-        }));
     }
 
     pub fn set_avatar(&mut self, avatar: Option<Avatar>, cx: &mut Context<Self>) {
@@ -823,7 +818,6 @@ impl OutlineView {
         let now = cx.background_executor().now();
         self.sync.title(key, title, now);
         self.schedule_flush(cx);
-        self.keep([key.to_string()]);
         cx.notify();
     }
 
@@ -959,7 +953,7 @@ impl OutlineView {
         }
     }
 
-    fn on_filter_event(
+    fn on_search_event(
         &mut self,
         field: &Entity<TextField>,
         event: &FieldEvent,
@@ -967,9 +961,10 @@ impl OutlineView {
         cx: &mut Context<Self>,
     ) {
         if let FieldEvent::Changed { .. } = event {
-            self.query = field.read(cx).text().to_string();
-            self.kept.clear();
-            self.search_comments(cx);
+            let before = std::mem::replace(&mut self.query, field.read(cx).text().to_string());
+            if before.trim() != self.query.trim() {
+                self.choose_match();
+            }
             cx.notify();
         }
     }
@@ -1133,11 +1128,23 @@ impl OutlineView {
         cx.propagate();
     }
 
-    fn on_close_filter(&mut self, _: &CloseFilter, window: &mut Window, cx: &mut Context<Self>) {
-        if self.filter_field.read(cx).is_composing() {
+    fn on_close_search(&mut self, _: &CloseSearch, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search_field.read(cx).is_composing() {
             return;
         }
-        self.close_filter(window, cx);
+        self.close_search(window, cx);
+    }
+
+    fn on_next_match(&mut self, _: &NextMatch, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.search_field.read(cx).is_composing() {
+            self.step_match(1, cx);
+        }
+    }
+
+    fn on_previous_match(&mut self, _: &PreviousMatch, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.search_field.read(cx).is_composing() {
+            self.step_match(-1, cx);
+        }
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -1151,7 +1158,7 @@ impl OutlineView {
             && !modifiers.control
             && !modifiers.alt
         {
-            self.open_filter(window, cx);
+            self.open_search(window, cx);
             cx.stop_propagation();
         }
     }
@@ -1217,18 +1224,76 @@ impl OutlineView {
         self.apply(Some(change), None, before, window, cx);
     }
 
-    pub fn render_tools(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    pub fn render_tools(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme(cx);
-        let filter: AnyElement = if self.filtering {
+        let roomy = window.viewport_size().width >= px(NAMED_TITLE_BAR_WIDTH);
+        let search: AnyElement = if self.searching {
+            let rows = self.rows();
+            let hits = self.hits(&rows);
+            let at = self
+                .current_match(&hits)
+                .and_then(|current| hits.iter().position(|hit| *hit == current))
+                .map_or(0, |index| index + 1);
+            let step_button = |id: &'static str, glyph: Icon, label: &'static str, step: isize| {
+                div()
+                    .id(id)
+                    .debug_selector(move || id.into())
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .size(px(24.))
+                    .rounded(px(7.))
+                    .when(hits.is_empty(), |button| button.opacity(0.4))
+                    .when(!hits.is_empty(), |button| {
+                        button
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(colors.hover))
+                            .on_click(cx.listener(move |this, _, _, cx| this.step_match(step, cx)))
+                    })
+                    .tooltip(Tooltip::text(label))
+                    .child(icon(glyph, 15., colors.muted))
+            };
+            let steps = (!self.query.trim().is_empty()).then(|| {
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(2.))
+                    .when(roomy, |steps| {
+                        steps.child(
+                            div()
+                                .debug_selector(|| "match-count".into())
+                                .mr(px(4.))
+                                .text_size(px(13.))
+                                .text_color(colors.muted)
+                                .child(format!("{at} / {}", hits.len())),
+                        )
+                    })
+                    .child(step_button(
+                        "previous-match",
+                        Icon::Up,
+                        "Previous match (\u{21e7} Enter)",
+                        -1,
+                    ))
+                    .child(step_button(
+                        "next-match",
+                        Icon::Down,
+                        "Next match (Enter)",
+                        1,
+                    ))
+            });
             div()
-                .id("filter")
-                .debug_selector(|| "filter".into())
-                .on_action(cx.listener(Self::on_close_filter))
+                .id("search")
+                .debug_selector(|| "search".into())
+                .on_action(cx.listener(Self::on_close_search))
+                .on_action(cx.listener(Self::on_next_match))
+                .on_action(cx.listener(Self::on_previous_match))
                 .flex()
                 .flex_1()
                 .items_center()
                 .gap(px(8.))
-                .w(px(280.))
+                .w(px(340.))
                 .min_w(px(120.))
                 .h(px(32.))
                 .pl(px(10.))
@@ -1237,7 +1302,9 @@ impl OutlineView {
                 .border_color(colors.accent)
                 .rounded(px(9.))
                 .bg(colors.surface)
-                .child(icon(Icon::Filter, 17., colors.muted))
+                .when(roomy, |search| {
+                    search.child(icon(Icon::Filter, 17., colors.muted))
+                })
                 .child(
                     div()
                         .flex_1()
@@ -1245,26 +1312,29 @@ impl OutlineView {
                         .text_size(px(14.))
                         .line_height(px(20.))
                         .text_color(colors.text)
-                        .child(self.filter_field.clone()),
+                        .child(self.search_field.clone()),
                 )
+                .children(steps)
                 .child(
                     div()
-                        .id("close-filter")
+                        .id("close-search")
+                        .debug_selector(|| "close-search".into())
                         .flex()
+                        .flex_none()
                         .items_center()
                         .justify_center()
                         .size(px(24.))
                         .rounded(px(7.))
                         .cursor_pointer()
                         .hover(move |style| style.bg(colors.hover))
-                        .on_click(cx.listener(|this, _, window, cx| this.close_filter(window, cx)))
+                        .on_click(cx.listener(|this, _, window, cx| this.close_search(window, cx)))
                         .child(icon(Icon::Close, 15., colors.muted)),
                 )
                 .into_any_element()
         } else {
-            icon_button("open-filter", Icon::Filter, 19., colors.hover_on_bg, cx)
-                .tooltip(Tooltip::text("Filter (/)"))
-                .on_click(cx.listener(|this, _, window, cx| this.open_filter(window, cx)))
+            icon_button("open-search", Icon::Filter, 19., colors.hover_on_bg, cx)
+                .tooltip(Tooltip::text("Search (/)"))
+                .on_click(cx.listener(|this, _, window, cx| this.open_search(window, cx)))
                 .into_any_element()
         };
         let pressed = self.show_done;
@@ -1295,7 +1365,7 @@ impl OutlineView {
             .gap(px(6.))
             .min_w_0()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(filter)
+            .child(search)
             .child(show_done)
             .into_any_element()
     }
@@ -1304,10 +1374,19 @@ impl OutlineView {
         &mut self,
         row: &Row,
         guide: &Guide,
+        is_current: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let colors = theme(cx);
+        let colors = if is_current {
+            Theme {
+                matched: colors.matched_current,
+                ..colors
+            }
+        } else {
+            colors
+        };
         let item = self.outline.item(&row.key);
         let key = row.key.clone();
         let has_children = !item.children.is_empty();
@@ -1533,54 +1612,7 @@ impl OutlineView {
                 .into_any_element()
         };
 
-        let query = self.query.trim().to_lowercase();
-        let hit = self
-            .comment_hits
-            .get(&key)
-            .filter(|_| !query.is_empty())
-            .map(|comment| {
-                let shown = snippet(comment, &query, 60);
-                let mirror = mirror_for(
-                    &shown,
-                    &self.query,
-                    &colors,
-                    colors.muted,
-                    false,
-                    false,
-                    &window.text_style().font(),
-                );
-                let text = ClampedText::new(
-                    mirror.text.clone(),
-                    mirror.runs.clone(),
-                    Some(1),
-                    colors.muted,
-                    TextHits::default(),
-                )
-                .with_icons(mirror.icons.clone(), Icon::Link.path(), colors.accent);
-                let selector_key = key.clone();
-                div()
-                    .debug_selector(move || format!("comment-hit-{selector_key}"))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .min_w_0()
-                    .mt(px(-4.))
-                    .mb(px(6.))
-                    .px(px(4.))
-                    .text_size(px(13.))
-                    .line_height(px(20.))
-                    .text_color(colors.muted)
-                    .child(icon(Icon::Comment, 13., colors.muted))
-                    .child(div().flex_1().min_w_0().child(text))
-            });
-
-        let title = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .child(line)
-            .children(hit);
+        let title = div().flex().flex_col().flex_1().min_w_0().child(line);
 
         let comment_button = {
             let key = key.clone();
@@ -1809,45 +1841,10 @@ impl Render for OutlineView {
                     .into_any_element(),
             );
         }
-        if !self.query.is_empty() {
-            sheet.push(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .ml(px(32.))
-                    .mb(px(10.))
-                    .text_size(px(13.))
-                    .text_color(colors.muted)
-                    .child("Matches are shown with their parents.")
-                    .child(
-                        div()
-                            .id("clear-filter")
-                            .px(px(6.))
-                            .py(px(4.))
-                            .text_color(colors.accent)
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.close_filter(window, cx);
-                            }))
-                            .child("Clear filter"),
-                    )
-                    .into_any_element(),
-            );
-        }
+        let current = self.current_match(&self.hits(&rows));
         for (row, guide) in rows.iter().zip(&lines) {
-            sheet.push(self.render_row(row, guide, window, cx));
-        }
-        if !self.query.is_empty() && rows.is_empty() {
-            sheet.push(
-                div()
-                    .ml(px(32.))
-                    .mt(px(4.))
-                    .text_size(px(13.))
-                    .text_color(colors.muted)
-                    .child("No matches.")
-                    .into_any_element(),
-            );
+            let is_current = current.as_ref() == Some(&row.key);
+            sheet.push(self.render_row(row, guide, is_current, window, cx));
         }
         sheet.push(
             div()

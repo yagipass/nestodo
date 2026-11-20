@@ -15,7 +15,7 @@ use crate::http::{Call, Http, Response, is_loopback};
 use crate::profile::Profile;
 use crate::stats::Day;
 use crate::store::{Kind, TokenStore};
-use crate::thread::{SearchHit, SearchHits, Timeline, TimelineItem};
+use crate::thread::{Timeline, TimelineItem};
 use crate::webhook::{Analytics, WebhookEdit, Webhooks};
 use crate::wire::{Reply, Request, Todo};
 
@@ -156,13 +156,6 @@ impl Client {
         Ok(self
             .get::<Timeline>(format!("/api/v1/todos/{id}/timeline"))?
             .items)
-    }
-
-    pub fn search(&self, query: &str) -> Result<Vec<SearchHit>, Error> {
-        let query: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
-        Ok(self
-            .get::<SearchHits>(format!("/api/v1/search?q={query}"))?
-            .todos)
     }
 
     pub fn stats(&self, time_zone: &str) -> Result<StatsResponse, Error> {
@@ -917,30 +910,6 @@ mod tests {
         assert!(
             matches!(&result, Err(Error::Server { status: 404, .. })),
             "{result:?}"
-        );
-    }
-
-    #[test]
-    fn search_encodes_the_query_so_an_ampersand_or_japanese_is_searched_as_typed() {
-        let mut server = Server::new();
-        let store = store_with(&[(Kind::App, &token("app", LATER))]);
-        server
-            .mock("GET", "/api/v1/search")
-            .match_query(Matcher::UrlEncoded("q".into(), "B&B 京都".into()))
-            .with_body(r#"{"todos":[{"id":4,"comment":"booked the B&B 京都"}]}"#)
-            .create();
-
-        let hits = signed_in(&server, &store)
-            .unwrap()
-            .search("B&B 京都")
-            .unwrap();
-
-        assert_eq!(
-            hits,
-            [SearchHit {
-                id: 4,
-                comment: "booked the B&B 京都".into()
-            }]
         );
     }
 

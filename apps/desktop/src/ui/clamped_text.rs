@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui::{
     App, AvailableSpace, Bounds, ContentMask, Element, ElementId, GlobalElementId, Hsla,
     InspectorElementId, IntoElement, LayoutId, Pixels, Point, SharedString, Style, TextAlign,
-    TextRun, TransformationMatrix, Window, WrappedLine, WrappedLineLayout, fill, point, px, size,
+    TextRun, Window, WrappedLine, WrappedLineLayout, fill, point, px, size,
 };
 
 use crate::ui::text_selection::selection_bounds;
@@ -64,9 +64,6 @@ pub struct ClampedText {
     clamp: Option<usize>,
     ellipsis_color: Hsla,
     hits: TextHits,
-    icons: Vec<Range<usize>>,
-    icon_path: SharedString,
-    icon_color: Hsla,
     wrap: bool,
     selection: Option<(Range<usize>, Hsla)>,
 }
@@ -85,9 +82,6 @@ impl ClampedText {
             clamp,
             ellipsis_color,
             hits,
-            icons: Vec::new(),
-            icon_path: SharedString::default(),
-            icon_color: ellipsis_color,
             wrap: true,
             selection: None,
         }
@@ -100,13 +94,6 @@ impl ClampedText {
 
     pub fn with_selection(mut self, range: Range<usize>, color: Hsla) -> Self {
         self.selection = Some((range, color));
-        self
-    }
-
-    pub fn with_icons(mut self, icons: Vec<Range<usize>>, path: SharedString, color: Hsla) -> Self {
-        self.icons = icons;
-        self.icon_path = path;
-        self.icon_color = color;
         self
     }
 }
@@ -469,39 +456,6 @@ impl Element for ClampedText {
                 }
                 line.paint(origin, line_height, TextAlign::Left, None, window, cx)
                     .ok();
-                for icon in &self.icons {
-                    if icon.end > laid.visible
-                        || icon.start < *start
-                        || icon.end > start + line.len()
-                    {
-                        continue;
-                    }
-                    let (Some(from), Some(to)) = (
-                        line.position_for_index(icon.start - start, line_height),
-                        line.position_for_index(icon.end - start, line_height),
-                    ) else {
-                        continue;
-                    };
-                    if (to.y - from.y).abs() > px(0.5) {
-                        continue;
-                    }
-                    let side = (line_height * 0.55).min(to.x - from.x + px(4.));
-                    let at = origin
-                        + point(
-                            from.x + (to.x - from.x - side) / 2.,
-                            from.y + (line_height - side) / 2.,
-                        );
-                    window
-                        .paint_svg(
-                            Bounds::new(at, size(side, side)),
-                            self.icon_path.clone(),
-                            None,
-                            TransformationMatrix::unit(),
-                            self.icon_color,
-                            cx,
-                        )
-                        .ok();
-                }
                 origin.y += line.size(line_height).height;
             }
         });
