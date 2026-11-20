@@ -440,6 +440,23 @@ fn escape_closes_the_search_and_puts_the_caret_on_the_current_match_so_what_was_
 }
 
 #[gpui::test]
+fn reopening_the_search_selects_what_was_searched_so_the_next_term_replaces_it(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    view.update_in(cx, OutlineView::open_search);
+    cx.simulate_input("milk");
+    focus(&view, cx, "Trip", END);
+
+    view.update_in(cx, OutlineView::open_search);
+    cx.simulate_input("bread");
+
+    assert!(search_focused(&view, cx));
+    assert_eq!(matches(&view, cx), ["Bread"]);
+}
+
+#[gpui::test]
 fn editing_the_current_match_so_it_no_longer_matches_lets_enter_carry_on_from_that_row_instead_of_starting_over(
     cx: &mut TestAppContext,
 ) {

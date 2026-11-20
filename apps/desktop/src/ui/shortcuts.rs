@@ -57,6 +57,7 @@ const SHORTCUTS: &[(&str, &[Shortcut])] = &[
             ("Previous / next item", "\u{2191} / \u{2193}", None),
             ("Previous / next item", "Ctrl P / Ctrl N", None),
             ("Show / hide completed", "Ctrl/\u{2318} O", None),
+            ("Search", "\u{2318} F", None),
             ("Search", "/", Some("outside an item")),
             (
                 "Next / previous match",

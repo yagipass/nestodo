@@ -27,7 +27,7 @@ use nestodo_desktop::wire::Todo;
 use crate::ui::avatar::{Avatar, avatar_button, fetch_avatar};
 use crate::ui::backend::Backend;
 use crate::ui::icons::{APP_ICON, Icon};
-use crate::ui::outline_view::{OutlineEvent, OutlineView, ToggleShowDone};
+use crate::ui::outline_view::{OpenSearch, OutlineEvent, OutlineView, ToggleShowDone};
 use crate::ui::settings_view::{SettingsEvent, SettingsView};
 use crate::ui::shortcuts::shortcuts_dialog;
 use crate::ui::stats_view::StatsView;
@@ -946,6 +946,20 @@ impl Root {
         }
     }
 
+    fn on_open_search(&mut self, _: &OpenSearch, window: &mut Window, cx: &mut Context<Self>) {
+        if self.modal_open(cx) {
+            return;
+        }
+        if let Screen::Ready(workspace) = &self.screen
+            && workspace.page == Page::Todos
+        {
+            workspace
+                .outline
+                .clone()
+                .update(cx, |outline, cx| outline.open_search(window, cx));
+        }
+    }
+
     pub fn has_unsaved_changes(&self, cx: &App) -> bool {
         match &self.screen {
             Screen::Ready(workspace) => workspace.outline.read(cx).has_unsaved_changes(),
@@ -1564,6 +1578,7 @@ impl Render for Root {
             .on_action(cx.listener(Self::on_show_settings))
             .on_action(cx.listener(Self::on_show_todos))
             .on_action(cx.listener(Self::on_toggle_show_done))
+            .on_action(cx.listener(Self::on_open_search))
             .size_full()
             .bg(colors.bg)
             .text_color(colors.text)
@@ -2358,6 +2373,51 @@ mod tests {
             .debug_bounds("close-search")
             .expect("the close button was drawn");
         assert!(close.right() <= search.right());
+    }
+
+    #[gpui::test]
+    fn cmd_f_opens_the_search_from_a_todo_being_edited_where_a_slash_would_be_typed_into_it(
+        cx: &mut TestAppContext,
+    ) {
+        let server = refusing_saves();
+        let prefs = TempDir::new();
+        let (_, outline, cx) = open(cx, &server, &prefs);
+        let title = cx
+            .debug_bounds("title-t1")
+            .expect("the todo was drawn")
+            .center();
+        cx.simulate_click(title, gpui::Modifiers::none());
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_input("milk");
+        cx.run_until_parked();
+
+        assert!(
+            cx.debug_bounds("next-match").is_some(),
+            "the search did not get what was typed"
+        );
+        assert!(!outline.read_with(cx, |outline, _| outline.has_unsaved_changes()));
+    }
+
+    #[gpui::test]
+    fn cmd_f_opens_the_search_from_a_comment_being_written(cx: &mut TestAppContext) {
+        let server = refusing_saves();
+        let prefs = TempDir::new();
+        let (_, outline, cx) = open(cx, &server, &prefs);
+        outline.update_in(cx, |outline, window, cx| {
+            outline.open_comments("t1", window, cx);
+        });
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_input("milk");
+        cx.run_until_parked();
+
+        assert!(
+            cx.debug_bounds("next-match").is_some(),
+            "the search did not get what was typed"
+        );
     }
 
     fn assert_in_a_row<const N: usize>(cx: &mut VisualTestContext, controls: [&'static str; N]) {
