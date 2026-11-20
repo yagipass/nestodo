@@ -65,6 +65,7 @@ actions!(
         NextMatch,
         PreviousMatch,
         ToggleShowDone,
+        OpenSearch,
     ]
 );
 
@@ -126,6 +127,7 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("shift-enter", PreviousMatch, search),
         KeyBinding::new("cmd-o", ToggleShowDone, workspace),
         KeyBinding::new("ctrl-o", ToggleShowDone, workspace),
+        KeyBinding::new("cmd-f", OpenSearch, workspace),
     ]
 }
 
@@ -604,6 +606,7 @@ impl OutlineView {
 
     pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.searching = true;
+        self.search_field.update(cx, TextField::select_all_text);
         window.focus(&self.search_field.focus_handle(cx), cx);
         cx.notify();
     }
@@ -1333,7 +1336,7 @@ impl OutlineView {
                 .into_any_element()
         } else {
             icon_button("open-search", Icon::Filter, 19., colors.hover_on_bg, cx)
-                .tooltip(Tooltip::text("Search (/)"))
+                .tooltip(Tooltip::text("Search (\u{2318} F)"))
                 .on_click(cx.listener(|this, _, window, cx| this.open_search(window, cx)))
                 .into_any_element()
         };

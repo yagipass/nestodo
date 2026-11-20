@@ -379,6 +379,13 @@ impl TextField {
         cx.notify();
     }
 
+    pub fn select_all_text(&mut self, cx: &mut Context<Self>) {
+        self.selected_range = 0..self.content.len();
+        self.selection_reversed = false;
+        self.reset_blink(cx);
+        cx.notify();
+    }
+
     pub fn sync_text(&mut self, text: &str, cx: &mut Context<Self>) {
         if self.content == text {
             return;
@@ -674,10 +681,7 @@ impl TextField {
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.selected_range = 0..self.content.len();
-        self.selection_reversed = false;
-        self.reset_blink(cx);
-        cx.notify();
+        self.select_all_text(cx);
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
