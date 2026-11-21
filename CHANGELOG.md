@@ -1,5 +1,16 @@
 # Changelog
 
+## [v0.14.1](https://github.com/yagipass/nestodo/compare/v0.14.0...v0.14.1) - 2026-11-21
+
+### Web
+- build(web): bump the minor-and-patch group with 3 updates by @dependabot[bot] in https://github.com/yagipass/nestodo/pull/178
+### Dependencies
+- build(android): bump the minor-and-patch group in /apps/android with 4 updates by @dependabot[bot] in https://github.com/yagipass/nestodo/pull/177
+- ci(actions): bump cachix/install-nix-action from 31.11.3 to 31.11.5 in the minor-and-patch group by @dependabot[bot] in https://github.com/yagipass/nestodo/pull/175
+- build(cli): bump webbrowser from 1.2.6 to 1.2.7 in /apps/cli in the minor-and-patch group by @dependabot[bot] in https://github.com/yagipass/nestodo/pull/174
+### Maintenance
+- build(web): bump vite-plus by @yagipass in https://github.com/yagipass/nestodo/pull/180
+
 ## [v0.14.0](https://github.com/yagipass/nestodo/compare/v0.13.1...v0.14.0) - 2026-11-20
 
 ### Web
