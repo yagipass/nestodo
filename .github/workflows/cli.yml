@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: cachix/install-nix-action@v31.11.3
+      - uses: cachix/install-nix-action@v31.11.5
       - uses: nix-community/cache-nix-action@v7.0.2
         with:
           primary-key: nix-cli-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock', 'apps/cli/Cargo.lock') }}
@@ -62,7 +62,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: cachix/install-nix-action@v31.11.3
+      - uses: cachix/install-nix-action@v31.11.5
       - uses: cachix/cachix-action@v17
         with:
           name: nestodo
