@@ -579,7 +579,7 @@ a {
 }
 
 .outline-page {
-  padding: 12px 10px 10px 6px;
+  padding: 12px 10px 56px 6px;
 }
 
 .outline {
@@ -1270,21 +1270,41 @@ body:has(.thread) {
 }
 
 .add-item {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 5;
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 6px 0 0 28px;
-  padding: 6px 10px 6px 8px;
+  justify-content: center;
+  width: 60px;
+  height: 60px;
+  padding: 0;
   border: none;
-  border-radius: 8px;
-  background: none;
-  color: var(--muted);
-  font-size: 0.875rem;
+  border-radius: 15px;
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--menu-shadow);
 }
 
 .add-item:hover {
-  background: var(--hover-on-bg);
-  color: var(--text);
+  background: var(--accent-strong);
+}
+
+.add-item[data-tip]::after {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+body:has(.thread) .add-item {
+  right: calc(420px + 16px);
+}
+
+@media (max-width: 899px) {
+  body:has(.thread) .add-item {
+    right: 16px;
+    bottom: calc(min(70vh, 600px) + 16px);
+  }
 }
 
 kbd {

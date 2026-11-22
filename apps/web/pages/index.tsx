@@ -808,9 +808,8 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
           })}
         </ul>
 
-        <button type="button" className="add-item" onClick={() => apply(append(outline, ROOT, fresh()))}>
-          <Icon name="add" size={18} />
-          Add item
+        <button type="button" className="add-item" aria-label="Add item" data-tip="Add item" onClick={() => apply(append(outline, ROOT, fresh()))}>
+          <Icon name="add" size={26} />
         </button>
       </main>
 
