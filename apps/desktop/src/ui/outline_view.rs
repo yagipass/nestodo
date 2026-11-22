@@ -34,7 +34,7 @@ use crate::ui::text_field::{
 };
 use crate::ui::theme::{Theme, theme};
 use crate::ui::widgets::{
-    NAMED_TITLE_BAR_WIDTH, PAGE_WIDTH, Tooltip, icon, icon_button, kbd, modal,
+    NAMED_TITLE_BAR_WIDTH, PAGE_WIDTH, Tooltip, icon, icon_button, kbd, modal, shadow,
 };
 
 actions!(
@@ -1849,34 +1849,26 @@ impl Render for OutlineView {
             let is_current = current.as_ref() == Some(&row.key);
             sheet.push(self.render_row(row, guide, is_current, window, cx));
         }
-        sheet.push(
-            div()
-                .flex()
-                .child(
-                    div()
-                        .id("add-item")
-                        .mt(px(6.))
-                        .ml(px(28.))
-                        .pl(px(8.))
-                        .pr(px(10.))
-                        .py(px(6.))
-                        .rounded(px(8.))
-                        .text_size(px(13.))
-                        .text_color(colors.muted)
-                        .cursor_pointer()
-                        .w_auto()
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .gap(px(8.))
-                        .hover(move |style| style.bg(colors.hover_on_bg).text_color(colors.text))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(|this, _, window, cx| this.add_item(window, cx)))
-                        .child(icon(Icon::Add, 17., colors.muted))
-                        .child("Add item"),
-                )
-                .into_any_element(),
-        );
+        let add = div()
+            .id("add-item")
+            .debug_selector(|| "add-item".into())
+            .absolute()
+            .right(px(16.))
+            .bottom(px(16.))
+            .size(px(60.))
+            .rounded(px(15.))
+            .bg(colors.accent)
+            .shadow(shadow(&colors, false))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .occlude()
+            .hover(move |style| style.bg(colors.accent_strong))
+            .tooltip(Tooltip::text("Add item"))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, window, cx| this.add_item(window, cx)))
+            .child(icon(Icon::Add, 26., colors.on_accent));
         let page = sheet.into_iter().map(|part| {
             div()
                 .w_full()
@@ -1931,23 +1923,29 @@ impl Render for OutlineView {
             .on_key_down(cx.listener(Self::on_key_down))
             .child(
                 div()
-                    .id("outline-scroll")
+                    .relative()
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| this.blur_editor(window, cx)),
+                    .child(
+                        div()
+                            .id("outline-scroll")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| this.blur_editor(window, cx)),
+                            )
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .px(px(16.))
+                            .pt(px(16.))
+                            .pb(px(96.))
+                            .children(page),
                     )
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .px(px(16.))
-                    .pt(px(16.))
-                    .pb(px(26.))
-                    .children(page),
+                    .child(add),
             )
             .children(thread)
             .children(picker)

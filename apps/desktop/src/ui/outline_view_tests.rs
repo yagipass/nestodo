@@ -1697,6 +1697,96 @@ fn adding_a_row_right_after_typing_saves_the_typing_first_so_a_failed_add_cannot
 }
 
 #[gpui::test]
+fn the_add_button_floats_in_the_window_corner_and_steps_aside_for_the_comments_pane_so_the_pane_never_covers_it(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    let corner = cx
+        .debug_bounds("add-item")
+        .expect("the add button was drawn");
+    assert_eq!(
+        (corner.right(), corner.bottom()),
+        (px(900. - 16.), px(600. - 16.))
+    );
+
+    open_comments_on(&view, cx, "Trip");
+    let pane = cx.debug_bounds("thread").expect("the pane was drawn");
+    let beside = cx
+        .debug_bounds("add-item")
+        .expect("the add button was drawn");
+    assert_eq!(
+        (beside.right(), beside.bottom()),
+        (pane.left() - px(16.), corner.bottom())
+    );
+
+    click_on(cx, "add-item");
+    settle(cx);
+    assert_eq!(
+        titles(&view, cx),
+        ["Groceries", "  Milk", "  Bread", "Trip", ""]
+    );
+    assert_eq!(focused(&view, cx), Some((String::new(), 0)));
+}
+
+#[gpui::test]
+fn a_click_on_the_add_button_adds_a_row_and_never_reaches_the_row_drawn_under_it(
+    cx: &mut TestAppContext,
+) {
+    let server = long_list();
+    let (view, cx) = open(cx, &server, true);
+    cx.simulate_resize(gpui::size(px(400.), px(400.)));
+    let button = cx
+        .debug_bounds("add-item")
+        .expect("the add button was drawn");
+    let overlap = (1..=40)
+        .find_map(|n| {
+            let selector: &'static str = Box::leak(format!("comments-t{n}").into_boxed_str());
+            cx.debug_bounds(selector)
+                .map(|comments| comments.intersect(&button))
+                .filter(|overlap| overlap.size.width > px(0.) && overlap.size.height > px(0.))
+        })
+        .expect("a row's comment button lies under the add button");
+
+    cx.simulate_click(overlap.center(), gpui::Modifiers::none());
+    settle(cx);
+
+    assert_eq!(thread_of(&view, cx), None);
+    assert_eq!(titles(&view, cx).len(), 41);
+    assert_eq!(focused(&view, cx), Some((String::new(), 0)));
+}
+
+#[gpui::test]
+fn the_last_row_scrolls_clear_of_the_add_button_so_no_todo_is_stuck_under_it(
+    cx: &mut TestAppContext,
+) {
+    let server = long_list();
+    let (_view, cx) = open(cx, &server, true);
+    cx.simulate_resize(gpui::size(px(400.), px(400.)));
+
+    cx.simulate_event(gpui::ScrollEvent {
+        position: gpui::point(px(100.), px(200.)),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-5000.))),
+        ..gpui::ScrollEvent::default()
+    });
+    settle(cx);
+
+    let button = cx
+        .debug_bounds("add-item")
+        .expect("the add button was drawn");
+    let last = cx
+        .debug_bounds("title-t40")
+        .expect("the last row was drawn");
+    assert!(
+        last.bottom() <= button.top(),
+        "the last row ends at {:?}, below the button's top at {:?}",
+        last.bottom(),
+        button.top()
+    );
+}
+
+#[gpui::test]
 fn enter_right_after_typing_saves_the_typing_before_the_new_row_so_a_failed_add_cannot_take_it_down_too(
     cx: &mut TestAppContext,
 ) {
