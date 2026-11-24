@@ -29,6 +29,7 @@
   --menu-shadow: 0 12px 32px light-dark(rgb(42 33 80 / 14%), transparent), 0 1px 2px light-dark(rgb(42 33 80 / 8%), transparent),
     0 16px 40px light-dark(transparent, rgb(0 0 0 / 45%));
   --dialog-shadow: 0 24px 56px light-dark(rgb(42 33 80 / 24%), rgb(0 0 0 / 50%)), 0 1px 2px light-dark(rgb(42 33 80 / 8%), transparent);
+  --header-height: 64px;
   font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
   accent-color: var(--accent);
   background: var(--bg);
@@ -55,27 +56,50 @@ body {
 }
 
 .app {
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 20px 16px 40px;
+  --pane-width: 0px;
+  display: grid;
+  grid-template-columns: 1fr min(728px, 100% - var(--pane-width) - 32px) 1fr var(--pane-width);
+  padding-bottom: 40px;
+}
+
+.app > * {
+  grid-column: 2;
+}
+
+.app > .app-header {
+  grid-column: 1 / -1;
 }
 
 .app-header {
+  position: relative;
+  z-index: 25;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 4px 18px;
+  height: var(--header-height);
+  padding: 0 12px 0 16px;
 }
 
 .app-header:has(.search) {
   position: sticky;
   top: 0;
-  z-index: 5;
   background: var(--bg);
 }
 
 :root:has(.app-header .search) {
-  scroll-padding-top: 64px;
+  scroll-padding-top: calc(var(--header-height) + 10px);
+}
+
+@media (min-width: 900px) {
+  body:has(.thread) .app-header {
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+  }
+
+  :root:has(.thread) {
+    scroll-padding-top: calc(var(--header-height) + 10px);
+  }
 }
 
 .brand {
@@ -874,7 +898,7 @@ a {
 
 .thread {
   position: fixed;
-  top: 0;
+  top: var(--header-height);
   right: 0;
   bottom: 0;
   z-index: 20;
@@ -885,8 +909,8 @@ a {
   background: var(--surface);
 }
 
-body:has(.thread) {
-  padding-right: 420px;
+body:has(.thread) .app {
+  --pane-width: 420px;
 }
 
 .thread-head {
@@ -1253,8 +1277,11 @@ body:has(.thread) {
 
 @media (max-width: 899px) {
   body:has(.thread) {
-    padding-right: 0;
     padding-bottom: min(70vh, 600px);
+  }
+
+  body:has(.thread) .app {
+    --pane-width: 0px;
   }
 
   .thread {
