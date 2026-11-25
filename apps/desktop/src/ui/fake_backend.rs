@@ -1,10 +1,13 @@
 use std::fmt::Write;
+use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::{Value, json};
 
 use nestodo_desktop::api::StatsResponse;
 use nestodo_desktop::error::Error;
+use nestodo_desktop::icon::{ImageIcon, image_id};
 use nestodo_desktop::profile::Profile;
 use nestodo_desktop::thread::{Timeline, TimelineItem};
 use nestodo_desktop::webhook::{Analytics, WebhookEdit, Webhooks};
@@ -21,6 +24,62 @@ struct Row {
     done: bool,
     collapsed: bool,
     icon: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct StoredImage {
+    id: String,
+    name: String,
+    bytes: Vec<u8>,
+}
+
+impl StoredImage {
+    fn listed(&self) -> ImageIcon {
+        ImageIcon {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            url: format!("/api/v1/icons/{}/image", self.id),
+        }
+    }
+}
+
+const MAX_IMAGES: usize = 50;
+
+pub fn png(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+        width,
+        height,
+        image::Rgb([90, 60, 200]),
+    ))
+    .write_to(&mut bytes, image::ImageFormat::Png)
+    .unwrap();
+    bytes.into_inner()
+}
+
+pub struct TempFile(pub PathBuf);
+
+impl TempFile {
+    pub fn with(name: &str, bytes: &[u8]) -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let folder = std::env::temp_dir().join(format!(
+            "nestodo-desktop-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        if let Some(folder) = self.0.parent() {
+            let _ = std::fs::remove_dir_all(folder);
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +104,12 @@ struct State {
     signed_out: bool,
     sent: Vec<Request>,
     timelines: Vec<u64>,
+    images: Vec<StoredImage>,
+    next_image: u64,
+    image_calls: Vec<String>,
+    image_lists: usize,
+    image_downloads: usize,
+    failing_image_lists: usize,
 }
 
 impl State {
@@ -167,6 +232,59 @@ impl FakeServer {
             }
         }
         server
+    }
+
+    pub fn with_images(self, names: &[&str]) -> Self {
+        for name in names {
+            self.store_image(name, png(8, 8));
+        }
+        self
+    }
+
+    pub fn store_image(&self, name: &str, bytes: Vec<u8>) -> String {
+        let mut state = self.state.lock().unwrap();
+        state.next_image += 1;
+        let id = format!("img{}", state.next_image);
+        state.images.push(StoredImage {
+            id: id.clone(),
+            name: name.to_string(),
+            bytes,
+        });
+        id
+    }
+
+    pub fn images(&self) -> Vec<(String, String)> {
+        let state = self.state.lock().unwrap();
+        state
+            .images
+            .iter()
+            .map(|image| (image.id.clone(), image.name.clone()))
+            .collect()
+    }
+
+    pub fn image_bytes(&self, id: &str) -> Option<Vec<u8>> {
+        let state = self.state.lock().unwrap();
+        state
+            .images
+            .iter()
+            .find(|image| image.id == id)
+            .map(|image| image.bytes.clone())
+    }
+
+    pub fn image_calls(&self) -> Vec<String> {
+        self.state.lock().unwrap().image_calls.clone()
+    }
+
+    pub fn image_lists(&self) -> usize {
+        self.state.lock().unwrap().image_lists
+    }
+
+    pub fn image_downloads(&self) -> usize {
+        self.state.lock().unwrap().image_downloads
+    }
+
+    pub fn fail_image_lists(&self, times: usize) {
+        self.state.lock().unwrap().failing_image_lists = times;
     }
 
     pub fn fail_with(&self, status: u16) {
@@ -335,6 +453,17 @@ impl FakeServer {
         };
         let not_found = || reply(404, json!({ "error": "not_found" }));
         let id = segments.get(1).and_then(|id| id.parse::<u64>().ok());
+        let unknown_image = body
+            .get("icon")
+            .and_then(Value::as_str)
+            .and_then(image_id)
+            .is_some_and(|image| !state.images.iter().any(|known| known.id == image));
+        if unknown_image {
+            return reply(
+                400,
+                json!({ "error": "invalid_icon", "message": "Icon not found" }),
+            );
+        }
         match (request.method, segments.as_slice(), id) {
             ("POST", ["todos"], _) => {
                 state.next_id += 1;
@@ -602,5 +731,84 @@ impl Backend for FakeServer {
 
     fn avatar(&self, _: &str) -> Result<Vec<u8>, Error> {
         Err(Error::Invalid("this server has no avatars".into()))
+    }
+
+    fn icons(&self) -> Result<Vec<ImageIcon>, Error> {
+        let mut state = self.state.lock().unwrap();
+        if state.signed_out {
+            return Err(Error::NotSignedIn);
+        }
+        state.image_lists += 1;
+        if state.failing_image_lists > 0 {
+            state.failing_image_lists -= 1;
+            return Err(Error::Server {
+                status: 500,
+                message: "failing".into(),
+            });
+        }
+        Ok(state.images.iter().map(StoredImage::listed).collect())
+    }
+
+    fn add_icon(&self, name: &str, image: &[u8]) -> Result<ImageIcon, Error> {
+        let mut state = self.state.lock().unwrap();
+        state.image_calls.push(format!("POST {name}"));
+        if state.images.len() >= MAX_IMAGES {
+            return Err(Error::Refused(vec![(
+                "too_many_icons".into(),
+                "You can add up to 50 images".into(),
+            )]));
+        }
+        state.next_image += 1;
+        let stored = StoredImage {
+            id: format!("img{}", state.next_image),
+            name: name.to_string(),
+            bytes: image.to_vec(),
+        };
+        state.images.push(stored.clone());
+        Ok(stored.listed())
+    }
+
+    fn rename_icon(&self, id: &str, name: &str) -> Result<ImageIcon, Error> {
+        let mut state = self.state.lock().unwrap();
+        state.image_calls.push(format!("PATCH {id} {name}"));
+        let Some(image) = state.images.iter_mut().find(|image| image.id == id) else {
+            return Err(Error::Refused(vec![(
+                "not_found".into(),
+                "Icon not found".into(),
+            )]));
+        };
+        image.name = name.to_string();
+        Ok(image.listed())
+    }
+
+    fn delete_icon(&self, id: &str) -> Result<(), Error> {
+        let mut state = self.state.lock().unwrap();
+        state.image_calls.push(format!("DELETE {id}"));
+        state.images.retain(|image| image.id != id);
+        let value = format!("image:{id}");
+        let State { rows, trash, .. } = &mut *state;
+        for row in rows
+            .iter_mut()
+            .chain(trash.iter_mut().flat_map(|(_, rows)| rows.iter_mut()))
+        {
+            if row.icon.as_deref() == Some(value.as_str()) {
+                row.icon = None;
+            }
+        }
+        Ok(())
+    }
+
+    fn icon_image(&self, url: &str) -> Result<Vec<u8>, Error> {
+        let mut state = self.state.lock().unwrap();
+        state.image_downloads += 1;
+        state
+            .images
+            .iter()
+            .find(|image| image.listed().url == url)
+            .map(|image| image.bytes.clone())
+            .ok_or(Error::Server {
+                status: 404,
+                message: "Icon not found".into(),
+            })
     }
 }

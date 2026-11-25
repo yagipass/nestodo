@@ -111,6 +111,10 @@ impl UndoHistory {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.steps.clear();
+    }
+
     pub fn end(&mut self) {
         if let Some(step) = self.steps.back_mut() {
             step.typing = None;
@@ -517,6 +521,21 @@ mod tests {
         );
 
         assert_eq!(history.undo(&iconed_on_phone), None);
+    }
+
+    #[test]
+    fn forgets_every_step_once_cleared_so_an_undo_cannot_put_back_an_image_that_was_deleted_meanwhile()
+     {
+        let start = start();
+        let mut history = UndoHistory::with_clock(|| Duration::ZERO);
+        let pictured = set_icon(&start, "t1", Some("image:a1")).unwrap();
+        history.record(&start, &pictured, None);
+        let replaced = set_icon(&pictured.outline, "t1", Some("\u{1F95B}")).unwrap();
+        history.record(&pictured.outline, &replaced, None);
+
+        history.clear();
+
+        assert_eq!(history.undo(&replaced.outline), None);
     }
 
     #[test]

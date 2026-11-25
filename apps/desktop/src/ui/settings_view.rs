@@ -1456,11 +1456,13 @@ mod tests {
 
     use gpui::{Focusable, TestAppContext, VisualTestContext};
     use nestodo_desktop::api::StatsResponse;
+    use nestodo_desktop::icon::ImageIcon;
     use nestodo_desktop::thread::TimelineItem;
     use nestodo_desktop::webhook::WebhookEdit;
     use nestodo_desktop::wire::{Reply, Request, Todo};
 
     use super::*;
+    use crate::ui::fake_backend::{TempFile, png};
     use crate::ui::theme::Theme;
 
     struct State {
@@ -1644,6 +1646,26 @@ mod tests {
             state.avatars_removed += 1;
             state.profile.avatar_url = None;
             Ok(())
+        }
+
+        fn icons(&self) -> Result<Vec<ImageIcon>, Error> {
+            Err(Error::Invalid("not used".into()))
+        }
+
+        fn add_icon(&self, _: &str, _: &[u8]) -> Result<ImageIcon, Error> {
+            Err(Error::Invalid("not used".into()))
+        }
+
+        fn rename_icon(&self, _: &str, _: &str) -> Result<ImageIcon, Error> {
+            Err(Error::Invalid("not used".into()))
+        }
+
+        fn delete_icon(&self, _: &str) -> Result<(), Error> {
+            Err(Error::Invalid("not used".into()))
+        }
+
+        fn icon_image(&self, _: &str) -> Result<Vec<u8>, Error> {
+            Err(Error::Invalid("not used".into()))
         }
 
         fn avatar(&self, url: &str) -> Result<Vec<u8>, Error> {
@@ -2084,37 +2106,6 @@ mod tests {
             editor.fields().all(|field| !field.read(cx).is_read_only())
         });
         assert!(unlocked);
-    }
-
-    fn png(width: u32, height: u32) -> Vec<u8> {
-        let mut bytes = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
-            width,
-            height,
-            image::Rgb([90, 60, 200]),
-        ))
-        .write_to(&mut bytes, image::ImageFormat::Png)
-        .unwrap();
-        bytes.into_inner()
-    }
-
-    struct TempFile(PathBuf);
-
-    impl TempFile {
-        fn with(name: &str, bytes: &[u8]) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "nestodo-desktop-settings-{}-{name}",
-                std::process::id()
-            ));
-            std::fs::write(&path, bytes).unwrap();
-            Self(path)
-        }
-    }
-
-    impl Drop for TempFile {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-        }
     }
 
     fn type_name(view: &Entity<SettingsView>, cx: &mut VisualTestContext, text: &str) {

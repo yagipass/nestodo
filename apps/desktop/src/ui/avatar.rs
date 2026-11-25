@@ -20,17 +20,22 @@ pub struct Avatar {
 impl Avatar {
     #[must_use]
     pub fn of(url: String, bytes: Vec<u8>) -> Option<Self> {
-        let format = match image::guess_format(&bytes).ok()? {
-            image::ImageFormat::Png => ImageFormat::Png,
-            image::ImageFormat::Jpeg => ImageFormat::Jpeg,
-            image::ImageFormat::WebP => ImageFormat::Webp,
-            _ => return None,
-        };
         Some(Self {
             url,
-            image: Arc::new(Image::from_bytes(format, bytes)),
+            image: decode_image(bytes)?,
         })
     }
+}
+
+#[must_use]
+pub fn decode_image(bytes: Vec<u8>) -> Option<Arc<Image>> {
+    let format = match image::guess_format(&bytes).ok()? {
+        image::ImageFormat::Png => ImageFormat::Png,
+        image::ImageFormat::Jpeg => ImageFormat::Jpeg,
+        image::ImageFormat::WebP => ImageFormat::Webp,
+        _ => return None,
+    };
+    Some(Arc::new(Image::from_bytes(format, bytes)))
 }
 
 pub fn fetch_avatar(

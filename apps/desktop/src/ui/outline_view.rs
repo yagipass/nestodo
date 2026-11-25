@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use gpui::{
     AnyElement, App, Bounds, Context, Entity, FocusHandle, Focusable, Font, FontWeight, Hsla,
-    KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseUpEvent, NoAction, Pixels,
+    Image, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseUpEvent, NoAction, Pixels,
     PromptLevel, Radians, ScrollHandle, SharedString, StrikethroughStyle, StyledText, Subscription,
     Task, TextLayout, TextRun, Transformation, TransformationMatrix, Window, actions, canvas, div,
     fill, point, prelude::*, px, size,
@@ -13,11 +13,12 @@ use gpui::{
 use unicode_segmentation::UnicodeSegmentation;
 
 use nestodo_desktop::error::Error;
+use nestodo_desktop::icon::{ImageIcon, image_id, image_value};
 use nestodo_desktop::outline::{
-    END, Focus, Guide, Key, Outline, ROOT, Row, append, caret_in, destinations, guides, indent,
-    key_for, merge_into_previous, move_by, move_to, next_hit, open_under, outdent, parent_of,
-    remove, rename, search_hits, set_collapsed, set_comments, set_icon, split, subtree,
-    toggle_done, visible_rows,
+    END, Focus, Guide, Key, Outline, ROOT, Row, append, caret_in, clear_icon, destinations, guides,
+    icon_uses, indent, key_for, merge_into_previous, move_by, move_to, next_hit, open_under,
+    outdent, parent_of, remove, rename, search_hits, set_collapsed, set_comments, set_icon, split,
+    subtree, toggle_done, visible_rows,
 };
 use nestodo_desktop::sync::Sync;
 use nestodo_desktop::title::{link_label, link_target, tokens};
@@ -25,7 +26,7 @@ use nestodo_desktop::todos::{MAX_COMMENT_LENGTH, MAX_TITLE_LENGTH};
 use nestodo_desktop::undo::UndoHistory;
 use nestodo_desktop::wire::Todo;
 
-use crate::ui::avatar::Avatar;
+use crate::ui::avatar::{Avatar, decode_image};
 use crate::ui::backend::Backend;
 use crate::ui::icon_picker::{IconEvent, IconPicker};
 use crate::ui::icons::Icon;
@@ -34,9 +35,9 @@ use crate::ui::text_field::{
     Copy, FieldEvent, SelectAll, TextField, offset_from_utf16, offset_to_utf16,
 };
 use crate::ui::theme::{Theme, theme};
-use crate::ui::todo_icon::todo_icon;
+use crate::ui::todo_icon::{Icons, todo_icon};
 use crate::ui::widgets::{
-    NAMED_TITLE_BAR_WIDTH, PAGE_WIDTH, Tooltip, icon, icon_button, kbd, modal, shadow,
+    NAMED_TITLE_BAR_WIDTH, PAGE_WIDTH, Tooltip, bullet_mark, icon, icon_button, kbd, modal, shadow,
 };
 
 actions!(
@@ -162,6 +163,9 @@ pub struct OutlineView {
     picker: Option<Entity<MovePicker>>,
     choosing_icon: Option<Focus>,
     icon_picker: Option<Entity<IconPicker>>,
+    icons: Icons,
+    icons_loading: bool,
+    asked_icons: HashSet<String>,
     sync: Sync,
     history: UndoHistory,
     counter: u64,
@@ -392,7 +396,7 @@ impl OutlineView {
         }));
         let clock = cx.background_executor().clone();
         let start = clock.now();
-        Self {
+        let mut view = Self {
             backend,
             outline,
             show_done,
@@ -406,6 +410,9 @@ impl OutlineView {
             picker: None,
             choosing_icon: None,
             icon_picker: None,
+            icons: Icons::default(),
+            icons_loading: false,
+            asked_icons: HashSet::new(),
             sync,
             history: UndoHistory::with_clock(move || clock.now().saturating_duration_since(start)),
             counter: 0,
@@ -422,7 +429,9 @@ impl OutlineView {
             flush_task: None,
             needs_editor_check: false,
             subscriptions,
-        }
+        };
+        view.load_icons(cx);
+        view
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
@@ -833,13 +842,31 @@ impl OutlineView {
         };
         self.leave_editor(window, cx);
         self.editing = None;
-        let current = self.outline.item(key).icon.clone();
-        let picker = cx.new(|cx| IconPicker::new(current, window, cx));
+        let item = self.outline.item(key);
+        let (current, title) = (item.icon.clone(), item.title.clone());
+        let backend = self.backend.clone();
+        let icons = self.icons.clone();
+        let uses = icon_uses(&self.outline);
+        let picker = cx.new(|cx| IconPicker::new(current, title, backend, icons, uses, window, cx));
         let subscription =
-            cx.subscribe_in(&picker, window, |this, _, event, window, cx| match event {
-                IconEvent::Chosen(icon) => this.choose_icon(icon.as_deref(), window, cx),
-                IconEvent::Dismissed => this.close_icon(window, cx),
-            });
+            cx.subscribe_in(
+                &picker,
+                window,
+                |this, picker, event, window, cx| match event {
+                    IconEvent::Chosen(icon) => this.choose_icon(icon.as_deref(), window, cx),
+                    IconEvent::Added {
+                        image,
+                        picture,
+                        waiting,
+                    } => {
+                        let open = this.icon_picker.as_ref() == Some(picker);
+                        this.image_added(image, picture, *waiting && open, window, cx);
+                    }
+                    IconEvent::Renamed(image) => this.image_renamed(image, cx),
+                    IconEvent::Deleted(id) => this.image_deleted(id, cx),
+                    IconEvent::Dismissed => this.close_icon(window, cx),
+                },
+            );
         self.subscriptions.push(subscription);
         self.choosing_icon = Some(Focus {
             key: key.to_owned(),
@@ -872,6 +899,135 @@ impl OutlineView {
         self.icon_picker = None;
         self.focus_row(row, window, cx);
         cx.notify();
+    }
+
+    fn image_added(
+        &mut self,
+        image: &ImageIcon,
+        picture: &Arc<Image>,
+        use_it: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.icons.list.iter().any(|known| known.id == image.id) {
+            self.icons.list.push(image.clone());
+        }
+        self.icons
+            .pictures
+            .insert(image.id.clone(), picture.clone());
+        if use_it {
+            self.choose_icon(Some(&image.value()), window, cx);
+        } else {
+            self.sync_icon_picker(cx);
+            cx.notify();
+        }
+    }
+
+    fn image_renamed(&mut self, image: &ImageIcon, cx: &mut Context<Self>) {
+        if let Some(known) = self
+            .icons
+            .list
+            .iter_mut()
+            .find(|known| known.id == image.id)
+        {
+            known.clone_from(image);
+        }
+        cx.notify();
+    }
+
+    fn image_deleted(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.icons.list.retain(|known| known.id != id);
+        self.icons.pictures.remove(id);
+        self.outline = clear_icon(&self.outline, &image_value(id));
+        self.history.clear();
+        self.sync_icon_picker(cx);
+        cx.notify();
+    }
+
+    fn image_ids(&self) -> Vec<String> {
+        icon_uses(&self.outline)
+            .into_keys()
+            .filter_map(|icon| image_id(&icon).map(str::to_owned))
+            .collect()
+    }
+
+    fn load_icons(&mut self, cx: &mut Context<Self>) {
+        if self.icons_loading {
+            return;
+        }
+        self.icons_loading = true;
+        self.asked_icons.extend(self.image_ids());
+        let backend = self.backend.clone();
+        cx.spawn(async move |this, cx| {
+            let asked = backend.clone();
+            let listed = cx.background_spawn(async move { asked.icons() }).await;
+            let Ok(missing) = this.update(cx, |this, cx| this.icons_listed(listed.ok(), cx)) else {
+                return;
+            };
+            if missing.is_empty() {
+                return;
+            }
+            let pictures: Vec<(String, Arc<Image>)> = cx
+                .background_spawn(async move {
+                    missing
+                        .into_iter()
+                        .filter_map(|image| {
+                            let bytes = backend.icon_image(&image.url).ok()?;
+                            Some((image.id, decode_image(bytes)?))
+                        })
+                        .collect()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.icons.pictures.extend(pictures);
+                this.sync_icon_picker(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn icons_listed(
+        &mut self,
+        listed: Option<Vec<ImageIcon>>,
+        cx: &mut Context<Self>,
+    ) -> Vec<ImageIcon> {
+        self.icons_loading = false;
+        if let Some(listed) = listed {
+            self.icons.list = listed;
+        }
+        let missing = self
+            .icons
+            .list
+            .iter()
+            .filter(|image| !self.icons.pictures.contains_key(&image.id))
+            .cloned()
+            .collect();
+        self.check_unknown_icons(cx);
+        self.sync_icon_picker(cx);
+        cx.notify();
+        missing
+    }
+
+    fn check_unknown_icons(&mut self, cx: &mut Context<Self>) {
+        if self.icons_loading {
+            return;
+        }
+        let unknown = self.image_ids().into_iter().any(|id| {
+            !self.asked_icons.contains(&id) && !self.icons.list.iter().any(|known| known.id == id)
+        });
+        if unknown {
+            self.load_icons(cx);
+        }
+    }
+
+    fn sync_icon_picker(&self, cx: &mut Context<Self>) {
+        if let Some(picker) = &self.icon_picker {
+            let icons = self.icons.clone();
+            let uses = icon_uses(&self.outline);
+            picker.update(cx, |picker, cx| picker.follow(icons, uses, cx));
+        }
     }
 
     fn on_title(&mut self, key: &str, title: &str, composing: bool, cx: &mut Context<Self>) {
@@ -950,6 +1106,7 @@ impl OutlineView {
             return;
         }
         self.refreshing = true;
+        self.load_icons(cx);
         let revision = self.sync.revision;
         let backend = self.backend.clone();
         cx.spawn(async move |this, cx| {
@@ -984,6 +1141,8 @@ impl OutlineView {
                     sync.key_of(id).unwrap_or_else(|| key_for(id))
                 });
                 this.needs_editor_check = true;
+                this.check_unknown_icons(cx);
+                this.sync_icon_picker(cx);
                 cx.notify();
             })
             .ok();
@@ -1558,18 +1717,7 @@ impl OutlineView {
                         cx.listener(move |this, _, window, cx| this.toggle_row(&key, window, cx)),
                     )
                 })
-                .child(if item.done {
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(px(16.))
-                        .rounded(px(5.))
-                        .bg(colors.accent)
-                        .child(icon(Icon::Tick, 11., colors.on_accent))
-                } else {
-                    div().size(px(8.)).rounded_full().bg(colors.accent)
-                })
+                .child(bullet_mark(item.done, &colors))
         };
 
         let marker = div()
@@ -1690,7 +1838,7 @@ impl OutlineView {
         let icon_slot = item
             .icon
             .as_deref()
-            .and_then(|value| todo_icon(value, 17., item.done))
+            .and_then(|value| todo_icon(value, 17., item.done, &self.icons))
             .map(|glyph| {
                 let key = key.clone();
                 let selector_key = key.clone();

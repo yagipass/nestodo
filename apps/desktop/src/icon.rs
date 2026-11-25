@@ -1,9 +1,40 @@
+use std::path::Path;
+
+use serde::Deserialize;
 use unicode_properties::{EmojiStatus, UnicodeEmoji};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::todos::utf16_len;
 
 pub const MAX_ICON_LENGTH: usize = 32;
+
+pub const MAX_ICON_NAME_LENGTH: usize = 30;
+
+const IMAGE_KIND: &str = "image:";
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ImageIcon {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+}
+
+impl ImageIcon {
+    #[must_use]
+    pub fn value(&self) -> String {
+        image_value(&self.id)
+    }
+}
+
+#[must_use]
+pub fn image_value(id: &str) -> String {
+    format!("{IMAGE_KIND}{id}")
+}
+
+#[must_use]
+pub fn image_id(icon: &str) -> Option<&str> {
+    icon.strip_prefix(IMAGE_KIND)
+}
 
 pub const ICON_CHOICES: [&str; 40] = [
     "🏠",
@@ -82,9 +113,34 @@ fn is_typed(icon: &str) -> bool {
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shown<'a> {
+    Emoji(&'a str),
+    Image(&'a ImageIcon),
+}
+
 #[must_use]
-pub fn shown_icon(icon: Option<&str>) -> Option<&str> {
-    icon.filter(|icon| !is_typed(icon))
+pub fn shown_icon<'a>(icon: &'a str, images: &'a [ImageIcon]) -> Option<Shown<'a>> {
+    if let Some(id) = image_id(icon) {
+        return images.iter().find(|image| image.id == id).map(Shown::Image);
+    }
+    (!is_typed(icon)).then_some(Shown::Emoji(icon))
+}
+
+#[must_use]
+pub fn icon_name_from(path: &Path) -> String {
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy())
+        .unwrap_or_default();
+    let mut name = String::new();
+    for grapheme in stem.trim().graphemes(true) {
+        if utf16_len(&name) + utf16_len(grapheme) > MAX_ICON_NAME_LENGTH {
+            break;
+        }
+        name.push_str(grapheme);
+    }
+    name.trim_end().to_owned()
 }
 
 #[cfg(test)]
@@ -141,18 +197,65 @@ mod tests {
         assert!(!is_icon(&family(12)));
     }
 
+    fn mike() -> ImageIcon {
+        ImageIcon {
+            id: "0f8e2c".into(),
+            name: "Mike".into(),
+            url: "/api/v1/icons/0f8e2c/image".into(),
+        }
+    }
+
     #[test]
     fn hides_a_typed_icon_from_a_later_release_instead_of_drawing_its_raw_text() {
-        for typed in ["line:cart:green", "image:0f8e2c", "a:", "x1_y-z:anything"] {
-            assert_eq!(shown_icon(Some(typed)), None, "{typed:?} is drawn");
+        let images = [mike()];
+        for typed in ["line:cart:green", "image:", "a:", "x1_y-z:anything"] {
+            assert_eq!(shown_icon(typed, &images), None, "{typed:?} is drawn");
         }
     }
 
     #[test]
     fn draws_any_other_value_as_it_is_so_an_emoji_the_client_does_not_know_yet_still_appears() {
         for value in ["\u{1F6D2}", "Cart:x", "1line:cart", ":cart", "line cart:"] {
-            assert_eq!(shown_icon(Some(value)), Some(value));
+            assert_eq!(shown_icon(value, &[]), Some(Shown::Emoji(value)));
         }
-        assert_eq!(shown_icon(None), None);
+    }
+
+    #[test]
+    fn draws_an_image_only_while_it_is_in_the_members_list_so_one_deleted_elsewhere_or_not_loaded_yet_shows_nothing()
+     {
+        let images = [mike()];
+
+        assert_eq!(
+            shown_icon("image:0f8e2c", &images),
+            Some(Shown::Image(&images[0]))
+        );
+        assert_eq!(shown_icon("image:0f8e2c", &[]), None);
+        assert_eq!(shown_icon("image:9a1b", &images), None);
+        assert_eq!(
+            shown_icon(&mike().value(), &images),
+            Some(Shown::Image(&images[0]))
+        );
+    }
+
+    #[test]
+    fn names_a_new_image_after_its_file_without_the_extension_trimmed_and_cut_to_what_the_server_accepts()
+     {
+        for (file, name) in [
+            ("/Users/kim/Pictures/Mike.jpg", "Mike"),
+            ("  school emblem .final.png", "school emblem .final"),
+            ("IMG_2041", "IMG_2041"),
+            ("   .png", ""),
+            ("/tmp/   .png", ""),
+            (
+                "a name far longer than thirty characters.webp",
+                "a name far longer than thirty",
+            ),
+        ] {
+            assert_eq!(icon_name_from(Path::new(file)), name, "{file:?}");
+        }
+        let cats = "\u{1F408}".repeat(16);
+        let named = icon_name_from(Path::new(&format!("{cats}.png")));
+        assert_eq!(named, "\u{1F408}".repeat(15));
+        assert!(utf16_len(&named) <= MAX_ICON_NAME_LENGTH);
     }
 }

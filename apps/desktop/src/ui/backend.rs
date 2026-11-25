@@ -1,5 +1,6 @@
 use nestodo_desktop::api::{Client, StatsResponse};
 use nestodo_desktop::error::Error;
+use nestodo_desktop::icon::ImageIcon;
 use nestodo_desktop::profile::Profile;
 use nestodo_desktop::thread::TimelineItem;
 use nestodo_desktop::webhook::{Analytics, WebhookEdit, Webhooks};
@@ -20,6 +21,11 @@ pub trait Backend: Send + Sync + 'static {
     fn save_avatar(&self, image: &[u8]) -> Result<Profile, Error>;
     fn remove_avatar(&self) -> Result<(), Error>;
     fn avatar(&self, url: &str) -> Result<Vec<u8>, Error>;
+    fn icons(&self) -> Result<Vec<ImageIcon>, Error>;
+    fn add_icon(&self, name: &str, image: &[u8]) -> Result<ImageIcon, Error>;
+    fn rename_icon(&self, id: &str, name: &str) -> Result<ImageIcon, Error>;
+    fn delete_icon(&self, id: &str) -> Result<(), Error>;
+    fn icon_image(&self, url: &str) -> Result<Vec<u8>, Error>;
 }
 
 impl Backend for Client {
@@ -77,5 +83,25 @@ impl Backend for Client {
 
     fn avatar(&self, url: &str) -> Result<Vec<u8>, Error> {
         Client::avatar(self, url)
+    }
+
+    fn icons(&self) -> Result<Vec<ImageIcon>, Error> {
+        Client::icons(self)
+    }
+
+    fn add_icon(&self, name: &str, image: &[u8]) -> Result<ImageIcon, Error> {
+        Client::add_icon(self, name, image)
+    }
+
+    fn rename_icon(&self, id: &str, name: &str) -> Result<ImageIcon, Error> {
+        Client::rename_icon(self, id, name)
+    }
+
+    fn delete_icon(&self, id: &str) -> Result<(), Error> {
+        Client::delete_icon(self, id)
+    }
+
+    fn icon_image(&self, url: &str) -> Result<Vec<u8>, Error> {
+        Client::icon_image(self, url)
     }
 }
