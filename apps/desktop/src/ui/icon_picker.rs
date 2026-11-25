@@ -20,7 +20,7 @@ use crate::ui::icons::Icon;
 use crate::ui::text_field::{FieldEvent, TextField};
 use crate::ui::theme::{Theme, theme};
 use crate::ui::todo_icon::{Icons, image_square, todo_icon};
-use crate::ui::widgets::{Tooltip, bullet_mark, danger_pill, icon, pill, text_button};
+use crate::ui::widgets::{Tooltip, danger_pill, done_badge, icon, pill, text_button};
 
 actions!(icon_picker, [ApplyOther, SaveImageName, CloseIconPicker]);
 
@@ -736,21 +736,14 @@ impl IconPicker {
             .bg(colors.bg)
             .child(
                 div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .justify_center()
-                    .size(px(22.))
-                    .child(bullet_mark(done, colors)),
-            )
-            .child(
-                div()
+                    .relative()
                     .flex()
                     .flex_none()
                     .items_center()
                     .justify_center()
                     .size(px(26.))
-                    .child(image_square(picture.clone(), 22., done)),
+                    .child(image_square(picture.clone(), 22., done))
+                    .when(done, |mark| mark.child(done_badge(colors.bg, colors))),
             )
             .child(
                 div()

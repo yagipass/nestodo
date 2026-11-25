@@ -37,7 +37,8 @@ use crate::ui::text_field::{
 use crate::ui::theme::{Theme, theme};
 use crate::ui::todo_icon::{Icons, todo_icon};
 use crate::ui::widgets::{
-    NAMED_TITLE_BAR_WIDTH, PAGE_WIDTH, Tooltip, bullet_mark, icon, icon_button, kbd, modal, shadow,
+    NAMED_TITLE_BAR_WIDTH, PAGE_WIDTH, Tooltip, bullet_mark, done_badge, icon, icon_button, kbd,
+    modal, shadow,
 };
 
 actions!(
@@ -1640,6 +1641,12 @@ impl OutlineView {
             FontWeight::NORMAL
         };
 
+        let glyph = item
+            .icon
+            .as_deref()
+            .and_then(|value| todo_icon(value, 17., item.done, &self.icons));
+        let with_icon = glyph.is_some();
+
         let rail = || div().absolute().left(px(12.)).w(px(2.)).bg(colors.guide);
         let guides = guide.through.iter().enumerate().map(|(level, &through)| {
             div()
@@ -1654,7 +1661,7 @@ impl OutlineView {
                             .absolute()
                             .top_0()
                             .left(px(12.))
-                            .w(px(18.))
+                            .w(px(if with_icon { 16. } else { 18. }))
                             .h(px(18.))
                             .border_l_2()
                             .border_b_2()
@@ -1695,14 +1702,31 @@ impl OutlineView {
 
         let bullet = {
             let key = key.clone();
+            let selector_key = key.clone();
+            let badge_key = key.clone();
+            let ring = if threaded {
+                colors.accent_soft_on_bg
+            } else if active {
+                colors.hover_on_bg
+            } else {
+                colors.bg
+            };
+            let mark = match glyph {
+                Some(glyph) => glyph,
+                None => bullet_mark(item.done, &colors).into_any_element(),
+            };
             div()
                 .id("bullet")
+                .relative()
                 .flex()
                 .flex_none()
                 .items_center()
                 .justify_center()
-                .size(px(22.))
+                .size(px(if with_icon { 26. } else { 22. }))
                 .rounded(px(7.))
+                .when(with_icon, |bullet| {
+                    bullet.debug_selector(move || format!("icon-{selector_key}"))
+                })
                 .when(has_children && item.collapsed, |bullet| {
                     bullet.bg(colors.accent_soft_on_bg)
                 })
@@ -1717,7 +1741,18 @@ impl OutlineView {
                         cx.listener(move |this, _, window, cx| this.toggle_row(&key, window, cx)),
                     )
                 })
-                .child(bullet_mark(item.done, &colors))
+                .child(mark)
+                .when(with_icon && item.done, |bullet| {
+                    bullet.child(
+                        done_badge(ring, &colors)
+                            .debug_selector(move || format!("done-badge-{badge_key}"))
+                            .when(!threaded, |badge| {
+                                badge.group_hover(group.clone(), |style| {
+                                    style.border_color(colors.hover_on_bg)
+                                })
+                            }),
+                    )
+                })
         };
 
         let marker = div()
@@ -1727,9 +1762,9 @@ impl OutlineView {
             .justify_center()
             .w(px(26.))
             .min_h(px(34.))
-            .pt(px(6.))
+            .pt(px(if with_icon { 4. } else { 6. }))
             .when(guide.stem, |marker| {
-                marker.child(rail().top(px(21.)).bottom_0())
+                marker.child(rail().top(px(if with_icon { 30. } else { 21. })).bottom_0())
             })
             .children(fold)
             .child(bullet);
@@ -1834,33 +1869,6 @@ impl OutlineView {
                 )
                 .into_any_element()
         };
-
-        let icon_slot = item
-            .icon
-            .as_deref()
-            .and_then(|value| todo_icon(value, 17., item.done, &self.icons))
-            .map(|glyph| {
-                let key = key.clone();
-                let selector_key = key.clone();
-                div()
-                    .id("icon")
-                    .debug_selector(move || format!("icon-{selector_key}"))
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .justify_center()
-                    .size(px(26.))
-                    .mt(px(4.))
-                    .rounded(px(7.))
-                    .cursor_pointer()
-                    .hover(move |style| style.bg(colors.hover_strong_on_bg))
-                    .tooltip(Tooltip::text(format!("Change icon of {name}")))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_icon(&key, window, cx);
-                    }))
-                    .child(glyph)
-            });
 
         let title = div().flex().flex_col().flex_1().min_w_0().child(line);
 
@@ -1985,7 +1993,6 @@ impl OutlineView {
             })
             .children(guides)
             .child(marker)
-            .children(icon_slot)
             .child(title)
             .child(icon_button)
             .child(comment_button)
