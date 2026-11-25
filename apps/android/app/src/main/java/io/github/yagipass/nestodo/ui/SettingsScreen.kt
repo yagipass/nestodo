@@ -59,7 +59,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.github.yagipass.nestodo.SettingsState
 import io.github.yagipass.nestodo.TodoViewModel
-import io.github.yagipass.nestodo.data.avatarImage
+import io.github.yagipass.nestodo.data.squareImage
+import io.github.yagipass.nestodo.domain.AVATAR_SIZE
 import io.github.yagipass.nestodo.domain.Appearance
 import io.github.yagipass.nestodo.domain.Avatar
 import io.github.yagipass.nestodo.domain.Profile
@@ -222,7 +223,9 @@ private fun ProfileCard(
             reading = true
             scope.launch {
                 val image =
-                    withContext(Dispatchers.IO) { avatarImage(context.contentResolver, uri) }
+                    withContext(Dispatchers.IO) {
+                        squareImage(context.contentResolver, uri, AVATAR_SIZE)
+                    }
                 reading = false
                 if (image == null) viewModel.avatarUnreadable() else viewModel.uploadAvatar(image)
             }

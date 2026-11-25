@@ -4,6 +4,7 @@ import io.github.yagipass.nestodo.access.HttpResult
 import io.github.yagipass.nestodo.access.fetch
 import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Day
+import io.github.yagipass.nestodo.domain.ImageIcon
 import io.github.yagipass.nestodo.domain.Profile
 import io.github.yagipass.nestodo.domain.TimelineItem
 import io.github.yagipass.nestodo.domain.Todo
@@ -35,10 +36,13 @@ sealed class ApiException(message: String) : Exception(message) {
 
     class NotFound(val id: Long) : ApiException("todo $id was not found")
 
-    class Invalid(val fields: Map<String, String> = emptyMap()) :
-        ApiException("the server rejected the input")
+    class Invalid(
+        val fields: Map<String, String> = emptyMap(),
+        val serverMessage: String? = null,
+    ) : ApiException("the server rejected the input")
 
-    class Server(val status: Int) : ApiException("the server returned $status")
+    class Server(val status: Int, val serverMessage: String? = null) :
+        ApiException("the server returned $status")
 }
 
 interface TodoRepository {
@@ -89,6 +93,16 @@ interface TodoRepository {
     suspend fun removeAvatar()
 
     suspend fun avatar(url: String): ByteArray
+
+    suspend fun icons(): List<ImageIcon>
+
+    suspend fun addIcon(name: String, image: ByteArray): ImageIcon
+
+    suspend fun renameIcon(id: String, name: String): ImageIcon
+
+    suspend fun deleteIcon(id: String)
+
+    suspend fun iconImage(url: String): ByteArray
 }
 
 class TodoApi(
@@ -107,6 +121,12 @@ class TodoApi(
     @Serializable private data class Written(val comment: TimelineItem.Comment)
 
     @Serializable private data class Consent(val enabled: Boolean)
+
+    @Serializable private data class Shelf(val icons: List<ImageIcon>)
+
+    @Serializable private data class Shelved(val icon: ImageIcon)
+
+    @Serializable private data class Problem(val message: String? = null)
 
     @Serializable
     private data class Issue(val path: String = "", val message: String) {
@@ -208,28 +228,47 @@ class TodoApi(
         parse(call("PUT", url(PROFILE), buildJsonObject { put("name", name) }))
 
     override suspend fun saveAvatar(image: ByteArray): Profile =
-        parse(
-            call(
-                "PUT",
-                url(AVATAR),
-                buildJsonObject { put("image", Base64.getEncoder().encodeToString(image)) },
-            )
-        )
+        parse(call("PUT", url(AVATAR), buildJsonObject { put("image", encoded(image)) }))
 
     override suspend fun removeAvatar() {
         call("DELETE", url(AVATAR))
     }
 
-    override suspend fun avatar(url: String): ByteArray {
+    override suspend fun avatar(url: String): ByteArray = download(url, AVATARS)
+
+    override suspend fun icons(): List<ImageIcon> = parse<Shelf>(call("GET", url(ICONS))).icons
+
+    override suspend fun addIcon(name: String, image: ByteArray): ImageIcon {
+        val body = buildJsonObject {
+            put("name", name)
+            put("image", encoded(image))
+        }
+        return parse<Shelved>(call("POST", url(ICONS), body)).icon
+    }
+
+    override suspend fun renameIcon(id: String, name: String): ImageIcon =
+        parse<Shelved>(call("PATCH", icon(id), buildJsonObject { put("name", name) })).icon
+
+    override suspend fun deleteIcon(id: String) {
+        call("DELETE", icon(id))
+    }
+
+    override suspend fun iconImage(url: String): ByteArray = download(url, "$ICONS/")
+
+    private suspend fun download(url: String, under: String): ByteArray {
         val target =
             base.resolve(url)?.takeIf {
                 it.scheme == base.scheme &&
                     it.host == base.host &&
                     it.port == base.port &&
-                    it.encodedPath.startsWith(AVATARS)
-            } ?: throw IllegalArgumentException("$url is not an avatar on the server")
+                    it.encodedPath.startsWith(under)
+            } ?: throw IllegalArgumentException("$url is not under $under on the server")
         return call("GET", target).body
     }
+
+    private fun encoded(image: ByteArray): String = Base64.getEncoder().encodeToString(image)
+
+    private fun icon(id: String): HttpUrl = url(ICONS).newBuilder().addPathSegment(id).build()
 
     private fun commentBody(body: String): JsonObject = buildJsonObject { put("body", body) }
 
@@ -255,8 +294,9 @@ class TodoApi(
         return when {
             response.code in 200..299 -> response
             response.code == 404 && id != null -> throw ApiException.NotFound(id)
-            response.code == 400 -> throw ApiException.Invalid(refusedFields(response))
-            else -> throw ApiException.Server(response.code)
+            response.code == 400 ->
+                throw ApiException.Invalid(refusedFields(response), messageOf(response))
+            else -> throw ApiException.Server(response.code, messageOf(response))
         }
     }
 
@@ -295,6 +335,15 @@ class TodoApi(
             emptyMap()
         }
 
+    private fun messageOf(response: HttpResult): String? =
+        try {
+            json.decodeFromString<Problem>(response.body.decodeToString()).message
+        } catch (_: SerializationException) {
+            null
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+
     private inline fun <reified T> parse(response: HttpResult): T =
         try {
             json.decodeFromString<T>(response.body.decodeToString())
@@ -313,6 +362,7 @@ class TodoApi(
         const val PROFILE = "/api/v1/profile"
         const val AVATAR = "/api/v1/profile/avatar"
         const val AVATARS = "/api/v1/avatars/"
+        const val ICONS = "/api/v1/icons"
         const val LOGIN_PATH = "/cdn-cgi/access/login"
         val JSON = "application/json".toMediaType()
         val json = Json { ignoreUnknownKeys = true }

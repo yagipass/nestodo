@@ -3,6 +3,8 @@ package io.github.yagipass.nestodo.data
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import io.github.yagipass.nestodo.access.StorageCipher
+import io.github.yagipass.nestodo.domain.ImageIcon
+import io.github.yagipass.nestodo.domain.MyIcons
 import io.github.yagipass.nestodo.domain.Todo
 import io.github.yagipass.nestodo.domain.outlineOf
 import io.github.yagipass.nestodo.preferenceStore
@@ -11,6 +13,7 @@ import java.util.Base64
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -45,17 +48,30 @@ class PreferenceOutlineCacheTest {
             )
         )
 
-    private fun TestScope.cache() = PreferenceOutlineCache(preferenceStore(folder), keystore)
+    private val icons =
+        MyIcons(
+            listOf(
+                ImageIcon("3f2a9c1e-0000-4000-8000-000000000001", "ミケ", "/api/v1/icons/a/image"),
+                ImageIcon("3f2a9c1e-0000-4000-8000-000000000002", "Crest", "/api/v1/icons/b/image"),
+            ),
+            mapOf("3f2a9c1e-0000-4000-8000-000000000001" to byteArrayOf(0x52, 0x49, -1, 0, 7)),
+        )
+
+    private fun TestScope.iconStore() = preferenceStore(folder, name = "icons")
+
+    private fun TestScope.cache() =
+        PreferenceOutlineCache(preferenceStore(folder), iconStore(), keystore)
 
     @Test
     fun `saved todos come back as they were, so the next launch shows the same order, ticks, folds, icons and comment counts`() =
         runTest {
             val store = preferenceStore(folder)
-            PreferenceOutlineCache(store, keystore).save("nestodo.example.com", outline)
+            val iconStore = iconStore()
+            PreferenceOutlineCache(store, iconStore, keystore).save("nestodo.example.com", outline)
 
             assertEquals(
                 outline,
-                PreferenceOutlineCache(store, keystore).load("nestodo.example.com"),
+                PreferenceOutlineCache(store, iconStore, keystore).load("nestodo.example.com"),
             )
         }
 
@@ -64,7 +80,8 @@ class PreferenceOutlineCacheTest {
         runTest {
             val store = preferenceStore(folder)
 
-            assertTrue(PreferenceOutlineCache(store, keystore).save("nestodo.example.com", outline))
+            val cache = PreferenceOutlineCache(store, iconStore(), keystore)
+            assertTrue(cache.save("nestodo.example.com", outline))
 
             assertFalse(store.data.first()[saved]!!.contains("Groceries"))
         }
@@ -121,6 +138,62 @@ class PreferenceOutlineCacheTest {
                 it[saved] = keystore.seal("{\"nodes\":")
             }
 
-            assertNull(PreferenceOutlineCache(store, keystore).load("nestodo.example.com"))
+            assertNull(
+                PreferenceOutlineCache(store, iconStore(), keystore).load("nestodo.example.com")
+            )
+        }
+
+    @Test
+    fun `saved images come back with their names and bytes, so the next launch draws them before the server answers`() =
+        runTest {
+            val store = preferenceStore(folder)
+            val iconStore = iconStore()
+            PreferenceOutlineCache(store, iconStore, keystore)
+                .saveIcons("nestodo.example.com", icons)
+
+            val loaded =
+                PreferenceOutlineCache(store, iconStore, keystore)
+                    .loadIcons("nestodo.example.com")!!
+
+            assertEquals(icons.list, loaded.list)
+            assertEquals(icons.images.keys, loaded.images.keys)
+            assertArrayEquals(
+                icons.images.values.single(),
+                loaded.images.getValue(icons.list.first().id),
+            )
+        }
+
+    @Test
+    fun `images are sealed before they are written, so the file on the phone never holds an image name in the clear`() =
+        runTest {
+            val iconStore = iconStore()
+
+            assertTrue(
+                PreferenceOutlineCache(preferenceStore(folder), iconStore, keystore)
+                    .saveIcons("nestodo.example.com", icons)
+            )
+
+            assertFalse(iconStore.data.first()[stringPreferencesKey("icons")]!!.contains("Crest"))
+        }
+
+    @Test
+    fun `images saved from one server are not read for another, so a changed server never draws the old server's pictures`() =
+        runTest {
+            val cache = cache()
+            cache.saveIcons("nestodo.example.com", icons)
+
+            assertNull(cache.loadIcons("other.example.com"))
+        }
+
+    @Test
+    fun `clearing removes the images too, so signing out leaves no pictures on the phone`() =
+        runTest {
+            val cache = cache()
+            cache.save("nestodo.example.com", outline)
+            cache.saveIcons("nestodo.example.com", icons)
+
+            cache.clear()
+
+            assertNull(cache.loadIcons("nestodo.example.com"))
         }
 }

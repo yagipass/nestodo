@@ -33,8 +33,10 @@ import io.github.yagipass.nestodo.domain.Change
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.Edit
 import io.github.yagipass.nestodo.domain.Entry
+import io.github.yagipass.nestodo.domain.ImageIcon
 import io.github.yagipass.nestodo.domain.MAX_COMMENT_LENGTH
 import io.github.yagipass.nestodo.domain.MAX_TITLE_LENGTH
+import io.github.yagipass.nestodo.domain.MyIcons
 import io.github.yagipass.nestodo.domain.Outline
 import io.github.yagipass.nestodo.domain.OutlineRow
 import io.github.yagipass.nestodo.domain.Pending
@@ -49,6 +51,7 @@ import io.github.yagipass.nestodo.domain.append
 import io.github.yagipass.nestodo.domain.delete
 import io.github.yagipass.nestodo.domain.deleteBackward
 import io.github.yagipass.nestodo.domain.enter
+import io.github.yagipass.nestodo.domain.iconName
 import io.github.yagipass.nestodo.domain.indent
 import io.github.yagipass.nestodo.domain.isIcon
 import io.github.yagipass.nestodo.domain.moveDown
@@ -60,6 +63,7 @@ import io.github.yagipass.nestodo.domain.setIcon
 import io.github.yagipass.nestodo.domain.singleLine
 import io.github.yagipass.nestodo.domain.toggleCollapsed
 import io.github.yagipass.nestodo.domain.toggleCompleted
+import io.github.yagipass.nestodo.domain.withoutIcon
 import java.io.IOException
 import java.time.Instant
 import java.time.ZoneId
@@ -150,7 +154,30 @@ data class CommentsState(
         get() = entries.any { it !is TimelineItem.Event }
 }
 
-data class ChoosingIcon(val key: Long, val returnTo: Caret?)
+sealed interface IconView {
+    data class Grid(val unreadable: Boolean = false) : IconView
+
+    data class Adding(
+        val image: ByteArray,
+        val name: String,
+        val sending: Boolean = false,
+        val problem: String? = null,
+    ) : IconView
+
+    data class Editing(
+        val icon: ImageIcon,
+        val sending: Boolean = false,
+        val problem: String? = null,
+    ) : IconView
+
+    data class Deleting(
+        val icon: ImageIcon,
+        val sending: Boolean = false,
+        val problem: String? = null,
+    ) : IconView
+}
+
+data class ChoosingIcon(val key: Long, val returnTo: Caret?, val view: IconView = IconView.Grid())
 
 data class TodoUiState(
     val auth: AuthState = AuthState.Checking,
@@ -161,6 +188,7 @@ data class TodoUiState(
     val profile: Profile? = null,
     val avatar: Avatar? = null,
     val outline: Outline = Outline(),
+    val icons: MyIcons = MyIcons(),
     val loaded: Boolean = false,
     val restored: Boolean = false,
     val starting: Boolean = false,
@@ -227,6 +255,20 @@ class TodoViewModel(
         data class EditComment(val id: Long, val body: String) : Task
 
         data class DeleteComment(val id: Long) : Task
+
+        data object LoadIcons : Task
+
+        data object LoadIconImages : Task
+
+        data class SaveIcon(val request: Long, val call: IconCall) : Task
+    }
+
+    private sealed interface IconCall {
+        class Add(val key: Long, val name: String, val image: ByteArray) : IconCall
+
+        data class Rename(val id: String, val name: String) : IconCall
+
+        data class Delete(val icon: ImageIcon) : IconCall
     }
 
     private sealed interface SettingsCall {
@@ -247,7 +289,7 @@ class TodoViewModel(
 
     private data class Queued(val task: Task, val generation: Int)
 
-    private data class Saved(val server: String, val outline: Outline)
+    private data class Saved(val server: String, val outline: Outline, val icons: MyIcons)
 
     private data class Typing(
         val key: Long,
@@ -279,6 +321,7 @@ class TodoViewModel(
     private var tasks: Channel<Queued>? = null
     private val cacheWrites = Channel<Saved?>(Channel.CONFLATED)
     private var kept: Outline? = null
+    private var keptIcons: MyIcons? = null
     private var generation = 0
     private var pending = 0
     private var lastKey = 0L
@@ -290,14 +333,25 @@ class TodoViewModel(
     private var statsRequest = 0L
     private var settingsRequest = 0L
     private var commentsRequest = 0L
+    private var iconRequest = 0L
 
     init {
         viewModelScope.launch {
+            var shelved: Pair<String, MyIcons>? = null
             for (write in cacheWrites) {
                 if (write == null) {
                     cache.clear()
-                } else if (!cache.save(write.server, write.outline) && kept === write.outline) {
+                    shelved = null
+                    continue
+                }
+                if (!cache.save(write.server, write.outline) && kept === write.outline) {
                     kept = null
+                }
+                if (shelved == (write.server to write.icons)) continue
+                if (cache.saveIcons(write.server, write.icons)) {
+                    shelved = write.server to write.icons
+                } else if (keptIcons === write.icons) {
+                    keptIcons = null
                 }
             }
         }
@@ -478,10 +532,18 @@ class TodoViewModel(
     }
 
     private suspend fun restore() {
-        val outline = current.server?.let { cache.load(it) }
+        val server = current.server
+        val outline = server?.let { cache.load(it) }
+        val icons = server?.let { cache.loadIcons(it) }
         kept = outline
+        keptIcons = icons
         _state.update {
-            it.copy(outline = outline ?: it.outline, restored = outline != null, starting = false)
+            it.copy(
+                outline = outline ?: it.outline,
+                icons = icons ?: it.icons,
+                restored = outline != null,
+                starting = false,
+            )
         }
     }
 
@@ -490,20 +552,27 @@ class TodoViewModel(
         val server = state.server ?: return
         if (state.auth != AuthState.SignedIn || !state.loaded || !isIdle(queued = 0)) return
         val outline = state.outline.rekeyed(::idOf)
-        if (outline == kept) return
+        if (outline == kept && state.icons == keptIcons) return
         kept = outline
-        cacheWrites.trySend(Saved(server, outline))
+        keptIcons = state.icons
+        cacheWrites.trySend(Saved(server, outline, state.icons))
     }
 
     private fun forget() {
         kept = null
+        keptIcons = null
         cacheWrites.trySend(null)
     }
 
     private fun onSignedOut() {
         forget()
         _state.update {
-            it.copy(auth = AuthState.SignedOut, outline = Outline(), restored = false)
+            it.copy(
+                auth = AuthState.SignedOut,
+                outline = Outline(),
+                icons = MyIcons(),
+                restored = false,
+            )
         }
     }
 
@@ -754,7 +823,9 @@ class TodoViewModel(
     fun setIcon(icon: String?): Boolean {
         val choosing = current.choosingIcon ?: return false
         val value = icon?.trim()
-        if (value != null && !isIcon(value)) return false
+        if (value != null && !isIcon(value) && current.icons.list.none { it.value == value }) {
+            return false
+        }
         closeIconPicker()
         perform(current.outline.setIcon(choosing.key, value, choosing.returnTo), choosing.returnTo)
         return true
@@ -762,7 +833,83 @@ class TodoViewModel(
 
     fun closeIconPicker() {
         val choosing = current.choosingIcon ?: return
+        iconRequest += 1
         _state.update { it.copy(choosingIcon = null, caret = choosing.returnTo ?: it.caret) }
+    }
+
+    fun startAddingIcon(image: ByteArray, fileName: String) {
+        showIconView(IconView.Adding(image, iconName(fileName)))
+    }
+
+    fun iconImageUnreadable() {
+        showIconView(IconView.Grid(unreadable = true))
+    }
+
+    fun addIcon(name: String): Boolean {
+        val choosing = current.choosingIcon ?: return false
+        val view = choosing.view as? IconView.Adding ?: return false
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return false
+        if (!view.sending) {
+            sendIcon(
+                view.copy(sending = true, problem = null),
+                IconCall.Add(choosing.key, trimmed, view.image),
+            )
+        }
+        return true
+    }
+
+    fun editIcon(id: String) {
+        val icon = current.icons[id] ?: return
+        showIconView(IconView.Editing(icon))
+    }
+
+    fun renameIcon(name: String): Boolean {
+        val view = current.choosingIcon?.view as? IconView.Editing ?: return false
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return false
+        when {
+            view.sending -> {}
+            trimmed == view.icon.name -> showIconView(IconView.Grid())
+            else ->
+                sendIcon(
+                    view.copy(sending = true, problem = null),
+                    IconCall.Rename(view.icon.id, trimmed),
+                )
+        }
+        return true
+    }
+
+    fun startDeleteIcon() {
+        val view = current.choosingIcon?.view as? IconView.Editing ?: return
+        if (!view.sending) showIconView(IconView.Deleting(view.icon))
+    }
+
+    fun deleteIcon() {
+        val view = current.choosingIcon?.view as? IconView.Deleting ?: return
+        if (!view.sending) {
+            sendIcon(view.copy(sending = true, problem = null), IconCall.Delete(view.icon))
+        }
+    }
+
+    fun backInIconPicker() {
+        val view = current.choosingIcon?.view ?: return
+        showIconView(
+            if (view is IconView.Deleting) IconView.Editing(view.icon) else IconView.Grid()
+        )
+    }
+
+    private fun showIconView(view: IconView) {
+        if (current.choosingIcon == null) return
+        iconRequest += 1
+        _state.update { state ->
+            state.copy(choosingIcon = state.choosingIcon?.copy(view = view))
+        }
+    }
+
+    private fun sendIcon(view: IconView, call: IconCall) {
+        showIconView(view)
+        enqueue(Task.SaveIcon(iconRequest, call))
     }
 
     fun toggleCollapsed() = act { state, key -> state.outline.toggleCollapsed(key, cursor) }
@@ -998,7 +1145,12 @@ class TodoViewModel(
             it.copy(auth = AuthState.SignedIn, email = ready.email, loginError = null)
         }
         startSync(ready.todos)
-        if (todos == null) enqueue(Task.Load(force = true)) else show(todos)
+        if (todos == null) {
+            enqueue(Task.Load(force = true))
+        } else {
+            show(todos)
+            enqueue(Task.LoadIcons)
+        }
         enqueue(Task.LoadProfile)
         if (current.settings != null) openSettings()
         startAnalytics(ready.todos)
@@ -1031,7 +1183,10 @@ class TodoViewModel(
                             queued.task is Task.Stats ||
                             queued.task is Task.Settings ||
                             queued.task is Task.LoadProfile ||
-                            queued.task is Task.LoadComments
+                            queued.task is Task.LoadComments ||
+                            queued.task is Task.LoadIcons ||
+                            queued.task is Task.LoadIconImages ||
+                            queued.task is Task.SaveIcon
                     ) {
                         execute(repository, queued.task)
                     }
@@ -1071,8 +1226,17 @@ class TodoViewModel(
         when (task) {
             is Task.Load -> {
                 val todos = repository.list()
+                val icons = optional { repository.icons() }
                 if (task.force || isIdle(queued = 1)) show(todos)
+                icons?.let(::showIcons)
             }
+            Task.LoadIcons -> showIcons(repository.icons())
+            Task.LoadIconImages ->
+                for (icon in current.icons.missing) {
+                    val image = optional { repository.iconImage(icon.url) } ?: continue
+                    _state.update { it.copy(icons = it.icons.showing(icon.id, image)) }
+                }
+            is Task.SaveIcon -> saveIcon(repository, task)
             is Task.Send -> send(repository, task.change)
             is Task.Stats ->
                 showStats(task.request, StatsState.Loaded(repository.stats(timeZone())))
@@ -1196,6 +1360,52 @@ class TodoViewModel(
 
     private fun SettingsState.loaded(): SettingsState.Loaded? = this as? SettingsState.Loaded
 
+    private fun showIcons(list: List<ImageIcon>) {
+        _state.update { it.copy(icons = it.icons.listing(list)) }
+        if (current.icons.missing.isNotEmpty()) enqueue(Task.LoadIconImages)
+    }
+
+    private suspend fun saveIcon(repository: TodoRepository, task: Task.SaveIcon) {
+        when (val call = task.call) {
+            is IconCall.Add -> {
+                val icon = repository.addIcon(call.name, call.image)
+                _state.update { it.copy(icons = it.icons.adding(icon, call.image)) }
+                val choosing =
+                    current.choosingIcon?.takeIf {
+                        task.request == iconRequest && it.key == call.key
+                    }
+                if (choosing != null) {
+                    closeIconPicker()
+                    perform(
+                        current.outline.setIcon(choosing.key, icon.value, choosing.returnTo),
+                        choosing.returnTo,
+                    )
+                }
+            }
+            is IconCall.Rename -> {
+                val icon = repository.renameIcon(call.id, call.name)
+                _state.update { it.copy(icons = it.icons.renaming(icon)) }
+                if (task.request == iconRequest) showIconView(IconView.Grid())
+            }
+            is IconCall.Delete -> {
+                try {
+                    repository.deleteIcon(call.icon.id)
+                } catch (e: ApiException.Server) {
+                    if (e.status != 404) throw e
+                }
+                history.clear()
+                _state.update {
+                    it.copy(
+                        icons = it.icons.removing(call.icon.id),
+                        outline = it.outline.withoutIcon(call.icon.value),
+                        canUndo = false,
+                    )
+                }
+                if (task.request == iconRequest) showIconView(IconView.Grid())
+            }
+        }
+    }
+
     private suspend fun showProfile(repository: TodoRepository, profile: Profile) {
         val avatar = avatarOf(repository, profile)
         _state.update { it.copy(profile = profile, avatar = avatar) }
@@ -1208,8 +1418,12 @@ class TodoViewModel(
             ?.let {
                 return it
             }
-        return try {
-            Avatar(url, repository.avatar(url))
+        return optional { Avatar(url, repository.avatar(url)) }
+    }
+
+    private suspend fun <T> optional(load: suspend () -> T): T? =
+        try {
+            load()
         } catch (e: CancellationException) {
             throw e
         } catch (e: ApiException.NotSignedIn) {
@@ -1217,7 +1431,6 @@ class TodoViewModel(
         } catch (_: Exception) {
             null
         }
-    }
 
     private fun idOf(key: Long): Long = serverIds[key] ?: key
 
@@ -1301,8 +1514,12 @@ class TodoViewModel(
             recoverSettings(error, task)
             return
         }
-        if (task is Task.LoadProfile) {
+        if (task is Task.LoadProfile || task is Task.LoadIcons || task is Task.LoadIconImages) {
             if (error is ApiException.NotSignedIn) fail(error, retry = null)
+            return
+        }
+        if (task is Task.SaveIcon) {
+            recoverIcon(error, task)
             return
         }
         if (task is Task.LoadComments) {
@@ -1348,6 +1565,29 @@ class TodoViewModel(
                 if (fields.isEmpty() && task.request == settingsRequest) fail(error, retry = null)
             }
         }
+    }
+
+    private fun recoverIcon(error: Exception, task: Task.SaveIcon) {
+        if (error is ApiException.NotSignedIn) {
+            fail(error, retry = null)
+            return
+        }
+        if (task.request != iconRequest) return
+        val problem =
+            said(error)
+                ?: when (task.call) {
+                    is IconCall.Add -> "Could not add the image."
+                    is IconCall.Rename -> "Could not save the image."
+                    is IconCall.Delete -> "Could not delete the image."
+                }
+        val view =
+            when (val view = current.choosingIcon?.view) {
+                is IconView.Adding -> view.copy(sending = false, problem = problem)
+                is IconView.Editing -> view.copy(sending = false, problem = problem)
+                is IconView.Deleting -> view.copy(sending = false, problem = problem)
+                else -> return
+            }
+        showIconView(view)
     }
 
     private fun fail(error: Exception, retry: (() -> Unit)?) {
@@ -1439,6 +1679,13 @@ private fun editEnd(before: String, after: String): Int {
     val suffix = before.substring(prefix).commonSuffixWith(after.substring(prefix)).length
     return before.length - suffix
 }
+
+private fun said(error: Exception): String? =
+    when (error) {
+        is ApiException.Invalid -> error.fields.values.firstOrNull() ?: error.serverMessage
+        is ApiException.Server -> error.serverMessage
+        else -> null
+    }
 
 internal fun reason(error: Exception): String =
     when (error) {

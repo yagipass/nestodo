@@ -648,4 +648,112 @@ class TodoApiTest {
             }
             assertEquals(0, server.requestCount)
         }
+
+    private val iconJson =
+        """{"id":"3f2a9c1e-0000-4000-8000-000000000001","name":"ミケ","url":"/api/v1/icons/3f2a9c1e-0000-4000-8000-000000000001/image"}"""
+
+    @Test
+    fun `the member's images are read in the order the server keeps, so My icons shows them oldest first`() =
+        runTest {
+            respond(
+                200,
+                """{"icons":[$iconJson,{"id":"b","name":"Crest","url":"/api/v1/icons/b/image"}]}""",
+            )
+            val icons = api().icons()
+            assertEquals(listOf("ミケ", "Crest"), icons.map { it.name })
+            assertEquals("image:3f2a9c1e-0000-4000-8000-000000000001", icons.first().value)
+            assertEquals("/api/v1/icons", server.takeRequest().url.encodedPath)
+        }
+
+    @Test
+    fun `a new image is sent with its name as standard base64 inside JSON, because the server accepts only JSON bodies`() =
+        runTest {
+            val image = byteArrayOf(0x52, 0x49, 0x46, 0x46, -5, -1, 0x00, 0x3e)
+            respond(201, """{"icon":$iconJson}""")
+            assertEquals("ミケ", api().addIcon("ミケ", image).name)
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals("/api/v1/icons", request.url.encodedPath)
+            assertEquals(
+                Json.parseToJsonElement(
+                    """{"name":"ミケ","image":"${Base64.getEncoder().encodeToString(image)}"}"""
+                ),
+                request.json(),
+            )
+        }
+
+    @Test
+    fun `renaming and deleting an image address it by its id and send only the name, so nothing else about it changes`() =
+        runTest {
+            respond(200, """{"icon":$iconJson}""")
+            respond(204)
+            api().renameIcon("3f2a9c1e-0000-4000-8000-000000000001", "Tama")
+            api().deleteIcon("3f2a9c1e-0000-4000-8000-000000000001")
+            val renamed = server.takeRequest()
+            val deleted = server.takeRequest()
+            assertEquals("PATCH", renamed.method)
+            assertEquals(
+                "/api/v1/icons/3f2a9c1e-0000-4000-8000-000000000001",
+                renamed.url.encodedPath,
+            )
+            assertEquals(Json.parseToJsonElement("""{"name":"Tama"}"""), renamed.json())
+            assertEquals("DELETE", deleted.method)
+            assertEquals(
+                "/api/v1/icons/3f2a9c1e-0000-4000-8000-000000000001",
+                deleted.url.encodedPath,
+            )
+        }
+
+    @Test
+    fun `an image id is sent as one path segment, so an odd id can never reach another endpoint with the token`() =
+        runTest {
+            respond(204)
+            api().deleteIcon("../todos/3")
+            assertEquals("/api/v1/icons/..%2Ftodos%2F3", server.takeRequest().url.encodedPath)
+        }
+
+    @Test
+    fun `a refusal keeps the server's message, so the member reads why an image was not added`() =
+        runTest {
+            respond(409, """{"error":"too_many_icons","message":"You can add up to 50 images"}""")
+            respond(404, """{"error":"not_found","message":"Icon not found"}""")
+            val full = failsWith<ApiException.Server> { api().addIcon("Tama", byteArrayOf(1)) }
+            val gone = failsWith<ApiException.Server> { api().renameIcon("gone", "Tama") }
+            assertEquals(409, full.status)
+            assertEquals("You can add up to 50 images", full.serverMessage)
+            assertEquals(404, gone.status)
+            assertEquals("Icon not found", gone.serverMessage)
+        }
+
+    @Test
+    fun `a refused todo icon keeps the server's message along with any field messages`() = runTest {
+        respond(400, """{"error":"invalid_icon","message":"Icon not found"}""")
+        val refused = failsWith<ApiException.Invalid> { api().setIcon(3, "image:gone") }
+        assertEquals("Icon not found", refused.serverMessage)
+    }
+
+    @Test
+    fun `an image is downloaded byte for byte with the Access token, because the server shows it only to its owner`() =
+        runTest {
+            val image = byteArrayOf(0x52, 0x49, 0x46, 0x46, 0x00, -1, 0x0a)
+            server.enqueue(MockResponse.Builder().code(200).body(Buffer().write(image)).build())
+            val credentials = FakeCredentials(server.hostName, "app-token", null)
+            assertArrayEquals(image, api(credentials).iconImage("/api/v1/icons/abc/image"))
+            val request = server.takeRequest()
+            assertEquals("/api/v1/icons/abc/image", request.url.encodedPath)
+            assertEquals("app-token", request.headers["cf-access-token"])
+        }
+
+    @Test
+    fun `an image address outside the icons is not requested, so an icon list cannot send the token to another endpoint`() =
+        runTest {
+            val credentials = FakeCredentials(server.hostName, "app-token", null)
+            failsWith<IllegalArgumentException> {
+                api(credentials).iconImage("/api/v1/icons/../todos")
+            }
+            failsWith<IllegalArgumentException> {
+                api(credentials).iconImage("https://elsewhere.example.com/api/v1/icons/a/image")
+            }
+            assertEquals(0, server.requestCount)
+        }
 }
