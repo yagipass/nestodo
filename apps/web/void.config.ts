@@ -15,7 +15,7 @@ export default defineConfig({
       { "binding": "DB", "database_name": "nestodo-db", "database_id": "local", "migrations_dir": "./db/migrations" }
     ],
     "r2_buckets": [
-      { "binding": "STORAGE", "bucket_name": "nestodo-avatars" }
+      { "binding": "STORAGE", "bucket_name": "nestodo-storage" }
     ],
     ...(routes.length > 0 ? { "routes": routes } : {}),
     "workers_dev": false,
