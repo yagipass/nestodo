@@ -1280,22 +1280,82 @@ fn cmd_shift_e_opens_the_icon_picker_and_a_chosen_emoji_is_saved_at_once_with_th
 }
 
 #[gpui::test]
-fn the_icon_sits_in_its_own_slot_before_the_title_level_with_it_and_clicking_it_opens_the_picker_with_it_marked(
+fn the_icon_takes_the_bullets_place_so_titles_with_and_without_one_start_at_the_same_x(
     cx: &mut TestAppContext,
 ) {
     let server = Arc::new(FakeServer::with(vec![
         seed("Milk").icon("\u{1F95B}"),
         seed("Bread"),
     ]));
-    let (view, cx) = open(cx, &server, true);
+    let (_view, cx) = open(cx, &server, true);
 
     let icon = cx.debug_bounds("icon-t1").expect("the icon was not drawn");
     let title = cx.debug_bounds("title-t1").unwrap();
     assert!(icon.right() <= title.left());
     assert!((icon.center().y - title.center().y).abs() < px(0.5));
+    assert_eq!(title.left(), cx.debug_bounds("title-t2").unwrap().left());
     assert!(cx.debug_bounds("icon-t2").is_none());
+}
+
+#[gpui::test]
+fn clicking_a_parents_icon_folds_and_unfolds_it_like_its_bullet_while_a_leafs_icon_does_nothing(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Groceries").icon("\u{1F6D2}"),
+        seed("Milk").under(1).icon("\u{1F95B}"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+
+    click_on(cx, "icon-t2");
+    settle(cx);
+    assert!(!icon_picker_open(&view, cx));
+    assert_eq!(server.sent().len(), 0);
 
     click_on(cx, "icon-t1");
+    settle(cx);
+    assert!(cx.debug_bounds("title-t2").is_none());
+    assert!(!icon_picker_open(&view, cx));
+    assert_eq!(
+        server.tree(),
+        "Groceries [icon: \u{1F6D2}] [collapsed]\n  Milk [icon: \u{1F95B}]"
+    );
+
+    click_on(cx, "icon-t1");
+    settle(cx);
+    assert!(cx.debug_bounds("title-t2").is_some());
+}
+
+#[gpui::test]
+fn a_done_row_keeps_its_icon_with_a_check_on_its_corner_so_it_still_reads_as_done(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Milk").icon("\u{1F95B}").done(),
+        seed("Bread").done(),
+        seed("Eggs").icon("\u{1F95A}"),
+    ]));
+    let (_view, cx) = open(cx, &server, true);
+
+    let icon = cx.debug_bounds("icon-t1").expect("the icon was not drawn");
+    let badge = cx
+        .debug_bounds("done-badge-t1")
+        .expect("the check was not drawn");
+    assert!(badge.center().x > icon.center().x && badge.center().y > icon.center().y);
+    assert!(badge.left() < icon.right() && badge.top() < icon.bottom());
+    assert!(cx.debug_bounds("done-badge-t2").is_none());
+    assert!(cx.debug_bounds("done-badge-t3").is_none());
+}
+
+#[gpui::test]
+fn the_row_action_opens_the_picker_with_the_rows_icon_marked(cx: &mut TestAppContext) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Milk").icon("\u{1F95B}"),
+        seed("Bread"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+
+    click_on(cx, "set-icon-t1");
 
     assert!(icon_picker_open(&view, cx));
     assert_eq!(
@@ -1450,7 +1510,7 @@ fn cmd_z_takes_an_icon_change_back_in_one_step_restoring_the_old_icon_or_none_on
     cx.simulate_keystrokes("cmd-shift-e");
     click_on(cx, "icon-choice-8");
     settle(cx);
-    click_on(cx, "icon-t1");
+    click_on(cx, "set-icon-t1");
     click_on(cx, "icon-choice-0");
     settle(cx);
     assert_eq!(
@@ -1568,7 +1628,7 @@ fn icon_of(view: &Entity<OutlineView>, cx: &mut VisualTestContext, key: &str) ->
 }
 
 #[gpui::test]
-fn an_image_icon_is_drawn_in_the_icon_slot_once_loaded_and_one_missing_from_the_list_draws_nothing_but_still_counts_as_an_icon(
+fn an_image_icon_is_drawn_in_place_of_the_bullet_once_loaded_and_one_missing_from_the_list_draws_nothing_but_still_counts_as_an_icon(
     cx: &mut TestAppContext,
 ) {
     let server = Arc::new(
@@ -1676,7 +1736,7 @@ fn the_picker_shows_my_icons_in_the_order_they_were_added_then_the_add_tile_abov
     let (_view, cx) = open(cx, &server, true);
     settle(cx);
 
-    click_on(cx, "icon-t1");
+    click_on(cx, "set-icon-t1");
 
     let mike = cx.debug_bounds("my-icon-0").unwrap();
     let pochi = cx.debug_bounds("my-icon-1").unwrap();
@@ -2031,7 +2091,7 @@ fn deleting_an_image_says_how_many_todos_lose_it_then_takes_it_off_them_here_wit
     let (view, cx) = open(cx, &server, true);
     settle(cx);
 
-    click_on(cx, "icon-t3");
+    click_on(cx, "set-icon-t3");
     right_click_on(cx, "my-icon-0");
     click_on(cx, "delete-image");
     click_on(cx, "delete-image-back");

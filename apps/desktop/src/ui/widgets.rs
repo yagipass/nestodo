@@ -36,6 +36,22 @@ pub fn bullet_mark(done: bool, colors: &Theme) -> Div {
     }
 }
 
+pub fn done_badge(ring: Hsla, colors: &Theme) -> Div {
+    div()
+        .absolute()
+        .right(px(-3.))
+        .bottom(px(-3.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(16.))
+        .rounded(px(6.))
+        .border_2()
+        .border_color(ring)
+        .bg(colors.accent)
+        .child(icon(Icon::Tick, 9., colors.on_accent))
+}
+
 pub fn icon_button(
     id: impl Into<ElementId>,
     glyph: Icon,
