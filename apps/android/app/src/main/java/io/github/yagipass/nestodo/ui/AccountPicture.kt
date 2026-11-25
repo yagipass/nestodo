@@ -20,7 +20,7 @@ import io.github.yagipass.nestodo.domain.sampleSize
 @Composable
 internal fun AccountPicture(avatar: Avatar?, size: Dp, iconSize: Dp, contentDescription: String?) {
     val pixels = with(LocalDensity.current) { size.roundToPx() }
-    val bitmap = remember(avatar, pixels) { avatar?.let { decode(it.bytes, pixels) } }
+    val bitmap = remember(avatar, pixels) { avatar?.let { decodePicture(it.bytes, pixels) } }
     if (bitmap == null) {
         Icon(NestodoIcons.Account, contentDescription, Modifier.size(iconSize))
     } else {
@@ -33,7 +33,7 @@ internal fun AccountPicture(avatar: Avatar?, size: Dp, iconSize: Dp, contentDesc
     }
 }
 
-private fun decode(bytes: ByteArray, pixels: Int): ImageBitmap? {
+internal fun decodePicture(bytes: ByteArray, pixels: Int): ImageBitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null

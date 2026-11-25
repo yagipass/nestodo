@@ -17,6 +17,8 @@ import io.github.yagipass.nestodo.data.TodoRepository
 import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Appearance
 import io.github.yagipass.nestodo.domain.Day
+import io.github.yagipass.nestodo.domain.ImageIcon
+import io.github.yagipass.nestodo.domain.MyIcons
 import io.github.yagipass.nestodo.domain.Outline
 import io.github.yagipass.nestodo.domain.Profile
 import io.github.yagipass.nestodo.domain.TimelineItem
@@ -43,6 +45,10 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
     var avatarFailure: Exception? = null
     val avatars = mutableMapOf<String, ByteArray>()
     private var nextAvatar = 1
+    var icons = listOf<ImageIcon>()
+    var iconsFailure: Exception? = null
+    val iconImages = mutableMapOf<String, ByteArray>()
+    private var nextIcon = 1
     var failure: Exception? = null
     var analyticsFailure: Exception? = null
     var analyticsGate: CompletableDeferred<Unit>? = null
@@ -232,6 +238,45 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
         avatarFailure?.let { throw it }
         return avatars[url] ?: throw ApiException.Server(404)
     }
+
+    override suspend fun icons(): List<ImageIcon> {
+        answer("GET icons")
+        iconsFailure?.let { throw it }
+        return icons
+    }
+
+    override suspend fun addIcon(name: String, image: ByteArray): ImageIcon {
+        answer("POST icon \"$name\"")
+        val icon = imageIcon("%012d".format(nextIcon++), name)
+        icons = icons + icon
+        iconImages[icon.url] = image
+        return icon
+    }
+
+    override suspend fun renameIcon(id: String, name: String): ImageIcon {
+        answer("PATCH icon $id \"$name\"")
+        val icon = icons.firstOrNull { it.id == id } ?: throw ApiException.Server(404)
+        val renamed = icon.copy(name = name)
+        icons = icons.map { if (it.id == id) renamed else it }
+        return renamed
+    }
+
+    override suspend fun deleteIcon(id: String) {
+        answer("DELETE icon $id")
+        val icon = icons.firstOrNull { it.id == id } ?: throw ApiException.Server(404)
+        icons = icons - icon
+        todos = todos.map { if (it.icon == icon.value) it.copy(icon = null) else it }
+    }
+
+    override suspend fun iconImage(url: String): ByteArray {
+        answer("GET $url")
+        return iconImages[url] ?: throw ApiException.Server(404)
+    }
+}
+
+fun imageIcon(serial: String, name: String): ImageIcon {
+    val id = "00000000-0000-4000-8000-$serial"
+    return ImageIcon(id, name, "/api/v1/icons/$id/image")
 }
 
 val POSTED: Instant = Instant.parse("2026-11-16T02:19:55Z")
@@ -300,6 +345,8 @@ class FakeSettings : Settings {
 class FakeOutlineCache : OutlineCache {
     var server: String? = null
     var outline: Outline? = null
+    var iconServer: String? = null
+    var icons: MyIcons? = null
     var locked = false
     var gate: CompletableDeferred<Unit>? = null
 
@@ -315,9 +362,20 @@ class FakeOutlineCache : OutlineCache {
         return true
     }
 
+    override suspend fun loadIcons(server: String): MyIcons? = icons.takeIf { iconServer == server }
+
+    override suspend fun saveIcons(server: String, icons: MyIcons): Boolean {
+        if (locked) return false
+        iconServer = server
+        this.icons = icons
+        return true
+    }
+
     override suspend fun clear() {
         server = null
         outline = null
+        iconServer = null
+        icons = null
     }
 }
 
@@ -334,12 +392,13 @@ class RecordingCapture : Capture {
 fun TestScope.preferenceStore(
     folder: TemporaryFolder,
     legacy: SharedPreferences? = null,
+    name: String = "test",
 ): DataStore<Preferences> =
     PreferenceDataStoreFactory.create(
         migrations = listOfNotNull(legacy?.let { prefs -> SharedPreferencesMigration({ prefs }) }),
         scope = backgroundScope,
     ) {
-        folder.root.resolve("test.preferences_pb")
+        folder.root.resolve("$name.preferences_pb")
     }
 
 class MemoryPreferences(vararg saved: Pair<String, Any>) : SharedPreferences {

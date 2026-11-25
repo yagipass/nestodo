@@ -199,6 +199,7 @@ fun OutlineScreen(
 ) {
     val focusManager = LocalFocusManager.current
     val rows = state.rows
+    val images = rememberIconImages(state.icons)
     val editing = rows.find { it.key == state.editing }
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val navigationBars = WindowInsets.navigationBars
@@ -347,7 +348,15 @@ fun OutlineScreen(
                 .padding(bottom = bottom - underNavigation)
         ) {
             if (state.loaded || state.restored) {
-                OutlineList(rows, state, viewModel, onOpenLink, underNavigation, underStatus)
+                OutlineList(
+                    rows,
+                    state,
+                    images,
+                    viewModel,
+                    onOpenLink,
+                    underNavigation,
+                    underStatus,
+                )
                 if (!state.loaded) {
                     LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
                 }
@@ -361,7 +370,7 @@ fun OutlineScreen(
     state.deleting?.let { DeleteDialog(state, it.key, viewModel) }
     state.completing?.let { CompleteDialog(state, it.key, viewModel) }
     state.comments?.let { CommentSheet(state, it, viewModel, onOpenLink) }
-    state.choosingIcon?.let { IconPicker(state, it, viewModel) }
+    state.choosingIcon?.let { IconPicker(state, it, images, viewModel) }
 }
 
 @Composable
@@ -631,6 +640,7 @@ private fun AccountMenu(
 private fun OutlineList(
     rows: List<OutlineRow>,
     state: TodoUiState,
+    images: IconImages,
     viewModel: TodoViewModel,
     onOpenLink: (String) -> Unit,
     underNavigation: Dp,
@@ -698,6 +708,7 @@ private fun OutlineList(
                 revision = state.revision,
                 caret = state.caret?.takeIf { it.key == row.key },
                 readOnly = !state.loaded,
+                images = images,
                 viewModel = viewModel,
                 onOpenLink = onOpenLink,
             )
@@ -821,6 +832,7 @@ private fun OutlineItem(
     revision: Long,
     caret: Caret?,
     readOnly: Boolean,
+    images: IconImages,
     viewModel: TodoViewModel,
     onOpenLink: (String) -> Unit,
 ) {
@@ -904,6 +916,7 @@ private fun OutlineItem(
         TodoIcon(
             row.icon,
             muted = row.completed,
+            images = images,
             modifier =
                 Modifier.width(30.dp)
                     .height(RowHeight)

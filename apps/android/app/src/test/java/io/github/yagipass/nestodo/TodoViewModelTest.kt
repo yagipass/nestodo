@@ -141,7 +141,12 @@ class TodoViewModelTest {
 
         assertEquals(original + "Call at 9am", viewModel.outline())
         assertEquals(
-            listOf("POST \"\" under null at 2", "GET", "PATCH 100 title \"Call at 9am\""),
+            listOf(
+                "POST \"\" under null at 2",
+                "GET",
+                "GET icons",
+                "PATCH 100 title \"Call at 9am\"",
+            ),
             repository.calls,
         )
     }
@@ -344,7 +349,7 @@ class TodoViewModelTest {
 
         viewModel.onForeground()
 
-        assertEquals(listOf("PATCH 1 completed true", "GET"), repository.calls)
+        assertEquals(listOf("PATCH 1 completed true", "GET", "GET icons"), repository.calls)
         assertEquals(
             listOf(true, true, true, false),
             viewModel.state.value.rows.map { it.completed },
@@ -816,7 +821,7 @@ class TodoViewModelTest {
 
         viewModel.setIcon(TOOTH)
 
-        assertEquals(listOf("PATCH 4 icon \"$TOOTH\"", "GET"), repository.calls)
+        assertEquals(listOf("PATCH 4 icon \"$TOOTH\"", "GET", "GET icons"), repository.calls)
         assertNull(viewModel.icon(4))
         assertNotNull(viewModel.state.value.notice)
     }
@@ -849,6 +854,370 @@ class TodoViewModelTest {
 
         assertFalse(viewModel.state.value.canUndo)
         assertEquals(MILK, viewModel.icon(2))
+    }
+
+    private val cat = imageIcon("000000000001", "Mike")
+    private val crest = imageIcon("000000000002", "Crest")
+    private val catImage = byteArrayOf(0x52, 0x49, 0x46, 0x46, 1)
+    private val crestImage = byteArrayOf(0x52, 0x49, 0x46, 0x46, 2)
+
+    private fun withImages() {
+        repository.icons = listOf(cat, crest)
+        repository.iconImages[cat.url] = catImage
+        repository.iconImages[crest.url] = crestImage
+    }
+
+    private fun TodoViewModel.view(): IconView = state.value.choosingIcon!!.view
+
+    @Test
+    fun `the member's images load with the todos and are downloaded once, so rows and the picker can draw them without asking again`() {
+        withImages()
+
+        val viewModel = TodoViewModel(::backendAt, settings, cache)
+
+        val state = viewModel.state.value
+        assertEquals(listOf(cat, crest), state.icons.list)
+        assertArrayEquals(catImage, state.icons.images[cat.id])
+        assertArrayEquals(crestImage, state.icons.images[crest.id])
+        assertEquals(
+            listOf("GET ${cat.url}", "GET ${crest.url}"),
+            repository.calls.filter { it.startsWith("GET /api/v1/icons/") },
+        )
+
+        repository.calls.clear()
+        viewModel.refresh()
+
+        assertEquals(listOf("GET", "GET icons"), repository.calls)
+    }
+
+    @Test
+    fun `refreshing the todos fetches the image list again, so an image added on another device shows up and one deleted there goes`() {
+        repository.icons = listOf(cat)
+        repository.iconImages[cat.url] = catImage
+        val viewModel = viewModel()
+        repository.icons = listOf(crest)
+        repository.iconImages[crest.url] = crestImage
+
+        viewModel.refresh()
+
+        assertEquals(listOf("GET", "GET icons", "GET ${crest.url}"), repository.calls)
+        assertEquals(listOf(crest), viewModel.state.value.icons.list)
+        assertEquals(setOf(crest.id), viewModel.state.value.icons.images.keys)
+        assertEquals(setOf(crest.id), cache.icons!!.images.keys)
+    }
+
+    @Test
+    fun `a server set up here fetches the image list after the todos it was checked with, so My icons is not empty on the first launch`() {
+        withImages()
+        settings.baseUrl = null
+        val viewModel = viewModel()
+
+        viewModel.setServer("nestodo.example.com")
+
+        assertEquals(listOf(cat, crest), viewModel.state.value.icons.list)
+    }
+
+    @Test
+    fun `an image list that fails to load leaves the outline working without a message, so a server without images still opens`() {
+        repository.iconsFailure = ApiException.Server(404)
+
+        val state = viewModel().state.value
+
+        assertTrue(state.loaded)
+        assertEquals(original, state.rows.map { "  ".repeat(it.depth) + it.title })
+        assertEquals(emptyList<Any>(), state.icons.list)
+        assertNull(state.notice)
+    }
+
+    @Test
+    fun `an expired sign-in found while loading the images returns to the login screen, so the app does not act signed in on a session that is gone`() {
+        repository.iconsFailure = ApiException.NotSignedIn()
+
+        val state = viewModel().state.value
+
+        assertEquals(AuthState.SignedOut, state.auth)
+    }
+
+    @Test
+    fun `the images are kept on the phone with the todos, so the next launch draws them before the server answers`() {
+        withImages()
+        viewModel()
+        backend.connectGate = CompletableDeferred()
+
+        val reopened = viewModel()
+
+        assertEquals(listOf(cat, crest), reopened.state.value.icons.list)
+        assertArrayEquals(catImage, reopened.state.value.icons.images[cat.id])
+        assertFalse(reopened.state.value.loaded)
+    }
+
+    @Test
+    fun `signing out removes the saved images from the phone, so whoever opens the app next never sees them`() {
+        withImages()
+        val viewModel = viewModel()
+        assertNotNull(cache.icons)
+
+        viewModel.signOut()
+
+        assertNull(cache.icons)
+        assertTrue(viewModel.state.value.icons.list.isEmpty())
+    }
+
+    @Test
+    fun `choosing an image applies it like an emoji, sending only the icon as one Undo step`() {
+        withImages()
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+
+        assertTrue(viewModel.setIcon(cat.value))
+        viewModel.undo()
+
+        assertEquals(
+            listOf("PATCH 4 icon \"${cat.value}\"", "PATCH 4 icon null"),
+            repository.calls,
+        )
+        assertNull(viewModel.icon(4))
+        assertNull(viewModel.state.value.choosingIcon)
+    }
+
+    @Test
+    fun `an image that is not in the member's list is refused without sending, so the server is never asked for an icon it would reject`() {
+        withImages()
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+
+        assertFalse(viewModel.setIcon(imageIcon("000000000009", "Gone").value))
+
+        assertEquals(emptyList<String>(), repository.calls)
+        assertNotNull(viewModel.state.value.choosingIcon)
+    }
+
+    @Test
+    fun `adding an image uploads it and puts it on the row as one Undo step, and Undo leaves the image in My icons`() {
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+        viewModel.startAddingIcon(catImage, "Mike.jpg")
+        assertEquals("Mike", (viewModel.view() as IconView.Adding).name)
+
+        assertTrue(viewModel.addIcon(" Mike "))
+
+        val added = repository.icons.single()
+        assertEquals(
+            listOf("POST icon \"Mike\"", "PATCH 4 icon \"${added.value}\""),
+            repository.calls,
+        )
+        assertNull(viewModel.state.value.choosingIcon)
+        assertEquals(added.value, viewModel.icon(4))
+        assertArrayEquals(catImage, viewModel.state.value.icons.images[added.id])
+
+        viewModel.undo()
+
+        assertNull(viewModel.icon(4))
+        assertEquals(listOf(added), viewModel.state.value.icons.list)
+        assertFalse(viewModel.state.value.canUndo)
+        assertEquals("PATCH 4 icon null", repository.calls.last())
+    }
+
+    @Test
+    fun `an image added from the row being typed in puts the cursor back where it was, so typing goes on`() {
+        val viewModel = viewModel()
+        viewModel.select(4, 3)
+        viewModel.openIconPicker(4)
+        viewModel.blur(4)
+        viewModel.startAddingIcon(catImage, "Mike.jpg")
+
+        viewModel.addIcon("Mike")
+
+        assertEquals(Caret(4, 3), viewModel.state.value.caret)
+    }
+
+    @Test
+    fun `an empty name is refused without sending anything, so the Add view stays open to correct it`() {
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+        viewModel.startAddingIcon(catImage, ".png")
+
+        assertFalse(viewModel.addIcon("  "))
+
+        assertEquals(emptyList<String>(), repository.calls)
+        assertTrue(viewModel.view() is IconView.Adding)
+    }
+
+    @Test
+    fun `an image the server refuses keeps the Add view open with the server's message, so the member learns about the limit`() {
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+        viewModel.startAddingIcon(catImage, "Mike.jpg")
+        repository.failure = ApiException.Server(409, "You can add up to 50 images")
+
+        viewModel.addIcon("Mike")
+
+        val view = viewModel.view() as IconView.Adding
+        assertEquals("You can add up to 50 images", view.problem)
+        assertFalse(view.sending)
+        assertEquals(listOf("POST icon \"Mike\""), repository.calls)
+        assertNull(viewModel.icon(4))
+        assertNull(viewModel.state.value.notice)
+    }
+
+    @Test
+    fun `an upload that fails without a message from the server says it could not be added, so the member can try again`() {
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+        viewModel.startAddingIcon(catImage, "Mike.jpg")
+        repository.failure = IOException("offline")
+
+        viewModel.addIcon("Mike")
+
+        assertEquals("Could not add the image.", (viewModel.view() as IconView.Adding).problem)
+    }
+
+    @Test
+    fun `closing the picker while an image uploads keeps the image but leaves the row alone, since closing means no change`() {
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+        viewModel.startAddingIcon(catImage, "Mike.jpg")
+        repository.gate = CompletableDeferred()
+        viewModel.addIcon("Mike")
+
+        viewModel.closeIconPicker()
+        repository.gate!!.complete(Unit)
+
+        assertEquals(listOf("POST icon \"Mike\""), repository.calls)
+        assertNull(viewModel.icon(4))
+        assertEquals(repository.icons, viewModel.state.value.icons.list)
+    }
+
+    @Test
+    fun `going Back while an image uploads keeps the image but leaves the row alone, since Back gives up Add and use`() {
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+        viewModel.startAddingIcon(catImage, "Mike.jpg")
+        repository.gate = CompletableDeferred()
+        viewModel.addIcon("Mike")
+
+        viewModel.backInIconPicker()
+        repository.gate!!.complete(Unit)
+
+        assertEquals(listOf("POST icon \"Mike\""), repository.calls)
+        assertNull(viewModel.icon(4))
+        assertEquals(IconView.Grid(), viewModel.view())
+        assertEquals(repository.icons, viewModel.state.value.icons.list)
+    }
+
+    @Test
+    fun `renaming an image sends only the new name and returns to the grid, so the tile is labelled with it`() {
+        withImages()
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+        viewModel.editIcon(cat.id)
+
+        assertTrue(viewModel.renameIcon(" Tama "))
+
+        assertEquals(listOf("PATCH icon ${cat.id} \"Tama\""), repository.calls)
+        assertEquals("Tama", viewModel.state.value.icons[cat.id]!!.name)
+        assertEquals(IconView.Grid(), viewModel.view())
+    }
+
+    @Test
+    fun `a rename the server refuses stays in the Edit view with its message, so the name can be corrected`() {
+        withImages()
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+        viewModel.editIcon(cat.id)
+        repository.failure =
+            ApiException.Invalid(
+                mapOf("name" to "The name must be 30 characters or fewer"),
+                "Validation failed",
+            )
+
+        viewModel.renameIcon("Tama")
+
+        val view = viewModel.view() as IconView.Editing
+        assertEquals("The name must be 30 characters or fewer", view.problem)
+        assertEquals("Mike", viewModel.state.value.icons[cat.id]!!.name)
+    }
+
+    @Test
+    fun `deleting an image clears it from the rows without sending a PATCH and ends Undo, because the server already cleared them and an older step would try to put it back`() {
+        withImages()
+        repository.todos = listOf(groceries, milk.copy(icon = cat.value), eggs, dentist)
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+        viewModel.setIcon(cat.value)
+        viewModel.openIconPicker(4)
+        viewModel.editIcon(cat.id)
+        viewModel.startDeleteIcon()
+        assertEquals(IconView.Deleting(cat), viewModel.view())
+
+        viewModel.deleteIcon()
+
+        assertEquals(
+            listOf("PATCH 4 icon \"${cat.value}\"", "DELETE icon ${cat.id}"),
+            repository.calls,
+        )
+        assertNull(viewModel.icon(2))
+        assertNull(viewModel.icon(4))
+        assertFalse(viewModel.state.value.canUndo)
+        assertEquals(listOf(crest), viewModel.state.value.icons.list)
+        assertEquals(setOf(crest.id), viewModel.state.value.icons.images.keys)
+        assertEquals(IconView.Grid(), viewModel.view())
+
+        viewModel.undo()
+
+        assertEquals(2, repository.calls.size)
+        assertNull(cache.outline!![2]!!.icon)
+    }
+
+    @Test
+    fun `an image already deleted on another device counts as deleted, so it does not stay in My icons with an error`() {
+        withImages()
+        val viewModel = viewModel()
+        repository.icons = listOf(crest)
+        viewModel.openIconPicker(4)
+        viewModel.editIcon(cat.id)
+        viewModel.startDeleteIcon()
+
+        viewModel.deleteIcon()
+
+        assertEquals(listOf(crest), viewModel.state.value.icons.list)
+        assertEquals(IconView.Grid(), viewModel.view())
+    }
+
+    @Test
+    fun `a delete that fails stays on the confirmation with a message and changes nothing, so the member can try again`() {
+        withImages()
+        repository.todos = listOf(groceries, milk.copy(icon = cat.value), eggs, dentist)
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+        viewModel.editIcon(cat.id)
+        viewModel.startDeleteIcon()
+        repository.failure = IOException("offline")
+
+        viewModel.deleteIcon()
+
+        assertEquals(
+            IconView.Deleting(cat, problem = "Could not delete the image."),
+            viewModel.view(),
+        )
+        assertEquals(cat.value, viewModel.icon(2))
+        assertEquals(listOf(cat, crest), viewModel.state.value.icons.list)
+    }
+
+    @Test
+    fun `Back from the delete confirmation returns to editing that image and Back from there to the grid, so nothing is lost by looking`() {
+        withImages()
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+        viewModel.editIcon(cat.id)
+        viewModel.startDeleteIcon()
+
+        viewModel.backInIconPicker()
+        assertEquals(IconView.Editing(cat), viewModel.view())
+        viewModel.backInIconPicker()
+        assertEquals(IconView.Grid(), viewModel.view())
+
+        assertEquals(emptyList<String>(), repository.calls)
     }
 
     @Test
@@ -1053,7 +1422,7 @@ class TodoViewModelTest {
         viewModel.undo()
 
         assertFalse(viewModel.state.value.canUndo)
-        assertEquals(listOf("PATCH 4 under 1 at 2", "GET"), repository.calls)
+        assertEquals(listOf("PATCH 4 under 1 at 2", "GET", "GET icons"), repository.calls)
         assertEquals(listOf("Groceries", "  Oat milk", "  Eggs", "  Dentist"), viewModel.outline())
     }
 
@@ -1068,7 +1437,10 @@ class TodoViewModelTest {
 
         viewModel.onForeground()
 
-        assertEquals(listOf("PATCH 4 title \"Dentist at 9am sharp\"", "GET"), repository.calls)
+        assertEquals(
+            listOf("PATCH 4 title \"Dentist at 9am sharp\"", "GET", "GET icons"),
+            repository.calls,
+        )
         assertEquals("Dentist at 9am sharp", viewModel.outline().last())
         assertTrue(viewModel.state.value.canUndo)
     }
@@ -1110,7 +1482,13 @@ class TodoViewModelTest {
         viewModel.undo()
 
         assertEquals(
-            listOf("POST \"\" under 1 at 1", "DELETE 100", "GET", "RESTORE 100 under 1 at 1"),
+            listOf(
+                "POST \"\" under 1 at 1",
+                "DELETE 100",
+                "GET",
+                "GET icons",
+                "RESTORE 100 under 1 at 1",
+            ),
             repository.calls,
         )
         assertEquals(listOf("Groceries", "  Milk", "  ", "  Eggs", "Dentist"), viewModel.outline())
@@ -1215,7 +1593,13 @@ class TodoViewModelTest {
         viewModel.postComment("Call at 9")
 
         assertEquals(
-            listOf("GET 4 timeline", "POST comment on 4 \"Call at 9\"", "GET", "GET 4 timeline"),
+            listOf(
+                "GET 4 timeline",
+                "POST comment on 4 \"Call at 9\"",
+                "GET",
+                "GET icons",
+                "GET 4 timeline",
+            ),
             repository.calls,
         )
         assertEquals("Can't connect. Check your connection.", viewModel.state.value.notice?.text)
@@ -1265,7 +1649,13 @@ class TodoViewModelTest {
         repository.gate!!.complete(Unit)
 
         assertEquals(
-            listOf("GET 4 timeline", "POST comment on 4 \"Call at 9\"", "GET", "GET 4 timeline"),
+            listOf(
+                "GET 4 timeline",
+                "POST comment on 4 \"Call at 9\"",
+                "GET",
+                "GET icons",
+                "GET 4 timeline",
+            ),
             repository.calls,
         )
         assertEquals("Can't connect. Check your connection.", viewModel.state.value.notice?.text)
@@ -1392,7 +1782,10 @@ class TodoViewModelTest {
         val viewModel = viewModel()
         viewModel.openComments(4)
         viewModel.onForeground()
-        assertEquals(listOf("GET 4 timeline", "GET", "GET 4 timeline"), repository.calls)
+        assertEquals(
+            listOf("GET 4 timeline", "GET", "GET icons", "GET 4 timeline"),
+            repository.calls,
+        )
         repository.calls.clear()
         repository.gate = CompletableDeferred()
 
@@ -1442,7 +1835,7 @@ class TodoViewModelTest {
             repository.failure = failure
             viewModel.select(2, 0)
             viewModel.outdent()
-            assertEquals(listOf("PATCH 2 under null at 1", "GET"), repository.calls)
+            assertEquals(listOf("PATCH 2 under null at 1", "GET", "GET icons"), repository.calls)
             assertEquals(original, viewModel.outline())
             assertNotNull(viewModel.state.value.notice)
             assertFalse(viewModel.state.value.canUndo)
@@ -1496,7 +1889,7 @@ class TodoViewModelTest {
         viewModel.startDelete()
         viewModel.confirmDelete()
 
-        assertEquals(listOf("DELETE 4", "GET"), repository.calls)
+        assertEquals(listOf("DELETE 4", "GET", "GET icons"), repository.calls)
         assertEquals(original + "  Insurance card", viewModel.outline())
         assertEquals("The server returned an error (409).", viewModel.state.value.notice?.text)
         assertFalse(viewModel.state.value.canUndo)
@@ -1511,7 +1904,7 @@ class TodoViewModelTest {
         viewModel.setTitle(4, "Dentist at 9")
         viewModel.blur(4)
 
-        assertEquals(listOf("PATCH 4 title \"Dentist at 9\"", "GET"), repository.calls)
+        assertEquals(listOf("PATCH 4 title \"Dentist at 9\"", "GET", "GET icons"), repository.calls)
         assertEquals(listOf("Groceries", "  Milk", "  Eggs"), viewModel.outline())
         assertEquals("This todo has been deleted.", viewModel.state.value.notice?.text)
         assertFalse(viewModel.state.value.canUndo)
@@ -1545,7 +1938,7 @@ class TodoViewModelTest {
 
         viewModel.onForeground()
 
-        assertEquals(listOf("GET"), repository.calls)
+        assertEquals(listOf("GET", "GET icons"), repository.calls)
         assertEquals(listOf("Groceries", "  Oat milk", "  Eggs", "Dentist"), viewModel.outline())
         assertEquals(2L, viewModel.state.value.editing)
     }
@@ -1582,7 +1975,7 @@ class TodoViewModelTest {
 
         viewModel.onForeground()
 
-        assertEquals(listOf("GET"), repository.calls)
+        assertEquals(listOf("GET", "GET icons"), repository.calls)
         assertTrue(viewModel.state.value.loaded)
         assertEquals(original, viewModel.outline())
     }
@@ -1610,7 +2003,7 @@ class TodoViewModelTest {
 
         repository.gate!!.complete(Unit)
 
-        assertEquals(listOf("GET", "GET stats in Asia/Tokyo"), repository.calls)
+        assertEquals(listOf("GET", "GET icons", "GET stats in Asia/Tokyo"), repository.calls)
         assertTrue(viewModel.state.value.loaded)
         assertEquals(original, viewModel.outline())
     }
@@ -1635,7 +2028,7 @@ class TodoViewModelTest {
         viewModel.onForeground()
 
         assertEquals(
-            listOf("PATCH 2 title \"Oat milk\"", "PATCH 2 completed true", "GET"),
+            listOf("PATCH 2 title \"Oat milk\"", "PATCH 2 completed true", "GET", "GET icons"),
             repository.calls,
         )
     }
@@ -1652,7 +2045,7 @@ class TodoViewModelTest {
         dispatcher.scheduler.advanceTimeBy(501)
 
         assertEquals(listOf("Groceries", "  Milk, oat", "  Eggs", "Dentist"), viewModel.outline())
-        assertEquals(listOf("GET", "PATCH 2 title \"Milk, oat\""), repository.calls)
+        assertEquals(listOf("GET", "GET icons", "PATCH 2 title \"Milk, oat\""), repository.calls)
     }
 
     @Test
@@ -1697,7 +2090,7 @@ class TodoViewModelTest {
 
         viewModel.setServer("nestodo.example.com")
 
-        assertEquals(listOf("GET", "GET profile"), repository.calls)
+        assertEquals(listOf("GET", "GET icons", "GET profile"), repository.calls)
         assertEquals(original, viewModel.outline())
     }
 
@@ -1938,7 +2331,7 @@ class TodoViewModelTest {
 
         repository.gate!!.complete(Unit)
 
-        assertEquals(listOf("GET", "GET stats in Asia/Tokyo"), repository.calls)
+        assertEquals(listOf("GET", "GET icons", "GET stats in Asia/Tokyo"), repository.calls)
         assertEquals(StatsState.Loaded(repository.days), viewModel.state.value.stats)
     }
 
@@ -2049,7 +2442,7 @@ class TodoViewModelTest {
         repository.gate!!.complete(Unit)
 
         assertEquals(
-            listOf("GET", "GET webhook", "GET analytics", "GET profile"),
+            listOf("GET", "GET icons", "GET webhook", "GET analytics", "GET profile"),
             repository.calls,
         )
         assertTrue(viewModel.state.value.settings is SettingsState.Loaded)
@@ -2551,7 +2944,10 @@ class TodoViewModelTest {
         reopened.setTitle(2, "Oat milk")
         reopened.blur(2)
 
-        assertEquals(listOf("GET", "GET profile", "PATCH 2 title \"Oat milk\""), repository.calls)
+        assertEquals(
+            listOf("GET", "GET icons", "GET profile", "PATCH 2 title \"Oat milk\""),
+            repository.calls,
+        )
     }
 
     @Test
