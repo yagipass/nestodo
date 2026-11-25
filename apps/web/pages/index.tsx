@@ -25,6 +25,7 @@ import {
   searchHits,
   setCollapsed,
   setComments,
+  setIcon,
   split,
   subtree,
   toggleDone,
@@ -37,6 +38,7 @@ import { Sync } from "../src/sync";
 import { ThreadPane } from "../src/thread-pane";
 import { encodePastedUrl, findLinks, tokens } from "../src/title";
 import { MAX_TITLE_LENGTH, SHOW_DONE_COOKIE } from "../src/todos";
+import { ICON_CHOICES, isIcon, shownIcon } from "../src/todo-icon";
 import { Tokens } from "../src/tokens";
 import { UndoHistory } from "../src/undo";
 
@@ -194,6 +196,67 @@ function MovePicker({
   );
 }
 
+function IconPicker({ outline, picking, onPick, onClose }: { outline: Outline; picking: string; onPick: (icon: string | null) => void; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const choices = useRef<HTMLDivElement>(null);
+  const backdrop = useBackdropClose();
+  const [other, setOther] = useState("");
+  const [refused, setRefused] = useState(false);
+  const { title, icon } = outline[picking];
+  const name = title || "empty item";
+
+  useLayoutEffect(() => {
+    dialog.current?.showModal();
+    const grid = choices.current;
+    (grid?.querySelector<HTMLButtonElement>('[aria-pressed="true"]') ?? grid?.querySelector("button"))?.focus();
+  }, []);
+
+  function onOtherKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter" || composingKey(event.nativeEvent)) return;
+    event.preventDefault();
+    const value = other.trim();
+    if (isIcon(value)) onPick(value);
+    else setRefused(true);
+  }
+
+  return (
+    <dialog ref={dialog} className="icon-picker" aria-label={`Icon for "${name}"`} onClose={onClose} {...backdrop}>
+      <div ref={choices} className="icon-choices">
+        {ICON_CHOICES.map((choice) => (
+          <button key={choice} type="button" aria-pressed={choice === icon} onClick={() => onPick(choice)}>
+            {choice}
+          </button>
+        ))}
+      </div>
+      <input
+        className="icon-other"
+        aria-label="Other emoji"
+        aria-invalid={refused}
+        aria-describedby={refused ? "icon-other-error" : undefined}
+        placeholder="Other emoji, then Enter"
+        value={other}
+        autoComplete="off"
+        spellCheck={false}
+        onChange={(event) => {
+          setOther(event.target.value);
+          setRefused(false);
+        }}
+        onKeyDown={onOtherKeyDown}
+      />
+      {refused && (
+        <p id="icon-other-error" className="icon-other-error" role="alert">
+          Enter one emoji
+        </p>
+      )}
+      {icon !== null && (
+        <button type="button" className="text-button icon-remove" onClick={() => onPick(null)}>
+          Remove icon
+        </button>
+      )}
+    </dialog>
+  );
+}
+
 type Confirming = { kind: "done" | "delete"; key: string; focus?: Focus; before?: Focus };
 
 function ConfirmDialog({
@@ -265,6 +328,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
   const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [, setTracked] = useState(0);
   const [moving, setMoving] = useState<Focus | null>(null);
+  const [picking, setPicking] = useState<Focus | null>(null);
   const [confirming, setConfirming] = useState<Confirming | null>(null);
   const [sync] = useState(
     () =>
@@ -512,6 +576,23 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     pendingFocus.current = moving;
   }
 
+  function openIcon(key: string) {
+    const here = focused();
+    if (!sync.failed) setPicking(here?.key === key ? here : { key, pos: -1 });
+  }
+
+  function pickIcon(icon: string | null) {
+    if (!picking) return;
+    setPicking(null);
+    if (!outline[picking.key] || !apply(setIcon(outline, picking.key, icon), picking, picking)) pendingFocus.current = picking;
+  }
+
+  function closeIcon() {
+    if (!picking) return;
+    setPicking(null);
+    pendingFocus.current = picking;
+  }
+
   function onTitle(key: string, title: string, composing = false) {
     const next = rename(outline, key, title);
     history.type(outline, next, key, composing);
@@ -596,6 +677,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     if (k === " " && event.ctrlKey) return handle(() => apply(setCollapsed(outline, key, !outline[key].collapsed), here));
     if (k === "Backspace" && mod && event.shiftKey) return handle(() => removeRow(key, index));
     if ((k === "m" || k === "M") && mod && event.shiftKey) return handle(() => openMove(here));
+    if ((k === "e" || k === "E") && mod && event.shiftKey) return handle(() => openIcon(key));
     if (k === "Enter" && mod) return handle(() => complete(key, index, pos));
     if (k === "Enter" && event.shiftKey && !event.altKey) return handle(() => openThread(key));
     if (k === "Escape" && thread !== null && !mod && !event.shiftKey) return handle(() => setThread(null));
@@ -609,7 +691,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     if (step !== 0 && !event.shiftKey && rows[index + step]) return handle(() => focusRow({ key: rows[index + step].key, pos }));
     if (k === "Backspace" && atStart) {
       const item = outline[key];
-      if (item.title === "" && item.comments === 0 && item.children.length === 0) return handle(() => removeRow(key, index));
+      if (item.title === "" && item.comments === 0 && item.icon === null && item.children.length === 0) return handle(() => removeRow(key, index));
       const merged = mergeIntoPrevious(outline, rows, key);
       if (merged) return handle(() => apply(merged));
     }
@@ -710,6 +792,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
           {rows.map((row, index) => {
             const item = outline[row.key];
             const name = item.title || "empty item";
+            const icon = shownIcon(item.icon);
             const hasChildren = item.children.length > 0;
             const { through, stem } = lines[index];
             const toggle = () => apply(setCollapsed(outline, row.key, !item.collapsed));
@@ -752,6 +835,18 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
                     )}
                   </button>
                 </span>
+                {icon !== null && (
+                  <button
+                    type="button"
+                    className="todo-icon"
+                    tabIndex={-1}
+                    aria-label={`Change icon of ${name}`}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => openIcon(row.key)}
+                  >
+                    {icon}
+                  </button>
+                )}
                 <span className="title">
                   <span className="line">
                     <input
@@ -782,6 +877,16 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
                     </span>
                   </span>
                 </span>
+                <button
+                  type="button"
+                  className="set-icon"
+                  aria-label={`${item.icon === null ? "Set icon for" : "Change icon of"} ${name}`}
+                  data-tip="Icon (Ctrl/⌘ ⇧ E)"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => openIcon(row.key)}
+                >
+                  <Icon name="emoji" size={18} />
+                </button>
                 <button
                   type="button"
                   className={["comment-button", item.comments > 0 && "has-comments", thread === row.key && "open"].filter(Boolean).join(" ")}
@@ -840,6 +945,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
       {moving && outline[moving.key] && (
         <MovePicker outline={outline} moving={moving.key} showDone={showDone} onMove={moveRow} onClose={closeMove} />
       )}
+      {picking && outline[picking.key] && <IconPicker outline={outline} picking={picking.key} onPick={pickIcon} onClose={closeIcon} />}
       {confirming && outline[confirming.key] && (
         <ConfirmDialog outline={outline} confirming={confirming} onConfirm={confirm} onClose={closeConfirm} />
       )}
