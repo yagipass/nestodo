@@ -12,6 +12,7 @@ pub struct Todo {
     pub parent_id: Option<u64>,
     pub position: usize,
     pub title: String,
+    pub icon: Option<String>,
     pub completed_at: Option<String>,
     pub collapsed: bool,
 }
@@ -156,7 +157,10 @@ fn render(
     let check = if todo.is_completed() { "[x]" } else { "[ ]" };
     let lead = format!("{:>width$} {check} ", todo.id);
     let children = outline.children(Some(todo.id));
-    let title = printable(&todo.title);
+    let title = match shown_icon(todo) {
+        Some(icon) => format!("{icon} {}", printable(&todo.title)),
+        None => printable(&todo.title),
+    };
     let mut line = if faded { style.dim(&lead) } else { lead };
     line.push_str(&style.dim(prefix));
     line.push_str(&if faded {
@@ -173,10 +177,26 @@ fn render(
     line
 }
 
+fn shown_icon(todo: &Todo) -> Option<String> {
+    let typed = |icon: &str| {
+        icon.split_once(':').is_some_and(|(kind, _)| {
+            kind.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+                && kind
+                    .bytes()
+                    .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
+        })
+    };
+    todo.icon
+        .as_deref()
+        .filter(|icon| !typed(icon))
+        .map(printable)
+}
+
 #[derive(Serialize)]
 struct Node<'a> {
     id: u64,
     title: &'a str,
+    icon: Option<&'a str>,
     completed: bool,
     collapsed: bool,
     children: Vec<Node<'a>>,
@@ -227,6 +247,7 @@ fn node<'a>(
     Node {
         id: todo.id,
         title: &todo.title,
+        icon: todo.icon.as_deref(),
         completed: todo.is_completed(),
         collapsed: todo.collapsed,
         children: if view.stops_at(depth) {
@@ -308,6 +329,7 @@ mod tests {
             parent_id: parent,
             position,
             title: title.into(),
+            icon: None,
             completed_at: done.then(|| "2026-10-20 09:00:00".into()),
             collapsed: false,
         }
@@ -415,9 +437,9 @@ mod tests {
             serde_json::from_str(&json(&outline, Some(outline.get(4).unwrap()), &ALL)).unwrap();
         assert_eq!(
             branch,
-            json!({ "id": 4, "title": "v2 release", "completed": false, "collapsed": false, "children": [
-                { "id": 7, "title": "Show the CLI list as a tree", "completed": false, "collapsed": false, "children": [] },
-                { "id": 10, "title": "Draft the release notes", "completed": true, "collapsed": false, "children": [] },
+            json!({ "id": 4, "title": "v2 release", "icon": null, "completed": false, "collapsed": false, "children": [
+                { "id": 7, "title": "Show the CLI list as a tree", "icon": null, "completed": false, "collapsed": false, "children": [] },
+                { "id": 10, "title": "Draft the release notes", "icon": null, "completed": true, "collapsed": false, "children": [] },
             ]})
         );
 
@@ -429,8 +451,8 @@ mod tests {
         assert_eq!(
             home,
             json!([
-                { "id": 1, "title": "Work", "completed": false, "collapsed": false, "children": [] },
-                { "id": 18, "title": "Book the dentist", "completed": false, "collapsed": false, "children": [] },
+                { "id": 1, "title": "Work", "icon": null, "completed": false, "collapsed": false, "children": [] },
+                { "id": 18, "title": "Book the dentist", "icon": null, "completed": false, "collapsed": false, "children": [] },
             ])
         );
     }
@@ -580,11 +602,135 @@ mod tests {
         );
         assert_eq!(
             serde_json::from_str::<Value>(&json(&outline, Some(a), &ALL)).unwrap(),
-            json!({ "id": 2, "title": "a", "completed": false, "collapsed": false, "children": [
-                { "id": 3, "title": "b", "completed": false, "collapsed": false, "children": [] },
+            json!({ "id": 2, "title": "a", "icon": null, "completed": false, "collapsed": false, "children": [
+                { "id": 3, "title": "b", "icon": null, "completed": false, "collapsed": false, "children": [] },
             ]})
         );
         assert!(detail(&outline, a).contains("\nParent:    Home › a › b\n"));
+    }
+
+    fn with_icon(mut todo: Todo, icon: &str) -> Todo {
+        todo.icon = Some(icon.into());
+        todo
+    }
+
+    #[test]
+    fn reads_a_todo_from_a_server_that_predates_icons_as_having_none() {
+        let mut fields = json!({
+            "id": 1, "parentId": null, "position": 0, "title": "Milk", "completedAt": null, "collapsed": false,
+        });
+        assert_eq!(
+            serde_json::from_value::<Todo>(fields.clone()).unwrap().icon,
+            None
+        );
+        fields["icon"] = json!("🥛");
+        assert_eq!(
+            serde_json::from_value::<Todo>(fields).unwrap().icon,
+            Some("🥛".into())
+        );
+    }
+
+    #[test]
+    fn puts_the_icon_after_the_branch_and_before_the_title_so_ids_and_branches_stay_aligned() {
+        let outline = Outline::new(vec![
+            with_icon(todo(1, None, 0, "Chores", false), "🧹"),
+            with_icon(
+                todo(2, Some(1), 0, "Take out the trash", false),
+                "🗑\u{fe0f}",
+            ),
+            todo(3, Some(1), 1, "Water the plants", false),
+            with_icon(todo(18, None, 1, "Book the dentist", true), "🦷"),
+        ]);
+
+        assert_eq!(
+            tree(&outline, None, &ALL, PLAIN),
+            "Home\n \
+             1 [ ] ├── 🧹 Chores  0/2\n \
+             2 [ ] │   ├── 🗑\u{fe0f} Take out the trash\n \
+             3 [ ] │   └── Water the plants\n\
+             18 [x] └── 🦷 Book the dentist"
+        );
+        assert_eq!(
+            row(&outline, outline.get(18).unwrap(), PLAIN),
+            "18 [x] 🦷 Book the dentist"
+        );
+    }
+
+    #[test]
+    fn dims_the_icon_of_a_finished_todo_with_its_title_so_it_reads_as_done_like_the_rest_of_the_row()
+     {
+        let outline = Outline::new(vec![with_icon(
+            todo(18, None, 0, "Book the dentist", true),
+            "🦷",
+        )]);
+
+        assert!(
+            tree(&outline, None, &ALL, COLOR).ends_with("\x1b[2m🦷 Book the dentist\x1b[0m"),
+            "{:?}",
+            tree(&outline, None, &ALL, COLOR)
+        );
+    }
+
+    #[test]
+    fn prints_nothing_for_a_typed_icon_meant_for_a_later_release_but_any_other_value_as_text() {
+        for typed in ["line:cart:green", "image:3f6c2a1e", "a:", "x9_y-z:anything"] {
+            let outline =
+                Outline::new(vec![with_icon(todo(1, None, 0, "Groceries", false), typed)]);
+            assert_eq!(
+                tree(&outline, None, &ALL, PLAIN),
+                "Home\n1 [ ] └── Groceries",
+                "{typed}"
+            );
+            assert_eq!(
+                row(&outline, outline.get(1).unwrap(), PLAIN),
+                "1 [ ] Groceries",
+                "{typed}"
+            );
+        }
+        for shown in ["Line:cart", "1x:cart", ":cart", "line cart:"] {
+            let outline =
+                Outline::new(vec![with_icon(todo(1, None, 0, "Groceries", false), shown)]);
+            assert_eq!(
+                row(&outline, outline.get(1).unwrap(), PLAIN),
+                format!("1 [ ] {shown} Groceries")
+            );
+        }
+    }
+
+    #[test]
+    fn replaces_control_characters_in_icons_too_so_a_stored_icon_cannot_drive_the_terminal() {
+        let stored = "\u{1b}]52;c;aGk=\u{7}\u{202e}";
+        let outline = Outline::new(vec![with_icon(todo(1, None, 0, "Milk", false), stored)]);
+
+        assert_eq!(
+            tree(&outline, None, &ALL, PLAIN),
+            "Home\n1 [ ] └── \u{FFFD}]52;c;aGk=\u{FFFD}\u{FFFD} Milk"
+        );
+        let text = json(&outline, None, &ALL);
+        assert!(!text.contains('\u{202e}'), "{text:?}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap()[0]["icon"],
+            stored
+        );
+    }
+
+    #[test]
+    fn json_gives_scripts_the_icon_exactly_as_stored_even_a_typed_one_the_tree_hides() {
+        let outline = Outline::new(vec![
+            with_icon(todo(1, None, 0, "Groceries", false), "line:cart:green"),
+            with_icon(todo(2, Some(1), 0, "Milk", false), "🥛"),
+            todo(3, None, 1, "Book the dentist", false),
+        ]);
+
+        assert_eq!(
+            serde_json::from_str::<Value>(&json(&outline, None, &ALL)).unwrap(),
+            json!([
+                { "id": 1, "title": "Groceries", "icon": "line:cart:green", "completed": false, "collapsed": false, "children": [
+                    { "id": 2, "title": "Milk", "icon": "🥛", "completed": false, "collapsed": false, "children": [] },
+                ]},
+                { "id": 3, "title": "Book the dentist", "icon": null, "completed": false, "collapsed": false, "children": [] },
+            ])
+        );
     }
 
     #[test]

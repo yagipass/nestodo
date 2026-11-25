@@ -16,12 +16,12 @@ nix profile install github:yagipass/nestodo#nestodo
 export NESTODO_BASE_URL=https://nestodo.example.com  # your server, which --base-url also sets
 nestodo login                         # sign in with your browser (once)
 nestodo list [ID] [-d N] [--active] [--json]
-nestodo add "Buy milk" [-p ID | --after ID]
+nestodo add "Buy milk" [-p ID | --after ID] [--icon 🥛]
 nestodo mv 7 8 --to 3                 # or --after ID to put them right after a todo
 nestodo indent 7                      # nest under the todo above
 nestodo outdent 7                     # move out to right after its parent
 nestodo show 7
-nestodo edit 7 --title "Buy oat milk"
+nestodo edit 7 --title "Buy oat milk" # and/or --icon 🥛, or --no-icon to remove it
 nestodo done 7 8 [-r]                 # -r also marks the open todos under it as done
 nestodo undo 7
 nestodo rm 7 [-r]                     # -r also deletes the todos under it

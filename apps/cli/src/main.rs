@@ -70,6 +70,9 @@ enum Command {
         /// Add it right after this todo
         #[arg(long, value_name = "ID")]
         after: Option<Id>,
+        /// Show this emoji before the title
+        #[arg(long, value_name = "EMOJI")]
+        icon: Option<String>,
     },
     /// Move todos
     Mv(MvArgs),
@@ -79,13 +82,8 @@ enum Command {
     Outdent { id: Id },
     /// Show a todo
     Show { id: Id },
-    /// Change the title of a todo
-    Edit {
-        id: Id,
-        /// New title
-        #[arg(long)]
-        title: String,
-    },
+    /// Change the title or icon of a todo
+    Edit(EditArgs),
     /// Mark todos as done
     Done {
         #[arg(required = true, value_name = "ID")]
@@ -120,6 +118,21 @@ struct MvArgs {
     /// Move them right after this todo
     #[arg(long, value_name = "ID")]
     after: Option<Id>,
+}
+
+#[derive(Args)]
+#[command(group(ArgGroup::new("change").required(true).multiple(true).args(["title", "icon", "no_icon"])))]
+struct EditArgs {
+    id: Id,
+    /// New title
+    #[arg(long)]
+    title: Option<String>,
+    /// Show this emoji before the title
+    #[arg(long, value_name = "EMOJI", conflicts_with = "no_icon")]
+    icon: Option<String>,
+    /// Remove the icon
+    #[arg(long)]
+    no_icon: bool,
 }
 
 type Id = u64;
@@ -182,7 +195,10 @@ fn run(cli: Cli) -> Result<(), Error> {
             println!("Logged out of {host}.");
         }
         command => {
-            if let Command::Add { title, .. } | Command::Edit { title, .. } = &command
+            if let Command::Add { title, .. }
+            | Command::Edit(EditArgs {
+                title: Some(title), ..
+            }) = &command
                 && title.trim().is_empty()
             {
                 return Err(Error::Invalid("Enter a title".into()));
@@ -232,6 +248,7 @@ fn todos(command: Command, api: &mut Api, style: Style) -> Result<(), Error> {
             title,
             parent,
             after,
+            icon,
         } => {
             let outline = match (parent, after) {
                 (None, None) => Outline::default(),
@@ -249,7 +266,9 @@ fn todos(command: Command, api: &mut Api, style: Style) -> Result<(), Error> {
                     (parent, None)
                 }
             };
-            placed(&outline, &api.create(title.trim(), parent, index)?, style);
+            let created =
+                api.create(title.trim(), parent, index, icon.as_deref().map(str::trim))?;
+            placed(&outline, &created, style);
         }
         Command::Mv(args) => {
             let mut outline = Outline::new(api.list()?);
@@ -260,8 +279,14 @@ fn todos(command: Command, api: &mut Api, style: Style) -> Result<(), Error> {
         }
         Command::Indent { id } => shift(api, id, Outline::indent, style)?,
         Command::Outdent { id } => shift(api, id, Outline::outdent, style)?,
-        Command::Edit { id, title } => {
-            change(api, &[id], style, |api, id| api.edit(id, title.trim()))?
+        Command::Edit(args) => {
+            let title = args.title.as_deref().map(str::trim);
+            let icon = if args.no_icon {
+                Some(None)
+            } else {
+                args.icon.as_deref().map(|icon| Some(icon.trim()))
+            };
+            change(api, &[args.id], style, |api, id| api.edit(id, title, icon))?
         }
         Command::Done { ids, recursive } => complete(api, &ids, recursive, style)?,
         Command::Undo { ids } => change(api, &ids, style, |api, id| api.set_completed(id, false))?,
