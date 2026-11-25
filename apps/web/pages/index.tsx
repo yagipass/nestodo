@@ -208,17 +208,21 @@ function TodoIconGlyph({ icon }: { icon: ShownIcon }) {
   return "emoji" in icon ? icon.emoji : <img src={icon.image.url} alt="" />;
 }
 
+function DoneBadge() {
+  return (
+    <span className="done-badge">
+      <Icon name="tick" size={8} strokeWidth={4} />
+    </span>
+  );
+}
+
 function IconPreviewRow({ title, image, done = false }: { title: string; image: string; done?: boolean }) {
   return (
     <div className={done ? "icon-preview-row done" : "icon-preview-row"}>
-      {done ? (
-        <span className="done-box">
-          <Icon name="tick" size={11} strokeWidth={3.6} />
-        </span>
-      ) : (
-        <span className="dot" />
-      )}
-      <img src={image} alt="" />
+      <span className="icon-preview-mark">
+        <img src={image} alt="" />
+        {done && <DoneBadge />}
+      </span>
       <span>{title}</span>
     </div>
   );
@@ -1102,7 +1106,7 @@ export default function OutlinePage({ todos, icons, showDone: startShown }: Prop
             return (
               <li
                 key={row.key}
-                className={["row", hasChildren && "parent", item.done ? "done" : row.under && "under", thread === row.key && "threaded", at >= 0 && current === row.key && "current-match"]
+                className={["row", hasChildren && "parent", item.done ? "done" : row.under && "under", icon !== null && "with-icon", thread === row.key && "threaded", at >= 0 && current === row.key && "current-match"]
                   .filter(Boolean)
                   .join(" ")}
               >
@@ -1129,7 +1133,14 @@ export default function OutlinePage({ todos, icons, showDone: startShown }: Prop
                     disabled={!hasChildren}
                     onClick={toggle}
                   >
-                    {item.done ? (
+                    {icon !== null ? (
+                      <>
+                        <span className="glyph">
+                          <TodoIconGlyph icon={icon} />
+                        </span>
+                        {item.done && <DoneBadge />}
+                      </>
+                    ) : item.done ? (
                       <span className="done-box">
                         <Icon name="tick" size={11} strokeWidth={3.6} />
                       </span>
@@ -1138,18 +1149,6 @@ export default function OutlinePage({ todos, icons, showDone: startShown }: Prop
                     )}
                   </button>
                 </span>
-                {icon !== null && (
-                  <button
-                    type="button"
-                    className="todo-icon"
-                    tabIndex={-1}
-                    aria-label={`Change icon of ${name}`}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => openIcon(row.key)}
-                  >
-                    <TodoIconGlyph icon={icon} />
-                  </button>
-                )}
                 <span className="title">
                   <span className="line">
                     <input
