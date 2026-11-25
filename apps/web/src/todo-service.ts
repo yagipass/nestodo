@@ -7,6 +7,7 @@ import { awaitingCommentWindow, clampIndex, depthOf, heightOf, isWithin, KEEP_CO
 
 export type TodoChanges = {
   title?: string;
+  icon?: string | null;
   completed?: boolean;
   collapsed?: boolean;
   parentId?: number | null;
@@ -22,6 +23,7 @@ const insertColumns = {
   parentId: todos.parentId,
   position: todos.position,
   title: todos.title,
+  icon: todos.icon,
   completedAt: todos.completedAt,
   collapsed: todos.collapsed,
   createdAt: todos.createdAt,
@@ -29,7 +31,7 @@ const insertColumns = {
 
 const columns = { ...insertColumns, commentCount };
 
-type Todo = Placed & { title: string; completedAt: string | null; collapsed: boolean; createdAt: string; commentCount: number };
+type Todo = Placed & { title: string; icon: string | null; completedAt: string | null; collapsed: boolean; createdAt: string; commentCount: number };
 
 const now = sql`(datetime('now'))`;
 
@@ -105,7 +107,7 @@ function reopenAbove(userId: string, id: number, onlyIfOpenBelow: boolean) {
 type TodoRow = Omit<Todo, "collapsed"> & { collapsed: number };
 
 const todosSql =
-  "SELECT id, parent_id AS parentId, position, title, completed_at AS completedAt, collapsed, created_at AS createdAt, (SELECT count(*) FROM todo_comments WHERE todo_comments.user_id = todos.user_id AND todo_comments.todo_id = todos.id) AS commentCount FROM todos WHERE user_id = ?";
+  "SELECT id, parent_id AS parentId, position, title, icon, completed_at AS completedAt, collapsed, created_at AS createdAt, (SELECT count(*) FROM todo_comments WHERE todo_comments.user_id = todos.user_id AND todo_comments.todo_id = todos.id) AS commentCount FROM todos WHERE user_id = ?";
 
 const todoSql = `${todosSql} AND id = ?`;
 
@@ -184,7 +186,7 @@ export async function getTodo(userId: string, id: number) {
 
 export async function createTodo(
   userId: string,
-  input: { title: string; parentId?: number | null; index?: number; comment?: string },
+  input: { title: string; icon?: string | null; parentId?: number | null; index?: number; comment?: string },
   via: Via = "app",
 ): Promise<Todo> {
   const parentId = input.parentId ?? null;
@@ -193,7 +195,7 @@ export async function createTodo(
   assertDepth(rows, parentId, 1);
   const position = clampIndex(input.index, rows.filter((row) => row.parentId === parentId).length);
   const gap = openGap(userId, parentId, position);
-  const insert = db.insert(todos).values({ userId, title: input.title, parentId, position }).returning(insertColumns);
+  const insert = db.insert(todos).values({ userId, title: input.title, icon: input.icon ?? null, parentId, position }).returning(insertColumns);
   const comment = input.comment === undefined ? null : db.insert(todoComments).values({ userId, todoId: sql`last_insert_rowid()`, body: input.comment, via });
   const reopen = parentId === null ? null : reopenAbove(userId, parentId, false);
   const [, [created]] =
@@ -210,7 +212,7 @@ export async function createTodo(
 export async function updateTodo(userId: string, id: number, changes: TodoChanges) {
   const completedAt =
     changes.completed === undefined ? undefined : changes.completed ? sql`coalesce(${todos.completedAt}, datetime('now'))` : null;
-  const fields = { title: changes.title, collapsed: changes.collapsed, completedAt, updatedAt: now };
+  const fields = { title: changes.title, icon: changes.icon, collapsed: changes.collapsed, completedAt, updatedAt: now };
   const update = (placement: { parentId?: number | null; position?: number } = {}) =>
     db
       .update(todos)
@@ -258,7 +260,7 @@ export async function deleteTodo(userId: string, id: number, recursive: boolean)
   }
   await db.batch([
     db.insert(trashedTodos).select(sql`
-      SELECT id, user_id, ${id}, parent_id, position, title, collapsed, completed_at, created_at, updated_at, datetime('now')
+      SELECT id, user_id, ${id}, parent_id, position, title, icon, collapsed, completed_at, created_at, updated_at, datetime('now')
       FROM ${todos} WHERE user_id = ${userId} AND id IN ${subtreeOf(userId, id)}
     `),
     db.delete(todos).where(and(eq(todos.userId, userId), inArray(todos.id, subtreeOf(userId, id)))),
@@ -283,7 +285,7 @@ export async function restoreTodo(userId: string, id: number, placement: { paren
       SELECT id, user_id,
         CASE WHEN id = ${id} THEN ${parentId} ELSE parent_id END,
         CASE WHEN id = ${id} THEN ${position} ELSE position END,
-        title, collapsed, completed_at, created_at, updated_at
+        title, icon, collapsed, completed_at, created_at, updated_at
       FROM ${trashedTodos} WHERE user_id = ${userId} AND batch = ${id}
     `),
     db.delete(todoEvents).where(and(eq(todoEvents.userId, userId), eq(todoEvents.kind, "deleted"), inArray(todoEvents.todoId, restored))),
