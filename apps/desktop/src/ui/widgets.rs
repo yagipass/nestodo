@@ -21,6 +21,21 @@ pub fn icon(icon: Icon, size: f32, color: Hsla) -> Svg {
         .text_color(color)
 }
 
+pub fn bullet_mark(done: bool, colors: &Theme) -> Div {
+    if done {
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(16.))
+            .rounded(px(5.))
+            .bg(colors.accent)
+            .child(icon(Icon::Tick, 11., colors.on_accent))
+    } else {
+        div().size(px(8.)).rounded_full().bg(colors.accent)
+    }
+}
+
 pub fn icon_button(
     id: impl Into<ElementId>,
     glyph: Icon,
@@ -76,7 +91,40 @@ pub fn pill(
     enabled: bool,
     colors: &Theme,
 ) -> Stateful<Div> {
-    let strong = colors.accent_strong;
+    filled(
+        id,
+        text,
+        enabled,
+        colors.accent,
+        colors.accent_strong,
+        colors,
+    )
+}
+
+pub fn danger_pill(
+    id: impl Into<ElementId>,
+    text: &'static str,
+    enabled: bool,
+    colors: &Theme,
+) -> Stateful<Div> {
+    filled(
+        id,
+        text,
+        enabled,
+        colors.danger,
+        colors.danger.opacity(0.85),
+        colors,
+    )
+}
+
+fn filled(
+    id: impl Into<ElementId>,
+    text: &'static str,
+    enabled: bool,
+    fill: Hsla,
+    strong: Hsla,
+    colors: &Theme,
+) -> Stateful<Div> {
     div()
         .id(id)
         .flex_none()
@@ -85,7 +133,7 @@ pub fn pill(
         .flex()
         .items_center()
         .rounded(px(10.))
-        .bg(colors.accent)
+        .bg(fill)
         .text_color(colors.on_accent)
         .text_size(px(14.))
         .font_weight(FontWeight::SEMIBOLD)

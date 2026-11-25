@@ -12,6 +12,7 @@ use url::Url;
 use crate::access::{self, AccessApp, Session};
 use crate::error::Error;
 use crate::http::{Call, Http, Response, is_loopback};
+use crate::icon::ImageIcon;
 use crate::profile::Profile;
 use crate::stats::Day;
 use crate::store::{Kind, TokenStore};
@@ -25,6 +26,8 @@ const ANALYTICS_PATH: &str = "/api/v1/analytics";
 const PROFILE_PATH: &str = "/api/v1/profile";
 const AVATAR_PATH: &str = "/api/v1/profile/avatar";
 const AVATARS_PATH: &str = "/api/v1/avatars/";
+const ICONS_PATH: &str = "/api/v1/icons";
+const ICON_IMAGES_PATH: &str = "/api/v1/icons/";
 
 pub struct Client {
     http: Http,
@@ -52,6 +55,16 @@ struct Many {
 #[derive(Deserialize)]
 struct Consent {
     enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct Icons {
+    icons: Vec<ImageIcon>,
+}
+
+#[derive(Deserialize)]
+struct OneIcon {
+    icon: ImageIcon,
 }
 
 impl Client {
@@ -198,12 +211,70 @@ impl Client {
     }
 
     pub fn avatar(&self, url: &str) -> Result<Vec<u8>, Error> {
+        self.download(url, AVATARS_PATH, "an avatar")
+    }
+
+    pub fn icons(&self) -> Result<Vec<ImageIcon>, Error> {
+        Ok(self.get::<Icons>(ICONS_PATH.into())?.icons)
+    }
+
+    pub fn add_icon(&self, name: &str, image: &[u8]) -> Result<ImageIcon, Error> {
+        self.save_icon(
+            "POST",
+            ICONS_PATH.into(),
+            serde_json::json!({ "name": name, "image": STANDARD.encode(image) }),
+        )
+    }
+
+    pub fn rename_icon(&self, id: &str, name: &str) -> Result<ImageIcon, Error> {
+        self.save_icon(
+            "PATCH",
+            format!("{ICONS_PATH}/{id}"),
+            serde_json::json!({ "name": name }),
+        )
+    }
+
+    pub fn delete_icon(&self, id: &str) -> Result<(), Error> {
+        let reply = self.request(&Request {
+            method: "DELETE",
+            path: format!("{ICONS_PATH}/{id}"),
+            body: None,
+        })?;
+        if reply.is_success() || reply.status == StatusCode::NOT_FOUND.as_u16() {
+            Ok(())
+        } else {
+            Err(told(&reply))
+        }
+    }
+
+    pub fn icon_image(&self, url: &str) -> Result<Vec<u8>, Error> {
+        self.download(url, ICON_IMAGES_PATH, "an icon image")
+    }
+
+    fn save_icon(
+        &self,
+        method: &'static str,
+        path: String,
+        body: Value,
+    ) -> Result<ImageIcon, Error> {
+        let reply = self.request(&Request {
+            method,
+            path,
+            body: Some(body),
+        })?;
+        if !reply.is_success() {
+            return Err(told(&reply));
+        }
+        Ok(decoded::<OneIcon>(reply)?.icon)
+    }
+
+    fn download(&self, url: &str, under: &str, what: &str) -> Result<Vec<u8>, Error> {
         let target = self.base.join(url).ok().filter(|target| {
-            target.origin() == self.base.origin() && target.path().starts_with(AVATARS_PATH)
+            target.origin() == self.base.origin() && target.path().starts_with(under)
         });
         let Some(target) = target else {
             return Err(Error::Invalid(format!(
-                "{url:?} is not an avatar on the server"
+                "{url:?} is not {what} on the server"
             )));
         };
         let response = self.respond(&Request {
@@ -302,6 +373,27 @@ fn failure(reply: &Reply) -> Error {
                 .unwrap_or_default()
                 .to_string()
         }),
+    }
+}
+
+fn told(reply: &Reply) -> Error {
+    let Some(body) = reply.body.as_ref() else {
+        return failure(reply);
+    };
+    let mut said = refused_fields(body);
+    if said.is_empty()
+        && let Some(message) = body.get("message").and_then(Value::as_str)
+    {
+        let kind = body
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        said.push((kind.to_string(), message.to_string()));
+    }
+    if said.is_empty() {
+        failure(reply)
+    } else {
+        Error::Refused(said)
     }
 }
 
@@ -1481,5 +1573,181 @@ mod tests {
             client.remove_avatar(),
             Err(Error::Server { status: 503, .. })
         ));
+    }
+
+    fn mike(id: &str) -> ImageIcon {
+        ImageIcon {
+            id: id.into(),
+            name: "Mike".into(),
+            url: format!("/api/v1/icons/{id}/image"),
+        }
+    }
+
+    #[test]
+    fn reads_the_members_images_in_the_order_they_were_added_so_the_picker_shows_them_that_way() {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        server
+            .mock("GET", "/api/v1/icons")
+            .with_body(
+                r#"{"icons":[
+                    {"id":"a1","name":"Mike","url":"/api/v1/icons/a1/image"},
+                    {"id":"b2","name":"Pochi","url":"/api/v1/icons/b2/image"}
+                ]}"#,
+            )
+            .create();
+
+        let icons = signed_in(&server, &store).unwrap().icons().unwrap();
+
+        assert_eq!(
+            icons,
+            [
+                mike("a1"),
+                ImageIcon {
+                    id: "b2".into(),
+                    name: "Pochi".into(),
+                    url: "/api/v1/icons/b2/image".into(),
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn a_new_image_is_sent_with_its_name_as_base64_of_the_exact_bytes_and_comes_back_with_the_id_to_use()
+     {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        let png = b"\x89PNG\r\n\x1a\nnot really pixels".to_vec();
+        let post = server
+            .mock("POST", "/api/v1/icons")
+            .match_body(Matcher::Json(
+                json!({"name": "Mike", "image": STANDARD.encode(&png)}),
+            ))
+            .with_status(201)
+            .with_body(r#"{"icon":{"id":"a1","name":"Mike","url":"/api/v1/icons/a1/image"}}"#)
+            .create();
+
+        let added = signed_in(&server, &store)
+            .unwrap()
+            .add_icon("Mike", &png)
+            .unwrap();
+
+        post.assert();
+        assert_eq!(added, mike("a1"));
+    }
+
+    #[test]
+    fn an_image_the_server_refuses_carries_its_own_words_so_the_picker_can_say_why_and_a_bare_failure_does_not()
+     {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        let client = signed_in(&server, &store).unwrap();
+        server
+            .mock("POST", "/api/v1/icons")
+            .with_status(409)
+            .with_body(r#"{"error":"too_many_icons","message":"You can add up to 50 images"}"#)
+            .create();
+
+        let full = client.add_icon("Mike", b"png");
+
+        let Err(error @ Error::Refused(_)) = full else {
+            panic!("expected the server's reason, got {full:?}");
+        };
+        assert_eq!(error.to_string(), "You can add up to 50 images");
+
+        server
+            .mock("PATCH", "/api/v1/icons/a1")
+            .with_status(400)
+            .with_body(
+                r#"{"error":"Validation failed","issues":[{"slot":"body","issues":[
+                    {"message":"The name can be up to 30 characters","path":"name"}
+                ]}]}"#,
+            )
+            .create();
+        let long = client.rename_icon("a1", &"x".repeat(31));
+        let Err(error @ Error::Refused(_)) = long else {
+            panic!("expected the server's reason, got {long:?}");
+        };
+        assert_eq!(error.to_string(), "The name can be up to 30 characters");
+
+        server
+            .mock("DELETE", "/api/v1/icons/a1")
+            .with_status(503)
+            .create();
+        assert!(matches!(
+            client.delete_icon("a1"),
+            Err(Error::Server { status: 503, .. })
+        ));
+    }
+
+    #[test]
+    fn deleting_an_image_another_device_already_deleted_counts_as_deleted_so_the_picker_forgets_it_instead_of_failing()
+     {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        let delete = server
+            .mock("DELETE", "/api/v1/icons/a1")
+            .with_status(404)
+            .with_body(r#"{"error":"not_found","message":"Icon not found"}"#)
+            .create();
+
+        let deleted = signed_in(&server, &store).unwrap().delete_icon("a1");
+
+        delete.assert();
+        assert!(deleted.is_ok(), "{deleted:?}");
+    }
+
+    #[test]
+    fn renaming_and_deleting_an_image_go_to_that_image_only() {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        let patch = server
+            .mock("PATCH", "/api/v1/icons/a1")
+            .match_body(Matcher::Json(json!({"name": "Tama"})))
+            .with_body(r#"{"icon":{"id":"a1","name":"Tama","url":"/api/v1/icons/a1/image"}}"#)
+            .create();
+        let delete = server
+            .mock("DELETE", "/api/v1/icons/a1")
+            .with_status(204)
+            .create();
+        let client = signed_in(&server, &store).unwrap();
+
+        assert_eq!(client.rename_icon("a1", "Tama").unwrap().name, "Tama");
+        client.delete_icon("a1").unwrap();
+
+        patch.assert();
+        delete.assert();
+    }
+
+    #[test]
+    fn an_image_downloads_with_the_login_but_only_from_the_icons_on_the_same_server_so_a_list_cannot_send_the_login_elsewhere()
+     {
+        let mut server = Server::new();
+        let mut other = Server::new();
+        let saved = token("app", LATER);
+        let store = store_with(&[(Kind::App, &saved)]);
+        let image = vec![0x89, b'P', b'N', b'G', 0, 1, 2, 255];
+        let get = server
+            .mock("GET", "/api/v1/icons/a1/image")
+            .match_header("cf-access-token", saved.as_str())
+            .with_header("content-type", "image/png")
+            .with_body(image.clone())
+            .create();
+        let elsewhere = other.mock("GET", Matcher::Any).expect(0).create();
+        let todos = server.mock("GET", "/api/v1/todos").expect(0).create();
+        let client = signed_in(&server, &store).unwrap();
+
+        assert_eq!(client.icon_image("/api/v1/icons/a1/image").unwrap(), image);
+        assert!(matches!(
+            client.icon_image(&format!("{}/api/v1/icons/a1/image", other.url())),
+            Err(Error::Invalid(_))
+        ));
+        assert!(matches!(
+            client.icon_image("/api/v1/icons/../todos"),
+            Err(Error::Invalid(_))
+        ));
+        get.assert();
+        elsewhere.assert();
+        todos.assert();
     }
 }

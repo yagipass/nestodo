@@ -8,6 +8,8 @@ use crate::error::Error;
 
 pub const AVATAR_SIZE: u32 = 256;
 pub const MAX_AVATAR_BYTES: usize = 512 * 1024;
+pub const ICON_SIZE: u32 = 128;
+pub const MAX_ICON_BYTES: usize = 128 * 1024;
 pub const MAX_SOURCE_SIDE: u32 = 16_384;
 pub const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 pub const TOO_LARGE: &str = "the image is too large to read";
@@ -39,7 +41,7 @@ fn decode_limits() -> Limits {
     limits
 }
 
-fn upright_square(bytes: &[u8]) -> Result<DynamicImage, Error> {
+fn upright_square(bytes: &[u8], target: u32) -> Result<DynamicImage, Error> {
     let mut reader = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(unreadable)?;
@@ -61,7 +63,7 @@ fn upright_square(bytes: &[u8]) -> Result<DynamicImage, Error> {
         side,
         side,
     );
-    let square = imageops::resize(&*middle, AVATAR_SIZE, AVATAR_SIZE, FilterType::Lanczos3);
+    let square = imageops::resize(&*middle, target, target, FilterType::Lanczos3);
     let mut square = if image.color().has_alpha() {
         DynamicImage::ImageRgba8(square)
     } else {
@@ -72,7 +74,15 @@ fn upright_square(bytes: &[u8]) -> Result<DynamicImage, Error> {
 }
 
 pub fn avatar_png(bytes: &[u8]) -> Result<Vec<u8>, Error> {
-    let square = upright_square(bytes)?;
+    square_png(bytes, AVATAR_SIZE, MAX_AVATAR_BYTES)
+}
+
+pub fn icon_png(bytes: &[u8]) -> Result<Vec<u8>, Error> {
+    square_png(bytes, ICON_SIZE, MAX_ICON_BYTES)
+}
+
+fn square_png(bytes: &[u8], target: u32, max_bytes: usize) -> Result<Vec<u8>, Error> {
+    let square = upright_square(bytes, target)?;
     let square = if square.color().has_alpha() {
         DynamicImage::ImageRgba8(square.to_rgba8())
     } else {
@@ -83,7 +93,7 @@ pub fn avatar_png(bytes: &[u8]) -> Result<Vec<u8>, Error> {
         .write_to(&mut png, ImageFormat::Png)
         .map_err(unreadable)?;
     let png = png.into_inner();
-    if png.len() > MAX_AVATAR_BYTES {
+    if png.len() > max_bytes {
         return Err(Error::Invalid("the image is too large to send".into()));
     }
     Ok(png)
@@ -176,6 +186,29 @@ mod tests {
         let png = avatar_png(&encoded(&DynamicImage::ImageRgba8(noisy), ImageFormat::Png)).unwrap();
 
         assert!(png.len() <= MAX_AVATAR_BYTES, "{} bytes", png.len());
+    }
+
+    #[test]
+    fn an_icon_image_is_the_middle_of_the_picture_at_128_pixels_and_even_noise_stays_under_the_servers_128_kb_limit()
+     {
+        let wide = encoded(
+            &DynamicImage::ImageRgb8(left_red_right_blue(900, 300)),
+            ImageFormat::Jpeg,
+        );
+        let square = decoded(&icon_png(&wide).unwrap());
+        assert_eq!((square.width(), square.height()), (ICON_SIZE, ICON_SIZE));
+        assert!(is_red(&square, 8, 64));
+        assert!(is_blue(&square, 119, 64));
+
+        let mut seed: u32 = 7;
+        let noisy = RgbaImage::from_fn(700, 700, |_, _| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let [r, g, b, a] = seed.to_le_bytes();
+            Rgba([r, g, b, a])
+        });
+        let png = icon_png(&encoded(&DynamicImage::ImageRgba8(noisy), ImageFormat::Png)).unwrap();
+        assert!(png.len() <= MAX_ICON_BYTES, "{} bytes", png.len());
+        assert_eq!(decoded(&png).width(), ICON_SIZE);
     }
 
     #[test]

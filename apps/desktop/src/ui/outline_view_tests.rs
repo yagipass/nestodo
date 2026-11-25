@@ -6,7 +6,7 @@ use gpui::{Entity, EntityInputHandler, TestAppContext, VisualTestContext};
 use nestodo_desktop::thread::{Entry, TimelineItem};
 
 use super::*;
-use crate::ui::fake_backend::{FakeServer, seed};
+use crate::ui::fake_backend::{FakeServer, TempFile, png, seed};
 use crate::ui::theme::Theme;
 
 struct Shell {
@@ -1518,6 +1518,622 @@ fn cmd_z_after_deleting_a_row_brings_it_back_with_its_icon(cx: &mut TestAppConte
 
     assert_eq!(server.tree(), "Trip\n  Hotel [icon: \u{1F3E8}]");
     assert!(cx.debug_bounds("icon-t2").is_some());
+}
+
+fn icon_picker(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> Entity<IconPicker> {
+    view.read_with(cx, |view, _| view.icon_picker.clone())
+        .expect("the icon picker is open")
+}
+
+fn right_click_on(cx: &mut VisualTestContext, selector: &'static str) {
+    let at = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} was not drawn"))
+        .center();
+    cx.simulate_mouse_down(at, MouseButton::Right, gpui::Modifiers::none());
+    cx.simulate_mouse_up(at, MouseButton::Right, gpui::Modifiers::none());
+}
+
+fn choose_file(cx: &mut VisualTestContext, file: &TempFile) {
+    click_on(cx, "add-image");
+    let path = file.0.clone();
+    cx.simulate_path_prompt_response(move |_| Some(vec![path]));
+    settle(cx);
+}
+
+fn name_typed(
+    view: &Entity<OutlineView>,
+    cx: &mut VisualTestContext,
+) -> (String, std::ops::Range<usize>) {
+    let field = icon_picker(view, cx).read_with(cx, |picker, _| picker.name_field());
+    field.read_with(cx, |field, _| (field.text().to_string(), field.selection()))
+}
+
+fn image_problem(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> Option<String> {
+    icon_picker(view, cx).read_with(cx, |picker, _| picker.problem().map(str::to_owned))
+}
+
+fn image_names(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> Vec<String> {
+    view.read_with(cx, |view, _| {
+        view.icons
+            .list
+            .iter()
+            .map(|image| image.name.clone())
+            .collect()
+    })
+}
+
+fn icon_of(view: &Entity<OutlineView>, cx: &mut VisualTestContext, key: &str) -> Option<String> {
+    view.read_with(cx, |view, _| view.outline.item(key).icon.clone())
+}
+
+#[gpui::test]
+fn an_image_icon_is_drawn_in_the_icon_slot_once_loaded_and_one_missing_from_the_list_draws_nothing_but_still_counts_as_an_icon(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(
+        FakeServer::with(vec![
+            seed("Feed Mike").icon("image:img1"),
+            seed("Feed Pochi").icon("image:gone"),
+        ])
+        .with_images(&["Mike"]),
+    );
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+
+    let icon = cx.debug_bounds("icon-t1").expect("the image was not drawn");
+    let title = cx.debug_bounds("title-t1").unwrap();
+    assert!(icon.right() <= title.left());
+    assert!((icon.center().y - title.center().y).abs() < px(0.5));
+    assert!(cx.debug_bounds("icon-t2").is_none());
+
+    focus(&view, cx, "Feed Pochi", 0);
+    cx.simulate_keystrokes("backspace");
+    settle(cx);
+    assert_eq!(
+        server.tree(),
+        "Feed Mike [icon: image:img1]\nFeed Pochi [icon: image:gone]"
+    );
+}
+
+#[gpui::test]
+fn a_todo_showing_an_image_the_icon_list_did_not_have_fetches_the_list_again_so_the_image_appears(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![seed("Feed the cat")]));
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    assert_eq!(server.image_lists(), 1);
+
+    let id = server.store_image("Mike", png(8, 8));
+    change_elsewhere(
+        &server,
+        "PATCH",
+        "/api/v1/todos/1",
+        Some(serde_json::json!({ "icon": format!("image:{id}") })),
+    );
+    server.fail_image_lists(1);
+    view.update(cx, OutlineView::refresh);
+    settle(cx);
+
+    assert_eq!(server.image_lists(), 3);
+    assert!(cx.debug_bounds("icon-t1").is_some());
+}
+
+#[gpui::test]
+fn a_failing_icon_list_leaves_the_outline_working_with_images_undrawn_and_is_not_asked_for_again_in_a_loop(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(
+        FakeServer::with(vec![seed("Feed Mike").icon("image:img1"), seed("Milk")])
+            .with_images(&["Mike"]),
+    );
+    server.fail_image_lists(usize::MAX);
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    view.update(cx, OutlineView::refresh);
+    settle(cx);
+
+    assert_eq!(titles(&view, cx), ["Feed Mike", "Milk"]);
+    assert!(cx.debug_bounds("icon-t1").is_none());
+    assert_eq!(server.image_lists(), 2);
+    assert_eq!(server.image_downloads(), 0);
+
+    focus(&view, cx, "Milk", END);
+    cx.simulate_input(" and eggs");
+    settle(cx);
+    assert_eq!(server.tree(), "Feed Mike [icon: image:img1]\nMilk and eggs");
+}
+
+#[gpui::test]
+fn an_image_is_downloaded_once_and_kept_by_id_so_refreshing_the_todos_does_not_download_it_again(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(
+        FakeServer::with(vec![seed("Feed Mike").icon("image:img1")])
+            .with_images(&["Mike", "Pochi"]),
+    );
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    assert_eq!(server.image_downloads(), 2);
+
+    view.update(cx, OutlineView::refresh);
+    settle(cx);
+
+    assert_eq!(server.image_lists(), 2);
+    assert_eq!(server.image_downloads(), 2);
+    assert!(cx.debug_bounds("icon-t1").is_some());
+}
+
+#[gpui::test]
+fn the_picker_shows_my_icons_in_the_order_they_were_added_then_the_add_tile_above_the_emoji_with_the_rows_image_marked(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(
+        FakeServer::with(vec![seed("Walk Pochi").icon("image:img2"), seed("Milk")])
+            .with_images(&["Mike", "Pochi"]),
+    );
+    let (_view, cx) = open(cx, &server, true);
+    settle(cx);
+
+    click_on(cx, "icon-t1");
+
+    let mike = cx.debug_bounds("my-icon-0").unwrap();
+    let pochi = cx.debug_bounds("my-icon-1").unwrap();
+    let add = cx.debug_bounds("add-image").unwrap();
+    let first_emoji = cx.debug_bounds("icon-choice-0").unwrap();
+    assert!(mike.right() <= pochi.left());
+    assert!(pochi.right() <= add.left());
+    assert_eq!(mike.top(), add.top());
+    assert!(add.bottom() <= first_emoji.top());
+    assert_eq!(cx.debug_bounds("icon-choice-selected"), Some(pochi));
+}
+
+#[gpui::test]
+fn the_add_tile_is_there_before_any_image_was_added_so_the_first_one_can_be(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    focus(&view, cx, "Milk", 0);
+
+    cx.simulate_keystrokes("cmd-shift-e");
+
+    assert!(cx.debug_bounds("add-image").is_some());
+    assert!(cx.debug_bounds("my-icon-0").is_none());
+}
+
+#[gpui::test]
+fn choosing_an_image_saves_it_as_the_rows_icon_at_once_like_an_emoji_with_the_caret_back_in_the_title(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![seed("Feed the cat")]).with_images(&["Mike"]));
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    focus(&view, cx, "Feed the cat", 4);
+
+    cx.simulate_keystrokes("cmd-shift-e");
+    click_on(cx, "my-icon-0");
+    settle(cx);
+
+    assert_eq!(server.tree(), "Feed the cat [icon: image:img1]");
+    assert_eq!(
+        last_sent(&server),
+        Some((
+            "PATCH",
+            "/api/v1/todos/1".into(),
+            Some(serde_json::json!({ "icon": "image:img1" }))
+        ))
+    );
+    assert!(!icon_picker_open(&view, cx));
+    assert_eq!(focused(&view, cx), Some(("Feed the cat".into(), 4)));
+    assert!(cx.debug_bounds("icon-t1").is_some());
+}
+
+#[gpui::test]
+fn adding_an_image_sends_a_128_pixel_square_named_after_the_file_and_puts_it_on_the_row_as_one_undo_step(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    focus(&view, cx, "Milk", 0);
+    cx.simulate_keystrokes("cmd-shift-e");
+    let photo = TempFile::with("Mike.png", &png(300, 200));
+
+    choose_file(cx, &photo);
+
+    assert!(cx.debug_bounds("image-add-view").is_some());
+    assert_eq!(name_typed(&view, cx), ("Mike".to_string(), 0..4));
+    assert_eq!(server.image_calls(), [] as [String; 0]);
+
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+
+    assert_eq!(server.image_calls(), ["POST Mike"]);
+    let sent = image::load_from_memory(&server.image_bytes("img1").unwrap()).unwrap();
+    assert_eq!((sent.width(), sent.height()), (128, 128));
+    assert_eq!(
+        server.tree(),
+        "Groceries\n  Milk [icon: image:img1]\n  Bread\nTrip"
+    );
+    assert!(!icon_picker_open(&view, cx));
+    assert!(cx.debug_bounds("icon-t2").is_some());
+
+    cx.simulate_keystrokes("cmd-z");
+    settle(cx);
+
+    assert_eq!(server.tree(), "Groceries\n  Milk\n  Bread\nTrip");
+    assert_eq!(server.images().len(), 1);
+    assert_eq!(image_names(&view, cx), ["Mike"]);
+}
+
+#[gpui::test]
+fn a_file_that_is_not_an_image_keeps_the_grid_saying_it_could_not_be_read_and_sends_nothing(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    focus(&view, cx, "Milk", 0);
+    cx.simulate_keystrokes("cmd-shift-e");
+    let notes = TempFile::with("notes.txt", b"not a picture");
+
+    choose_file(cx, &notes);
+
+    assert!(cx.debug_bounds("image-unreadable").is_some());
+    assert!(cx.debug_bounds("image-add-view").is_none());
+    assert!(cx.debug_bounds("icon-choice-0").is_some());
+    assert!(icon_picker_open(&view, cx));
+    assert_eq!(server.image_calls(), [] as [String; 0]);
+}
+
+#[gpui::test]
+fn an_empty_name_asks_for_one_and_sends_nothing(cx: &mut TestAppContext) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    focus(&view, cx, "Milk", 0);
+    cx.simulate_keystrokes("cmd-shift-e");
+    let photo = TempFile::with("Mike.png", &png(40, 40));
+    choose_file(cx, &photo);
+
+    cx.simulate_keystrokes("backspace");
+    cx.simulate_input("   ");
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+
+    assert_eq!(image_problem(&view, cx).as_deref(), Some("Enter a name"));
+    assert!(cx.debug_bounds("image-add-view").is_some());
+    assert_eq!(server.image_calls(), [] as [String; 0]);
+    assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
+}
+
+#[gpui::test]
+fn a_51st_image_shows_the_servers_reason_and_stays_in_the_add_view_with_the_row_unchanged(
+    cx: &mut TestAppContext,
+) {
+    let names: Vec<String> = (1..=50).map(|n| format!("Pet {n}")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let server = Arc::new(FakeServer::with(vec![seed("Milk")]).with_images(&names));
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    focus(&view, cx, "Milk", 0);
+    cx.simulate_keystrokes("cmd-shift-e");
+    let photo = TempFile::with("Tama.png", &png(40, 40));
+    choose_file(cx, &photo);
+
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+
+    assert_eq!(server.image_calls(), ["POST Tama"]);
+    assert_eq!(
+        image_problem(&view, cx).as_deref(),
+        Some("You can add up to 50 images")
+    );
+    assert!(cx.debug_bounds("image-add-view").is_some());
+    assert_eq!(server.tree(), "Milk");
+    assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
+}
+
+#[gpui::test]
+fn back_leaves_the_add_view_for_the_grid_and_escape_closes_the_whole_picker_without_adding_anything(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    focus(&view, cx, "Milk", 2);
+    cx.simulate_keystrokes("cmd-shift-e");
+    let photo = TempFile::with("Mike.png", &png(40, 40));
+
+    choose_file(cx, &photo);
+    click_on(cx, "image-cancel");
+    assert!(cx.debug_bounds("image-add-view").is_none());
+    assert!(cx.debug_bounds("icon-choice-0").is_some());
+
+    choose_file(cx, &photo);
+    cx.simulate_keystrokes("escape");
+    settle(cx);
+
+    assert!(!icon_picker_open(&view, cx));
+    assert_eq!(focused(&view, cx), Some(("Milk".into(), 2)));
+    assert_eq!(server.image_calls(), [] as [String; 0]);
+    assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
+}
+
+fn save_name_before_anything_answers(cx: &mut VisualTestContext) {
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(crate::ui::icon_picker::SaveImageName), cx);
+    });
+}
+
+fn close_icon_picker_before_anything_answers(cx: &mut VisualTestContext) {
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(crate::ui::icon_picker::CloseIconPicker), cx);
+    });
+}
+
+fn title_focused(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> bool {
+    let field = view.read_with(cx, |view, _| view.title_field.clone());
+    cx.update(|window, cx| field.focus_handle(cx).is_focused(window))
+}
+
+fn click_before_anything_answers(cx: &mut VisualTestContext, selector: &'static str) {
+    let position = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} was not drawn"))
+        .center();
+    cx.update(|window, cx| {
+        window.dispatch_event(
+            gpui::PlatformInput::MouseDown(MouseDownEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers: gpui::Modifiers::none(),
+                click_count: 1,
+                first_mouse: false,
+            }),
+            cx,
+        );
+        window.dispatch_event(
+            gpui::PlatformInput::MouseUp(MouseUpEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers: gpui::Modifiers::none(),
+                click_count: 1,
+            }),
+            cx,
+        );
+    });
+}
+
+#[gpui::test]
+fn closing_the_picker_while_a_new_image_uploads_still_adds_it_to_my_icons_at_once_but_leaves_the_row_alone(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    focus(&view, cx, "Milk", 0);
+    cx.simulate_keystrokes("cmd-shift-e");
+    let photo = TempFile::with("Tama.png", &png(40, 40));
+    choose_file(cx, &photo);
+
+    save_name_before_anything_answers(cx);
+    close_icon_picker_before_anything_answers(cx);
+    assert!(!icon_picker_open(&view, cx));
+    assert_eq!(server.image_calls(), [] as [String; 0]);
+    settle(cx);
+
+    assert_eq!(server.image_calls(), ["POST Tama"]);
+    assert_eq!(image_names(&view, cx), ["Tama"]);
+    assert_eq!(server.tree(), "Groceries\n  Milk\n  Bread\nTrip");
+    assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
+    assert!(!icon_picker_open(&view, cx));
+    cx.simulate_keystrokes("cmd-shift-e");
+    assert!(cx.debug_bounds("my-icon-0").is_some());
+}
+
+#[gpui::test]
+fn going_back_to_the_grid_while_a_new_image_uploads_shows_it_in_my_icons_without_putting_it_on_the_row(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    focus(&view, cx, "Milk", 0);
+    cx.simulate_keystrokes("cmd-shift-e");
+    let photo = TempFile::with("Tama.png", &png(40, 40));
+    choose_file(cx, &photo);
+
+    save_name_before_anything_answers(cx);
+    click_before_anything_answers(cx, "image-cancel");
+    assert_eq!(server.image_calls(), [] as [String; 0]);
+    settle(cx);
+
+    assert_eq!(server.image_calls(), ["POST Tama"]);
+    assert_eq!(image_names(&view, cx), ["Tama"]);
+    assert!(icon_picker_open(&view, cx));
+    assert!(cx.debug_bounds("image-add-view").is_none());
+    assert!(cx.debug_bounds("my-icon-0").is_some());
+    assert_eq!(image_problem(&view, cx), None);
+    assert_eq!(server.tree(), "Groceries\n  Milk\n  Bread\nTrip");
+    assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
+}
+
+#[gpui::test]
+fn right_clicking_an_image_renames_it_and_returns_to_the_grid_with_the_new_name(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![seed("Milk")]).with_images(&["Mike"]));
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    focus(&view, cx, "Milk", 0);
+    cx.simulate_keystrokes("cmd-shift-e");
+
+    right_click_on(cx, "my-icon-0");
+    assert!(cx.debug_bounds("image-edit-view").is_some());
+    assert_eq!(name_typed(&view, cx).0, "Mike");
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("Tama");
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+
+    assert_eq!(server.image_calls(), ["PATCH img1 Tama"]);
+    assert_eq!(image_names(&view, cx), ["Tama"]);
+    assert!(cx.debug_bounds("image-edit-view").is_none());
+    assert!(cx.debug_bounds("my-icon-0").is_some());
+    assert!(icon_picker_open(&view, cx));
+    assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
+    cx.simulate_keystrokes("escape");
+    assert!(!icon_picker_open(&view, cx));
+}
+
+#[gpui::test]
+fn closing_the_picker_while_an_image_is_being_renamed_still_shows_the_new_name_and_leaves_the_keyboard_in_the_title(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![seed("Milk")]).with_images(&["Mike"]));
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    focus(&view, cx, "Milk", 0);
+    cx.simulate_keystrokes("cmd-shift-e");
+    right_click_on(cx, "my-icon-0");
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("Tama");
+
+    save_name_before_anything_answers(cx);
+    close_icon_picker_before_anything_answers(cx);
+    assert!(!icon_picker_open(&view, cx));
+    assert_eq!(server.image_calls(), [] as [String; 0]);
+    settle(cx);
+
+    assert_eq!(server.image_calls(), ["PATCH img1 Tama"]);
+    assert_eq!(image_names(&view, cx), ["Tama"]);
+    assert!(title_focused(&view, cx));
+    assert_eq!(focused(&view, cx), Some(("Milk".into(), 0)));
+    assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
+}
+
+#[gpui::test]
+fn deleting_an_image_says_how_many_todos_lose_it_then_takes_it_off_them_here_without_a_patch_since_the_server_already_did(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(
+        FakeServer::with(vec![
+            seed("Feed Mike").icon("image:img1"),
+            seed("Brush Mike").icon("image:img1"),
+            seed("Milk").icon("\u{1F95B}"),
+        ])
+        .with_images(&["Mike"]),
+    );
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+
+    click_on(cx, "icon-t3");
+    right_click_on(cx, "my-icon-0");
+    click_on(cx, "delete-image");
+    click_on(cx, "delete-image-back");
+    assert!(cx.debug_bounds("image-edit-view").is_some());
+    click_on(cx, "delete-image");
+    assert_eq!(
+        icon_picker(&view, cx).read_with(cx, |picker, _| picker.warning()),
+        Some(
+            "It is the icon of 2 todos. Deleting it removes the icon from them and cannot be undone."
+                .into()
+        )
+    );
+    click_on(cx, "delete-image-confirm");
+    settle(cx);
+
+    assert_eq!(server.image_calls(), ["DELETE img1"]);
+    assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
+    assert_eq!(icon_of(&view, cx, "t1"), None);
+    assert_eq!(icon_of(&view, cx, "t2"), None);
+    assert_eq!(icon_of(&view, cx, "t3").as_deref(), Some("\u{1F95B}"));
+    assert_eq!(
+        server.tree(),
+        "Feed Mike\nBrush Mike\nMilk [icon: \u{1F95B}]"
+    );
+    assert!(icon_picker_open(&view, cx));
+    assert!(cx.debug_bounds("my-icon-0").is_none());
+    assert!(cx.debug_bounds("image-delete-view").is_none());
+    assert_eq!(image_names(&view, cx), [] as [String; 0]);
+}
+
+#[gpui::test]
+fn closing_the_picker_while_an_image_is_being_deleted_still_forgets_it_here_clears_its_rows_without_a_patch_and_forgets_undo(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(
+        FakeServer::with(vec![seed("Feed Mike").icon("image:img1"), seed("Milk")])
+            .with_images(&["Mike"]),
+    );
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    focus(&view, cx, "Milk", 0);
+    cx.simulate_keystrokes("cmd-shift-e");
+    click_on(cx, "my-icon-0");
+    settle(cx);
+    cx.simulate_keystrokes("cmd-shift-e");
+    click_on(cx, "icon-choice-0");
+    settle(cx);
+    let sent = server.sent().len();
+    cx.simulate_keystrokes("cmd-shift-e");
+    right_click_on(cx, "my-icon-0");
+    click_on(cx, "delete-image");
+
+    click_before_anything_answers(cx, "delete-image-confirm");
+    close_icon_picker_before_anything_answers(cx);
+    assert!(!icon_picker_open(&view, cx));
+    assert_eq!(server.image_calls(), [] as [String; 0]);
+    settle(cx);
+
+    assert_eq!(server.image_calls(), ["DELETE img1"]);
+    assert_eq!(image_names(&view, cx), [] as [String; 0]);
+    assert_eq!(icon_of(&view, cx, "t1"), None);
+    assert_eq!(server.sent().len(), sent);
+    assert!(title_focused(&view, cx));
+    cx.simulate_keystrokes("cmd-z");
+    settle(cx);
+    assert_eq!(server.sent().len(), sent);
+    assert_eq!(server.tree(), "Feed Mike\nMilk [icon: \u{1F3E0}]");
+    assert!(!view.read_with(cx, |view, _| view.save_failed()));
+}
+
+#[gpui::test]
+fn after_deleting_an_image_undo_cannot_put_it_back_on_a_row_so_the_server_never_refuses_it_and_pauses_editing(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![seed("Milk")]).with_images(&["Mike"]));
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    focus(&view, cx, "Milk", 0);
+    cx.simulate_keystrokes("cmd-shift-e");
+    click_on(cx, "my-icon-0");
+    settle(cx);
+    cx.simulate_keystrokes("cmd-shift-e");
+    click_on(cx, "icon-choice-0");
+    settle(cx);
+    let sent = server.sent().len();
+
+    cx.simulate_keystrokes("cmd-shift-e");
+    right_click_on(cx, "my-icon-0");
+    click_on(cx, "delete-image");
+    assert_eq!(
+        icon_picker(&view, cx).read_with(cx, |picker, _| picker.warning()),
+        Some("Deleting it cannot be undone.".into())
+    );
+    click_on(cx, "delete-image-confirm");
+    settle(cx);
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("cmd-z");
+    settle(cx);
+
+    assert_eq!(server.sent().len(), sent);
+    assert_eq!(server.tree(), "Milk [icon: \u{1F3E0}]");
+    assert!(!view.read_with(cx, |view, _| view.save_failed()));
 }
 
 #[gpui::test]

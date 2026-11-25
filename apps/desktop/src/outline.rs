@@ -440,6 +440,26 @@ pub fn set_icon(outline: &Outline, key: &str, icon: Option<&str>) -> Option<Chan
 }
 
 #[must_use]
+pub fn icon_uses(outline: &Outline) -> HashMap<String, usize> {
+    let mut uses = HashMap::new();
+    for icon in outline.items.values().filter_map(|item| item.icon.as_ref()) {
+        *uses.entry(icon.clone()).or_insert(0) += 1;
+    }
+    uses
+}
+
+#[must_use]
+pub fn clear_icon(outline: &Outline, icon: &str) -> Outline {
+    let mut next = outline.clone();
+    for item in next.items.values_mut() {
+        if item.icon.as_deref() == Some(icon) {
+            item.icon = None;
+        }
+    }
+    next
+}
+
+#[must_use]
 pub fn split(
     outline: &Outline,
     key: &str,
@@ -1230,6 +1250,42 @@ mod tests {
                 None
             );
             assert_eq!(set_icon(&milk(None), "t1", None), None);
+        }
+    }
+
+    mod deleted_image {
+        use super::*;
+
+        fn pets() -> Outline {
+            outline_of(&[
+                todo(1, "feed Mike", None).iconed("image:a1"),
+                todo(2, "brush Mike", Some(1)).iconed("image:a1"),
+                todo(3, "walk Pochi", None).iconed("image:b2"),
+                todo(4, "milk", None).iconed("\u{1F95B}"),
+                todo(5, "bread", None),
+            ])
+        }
+
+        #[test]
+        fn counts_every_row_using_each_icon_so_the_delete_question_says_how_many_todos_lose_it() {
+            let uses = icon_uses(&pets());
+
+            assert_eq!(uses.get("image:a1"), Some(&2));
+            assert_eq!(uses.get("image:b2"), Some(&1));
+            assert_eq!(uses.get("\u{1F95B}"), Some(&1));
+            assert_eq!(uses.len(), 3);
+        }
+
+        #[test]
+        fn takes_a_deleted_image_off_every_row_that_used_it_and_leaves_every_other_icon_alone() {
+            let cleared = clear_icon(&pets(), "image:a1");
+
+            assert_eq!(cleared.item("t1").icon, None);
+            assert_eq!(cleared.item("t2").icon, None);
+            assert_eq!(cleared.item("t3").icon.as_deref(), Some("image:b2"));
+            assert_eq!(cleared.item("t4").icon.as_deref(), Some("\u{1F95B}"));
+            assert_eq!(cleared.item("t5").icon, None);
+            assert_eq!(cleared.item(ROOT).children, pets().item(ROOT).children);
         }
     }
 
