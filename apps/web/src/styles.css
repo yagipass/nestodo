@@ -535,8 +535,17 @@ body {
   font-size: 0.875rem;
 }
 
-.icon-preview-row img {
+.icon-preview-mark {
+  position: relative;
+  display: flex;
   flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+}
+
+.icon-preview-row img {
   width: 22px;
   height: 22px;
   border-radius: 6px;
@@ -547,27 +556,6 @@ body {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-.icon-preview-row .dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  margin: 0 4px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-
-.icon-preview-row .done-box {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 5px;
-  background: var(--accent);
-  color: var(--on-accent);
 }
 
 .icon-preview-row.done img {
@@ -821,6 +809,7 @@ a {
 }
 
 .row {
+  --row-bg: var(--bg);
   display: flex;
   align-items: stretch;
   min-height: 34px;
@@ -830,7 +819,8 @@ a {
 
 .row:hover,
 .row:focus-within {
-  background: var(--hover-on-bg);
+  --row-bg: var(--hover-on-bg);
+  background: var(--row-bg);
 }
 
 .guide,
@@ -854,6 +844,10 @@ a {
   top: 21px;
 }
 
+.with-icon .marker.stem::before {
+  top: 30px;
+}
+
 .guide.branch::after {
   content: "";
   position: absolute;
@@ -866,11 +860,19 @@ a {
   border-bottom-left-radius: 9px;
 }
 
+.with-icon .guide.branch::after {
+  width: 16px;
+}
+
 .marker {
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding-top: 6px;
+}
+
+.with-icon .marker {
+  padding-top: 4px;
 }
 
 .fold {
@@ -948,38 +950,44 @@ a {
   background: var(--accent-soft-on-bg);
 }
 
-.todo-icon {
-  display: flex;
-  flex: 0 0 26px;
-  align-self: flex-start;
-  align-items: center;
-  justify-content: center;
+.with-icon .bullet {
   width: 26px;
   height: 26px;
-  margin-top: 4px;
-  padding: 0;
-  border: none;
-  border-radius: 7px;
-  background: none;
+}
+
+.bullet .glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 1.0625rem;
   line-height: 1;
-  cursor: pointer;
 }
 
-.todo-icon:hover {
-  background: var(--hover-strong-on-bg);
-}
-
-.todo-icon img {
+.bullet .glyph img {
   width: 22px;
   height: 22px;
   border-radius: 6px;
   object-fit: cover;
 }
 
-.row.done .todo-icon {
+.row.done .bullet .glyph {
   filter: grayscale(1);
   opacity: 0.5;
+}
+
+.done-badge {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: 0 0 0 2px var(--row-bg, var(--bg));
 }
 
 .title {
@@ -1140,7 +1148,8 @@ a {
 }
 
 .row.threaded {
-  background: var(--accent-soft-on-bg);
+  --row-bg: var(--accent-soft-on-bg);
+  background: var(--row-bg);
 }
 
 .thread {
