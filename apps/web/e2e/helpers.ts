@@ -11,6 +11,7 @@ export type Todo = {
   parentId: number | null;
   position: number;
   title: string;
+  icon: string | null;
   completedAt: string | null;
   collapsed: boolean;
   createdAt: string;
@@ -213,7 +214,7 @@ export class Session {
     return (await json<{ todos: Todo[] }>(res)).todos;
   }
 
-  async createTodo(title: string, fields: { comment?: string; parentId?: number | null; index?: number } = {}): Promise<Todo> {
+  async createTodo(title: string, fields: { comment?: string; icon?: string; parentId?: number | null; index?: number } = {}): Promise<Todo> {
     const res = await this.request("/api/v1/todos", { method: "POST", body: { title, ...fields } });
     expect(res.status).toBe(201);
     return (await json<{ todo: Todo }>(res)).todo;

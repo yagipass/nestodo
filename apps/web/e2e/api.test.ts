@@ -256,6 +256,57 @@ describe("todo API for the web, CLI and Android apps", () => {
     expect(await owner.todos()).toEqual([secret]);
   });
 
+  it("keeps an icon apart from the title and removes it with null, so every client draws the same emoji without cutting it out of the title", async () => {
+    const client = await signedInUser();
+    const created = await client.createTodo("groceries", { icon: "🛒" });
+    expect(created).toMatchObject({ title: "groceries", icon: "🛒" });
+
+    const changed = await json<{ todo: Todo }>(await client.patch(created.id, { icon: "🗑️" }));
+    expect(changed.todo).toMatchObject({ title: "groceries", icon: "🗑️" });
+
+    const removed = await json<{ todo: Todo }>(await client.patch(created.id, { icon: null }));
+    expect(removed.todo).toMatchObject({ title: "groceries", icon: null });
+    expect((await client.todos())[0].icon).toBeNull();
+  });
+
+  it("leaves the icon alone when a change does not name it, so renaming or completing a todo from an app that predates icons keeps it", async () => {
+    const client = await signedInUser();
+    const created = await client.createTodo("dentist", { icon: "🦷" });
+
+    await client.patch(created.id, { title: "dentist at 3pm", completed: true, collapsed: true });
+
+    expect((await client.todos())[0]).toMatchObject({ title: "dentist at 3pm", icon: "🦷" });
+  });
+
+  it("refuses an icon that is not one emoji, leaving the todo as it was, so no app is handed a value it cannot draw in the icon slot", async () => {
+    const client = await signedInUser();
+    const created = await client.createTodo("letters", { icon: "📮" });
+
+    for (const icon of ["📮📮", "a", "line:cart:green", ""]) {
+      const res = await client.patch(created.id, { icon });
+      expect(res.status, icon).toBe(400);
+      expect(JSON.stringify(await res.json())).toContain("Icon must be one emoji");
+    }
+    const refused = await client.request("/api/v1/todos", { method: "POST", body: { title: "x", icon: "★" } });
+    expect(refused.status).toBe(400);
+
+    expect(await client.todos()).toEqual([created]);
+  });
+
+  it("brings icons back with an undone delete, so undo restores the rows exactly as they looked", async () => {
+    const client = await signedInUser();
+    const trip = await client.createTodo("trip", { icon: "✈️" });
+    await client.createTodo("hotel", { parentId: trip.id, icon: "🏛️" });
+    await client.createTodo("tickets", { parentId: trip.id });
+    const before = await client.todos();
+
+    await client.request(`/api/v1/todos/${trip.id}?recursive=true`, { method: "DELETE" });
+    expect((await client.restore(trip.id)).status).toBe(200);
+
+    expect(await client.todos()).toEqual(before);
+    expect(before.map((todo) => todo.icon)).toEqual(["✈️", "🏛️", null]);
+  });
+
   it("deletes a todo together with everything under it and closes the gap among its siblings", async () => {
     const client = await signedInUser();
     const doomed = await client.createTodo("doomed");
