@@ -39,7 +39,7 @@ fun Outline.enter(viewport: Viewport, key: Long, cursor: Int, newKey: Long): Edi
 
 fun Outline.deleteBackward(viewport: Viewport, key: Long): Edit? {
     val node = this[key] ?: return null
-    if (node.children.isNotEmpty() || node.comments > 0) return null
+    if (node.children.isNotEmpty() || node.comments > 0 || node.icon != null) return null
     val rows = rows(viewport)
     val at = rows.indexOfFirst { it.key == key }
     if (at < 0) return null
@@ -159,6 +159,11 @@ fun Outline.toggleCompleted(viewport: Viewport, key: Long, cursor: Int): Edit? {
 fun Outline.toggleCollapsed(key: Long, cursor: Int): Edit? {
     val node = this[key]?.takeIf { it.children.isNotEmpty() } ?: return null
     return Edit(listOf(Change.Collapse(key, !node.collapsed)), Caret(key, cursor))
+}
+
+fun Outline.setIcon(key: Long, icon: String?, caret: Caret?): Edit? {
+    this[key]?.takeIf { it.icon != icon } ?: return null
+    return Edit(listOf(Change.SetIcon(key, icon)), caret)
 }
 
 fun Outline.append(parent: Long?, newKey: Long): Edit =

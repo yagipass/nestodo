@@ -11,6 +11,7 @@ data class Todo(
     val completedAt: String? = null,
     val collapsed: Boolean = false,
     val commentCount: Int = 0,
+    val icon: String? = null,
 ) {
     val completed: Boolean
         get() = completedAt != null

@@ -14,6 +14,8 @@ fun todo(
     collapsed: Boolean = false,
 ) = Todo(id, parent, position, title, if (done) "2026-10-23 09:00:00" else null, collapsed)
 
+private const val CART = "\uD83D\uDED2"
+
 fun Outline.render(viewport: Viewport = Viewport()): List<String> =
     rows(viewport).map { "  ".repeat(it.depth) + it.title }
 
@@ -221,6 +223,43 @@ class OutlineTest {
             )
         val undo = logged.undoFor(listOf(Change.Delete(2)))!!
         assertEquals(3, undo.fold(logged.apply(Change.Delete(2)), Outline::apply)[2]!!.comments)
+    }
+
+    @Test
+    fun `undoing a deletion brings the icon back, since the server restores the row with it`() {
+        val marked =
+            outlineOf(listOf(todo(1, "Groceries"), todo(2, "Milk", parent = 1).copy(icon = CART)))
+        val undo = marked.undoFor(listOf(Change.Delete(2)))!!
+        assertEquals(CART, undo.fold(marked.apply(Change.Delete(2)), Outline::apply)[2]!!.icon)
+    }
+
+    @Test
+    fun `undoing an icon change puts back the icon the row had, or none when it had none`() {
+        val marked = outline.apply(Change.SetIcon(4, CART))
+        assertEquals(
+            listOf(Change.SetIcon(4, null)),
+            outline.undoFor(listOf(Change.SetIcon(4, CART))),
+        )
+        assertEquals(
+            listOf(Change.SetIcon(4, CART)),
+            marked.undoFor(listOf(Change.SetIcon(4, "\uD83E\uDDB7"))),
+        )
+        assertEquals(
+            listOf(Change.SetIcon(4, CART)),
+            marked.undoFor(listOf(Change.SetIcon(4, null))),
+        )
+    }
+
+    @Test
+    fun `the server's icon reaches the row as it is, so a row knows it has an icon even of a kind it cannot draw`() {
+        val marked =
+            outlineOf(
+                listOf(
+                    todo(1, "Groceries").copy(icon = CART),
+                    todo(2, "Bank").copy(icon = "line:bank"),
+                )
+            )
+        assertEquals(listOf(CART, "line:bank"), marked.rows(Viewport()).map { it.icon })
     }
 
     @Test

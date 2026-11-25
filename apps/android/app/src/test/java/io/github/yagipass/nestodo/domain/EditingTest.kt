@@ -6,6 +6,10 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+private const val TOOTH = "\uD83E\uDDB7"
+private const val EGG = "\uD83E\uDD5A"
+private const val MILK = "\uD83E\uDD5B"
+
 class EditingTest {
     private val groceries = todo(1, "Groceries")
     private val milk = todo(2, "Milk", parent = 1)
@@ -127,6 +131,58 @@ class EditingTest {
         assertNull(logged.deleteBackward(all, 3))
         val untitled = todo(5, "", parent = 1, position = 2).copy(commentCount = 2)
         assertNull(with(groceries, milk, eggs, untitled, dentist).deleteBackward(all, 5))
+    }
+
+    @Test
+    fun `Enter in the middle of a row keeps the icon on the row that was split, so the new row does not look like a copy`() {
+        val marked = with(groceries, milk, eggs, dentist.copy(icon = TOOTH))
+        val split = marked.enter(all, 4, 4, newKey = -1)!!.changes.fold(marked, Outline::apply)
+        assertEquals(TOOTH, split[4]!!.icon)
+        assertNull(split[-1]!!.icon)
+    }
+
+    @Test
+    fun `Enter at the start of a row leaves its icon on it and the empty row opened above has none, since the text and icon stay together`() {
+        val marked = with(groceries, milk, eggs, dentist.copy(icon = TOOTH))
+        val split = marked.enter(all, 4, 0, newKey = -1)!!.changes.fold(marked, Outline::apply)
+        assertEquals(listOf(null, TOOTH), split.roots.drop(1).map { split[it]!!.icon })
+        assertEquals(listOf("", "Dentist"), split.roots.drop(1).map { split[it]!!.title })
+    }
+
+    @Test
+    fun `Backspace never joins a row with an icon onto the row above, so its icon is never thrown away by a keystroke`() {
+        val marked = with(groceries, milk, eggs.copy(icon = EGG), dentist)
+        assertNull(marked.deleteBackward(all, 3))
+    }
+
+    @Test
+    fun `Backspace never joins a row whose icon is of a kind this version cannot draw, since that icon still matters to newer apps`() {
+        val typed = with(groceries, milk, eggs.copy(icon = "line:cart:green"), dentist)
+        assertNull(typed.deleteBackward(all, 3))
+    }
+
+    @Test
+    fun `Backspace in an empty row with an icon leaves it, so a row holding only an icon is never deleted by a keystroke`() {
+        val iconOnly = todo(5, "", parent = 1, position = 2).copy(icon = EGG)
+        assertNull(with(groceries, milk, eggs, iconOnly, dentist).deleteBackward(all, 5))
+    }
+
+    @Test
+    fun `Backspace joining a row onto a row with an icon keeps that icon, because only the lower row goes away`() {
+        val marked = with(groceries, milk.copy(icon = MILK), eggs, dentist)
+        val joined = marked.deleteBackward(all, 3)!!.changes.fold(marked, Outline::apply)
+        assertEquals("MilkEggs", joined[2]!!.title)
+        assertEquals(MILK, joined[2]!!.icon)
+    }
+
+    @Test
+    fun `choosing the icon a row already has changes nothing, so it adds no Undo step and sends nothing`() {
+        val marked = with(groceries, milk, eggs, dentist.copy(icon = TOOTH))
+        assertNull(marked.setIcon(4, TOOTH, Caret(4, 7)))
+        assertEquals(
+            Edit(listOf(Change.SetIcon(4, null)), Caret(4, 7)),
+            marked.setIcon(4, null, Caret(4, 7)),
+        )
     }
 
     @Test

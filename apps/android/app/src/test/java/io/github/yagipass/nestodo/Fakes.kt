@@ -109,6 +109,12 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
         return find(id)
     }
 
+    override suspend fun setIcon(id: Long, icon: String?): Todo {
+        answer(if (icon == null) "PATCH $id icon null" else "PATCH $id icon \"$icon\"")
+        todos = todos.map { if (it.id == id) it.copy(icon = icon) else it }
+        return find(id)
+    }
+
     override suspend fun move(id: Long, parentId: Long?, index: Int): Todo {
         answer("PATCH $id under $parentId at $index")
         return find(id)

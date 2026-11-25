@@ -11,6 +11,7 @@ data class Node(
     val collapsed: Boolean = false,
     val children: List<Long> = emptyList(),
     val comments: Int = 0,
+    val icon: String? = null,
 )
 
 sealed interface Change {
@@ -28,6 +29,8 @@ sealed interface Change {
     data class Complete(override val key: Long, val completed: Boolean) : Change
 
     data class Collapse(override val key: Long, val collapsed: Boolean) : Change
+
+    data class SetIcon(override val key: Long, val icon: String?) : Change
 
     data class Move(override val key: Long, val parent: Long?, val index: Int) : Change
 
@@ -52,6 +55,7 @@ data class OutlineRow(
     val hasChildren: Boolean,
     val collapsed: Boolean,
     val comments: Int = 0,
+    val icon: String? = null,
 )
 
 data class Guide(val through: List<Boolean>, val stem: Boolean)
@@ -111,6 +115,7 @@ data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long
                         hasChildren = node.children.isNotEmpty(),
                         collapsed = node.collapsed,
                         comments = node.comments,
+                        icon = node.icon,
                     )
                 )
                 if (!node.collapsed) walk(key, depth + 1, dimmed || node.completed)
@@ -152,6 +157,7 @@ data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long
                 if (change.completed) complete(change.key)
                 else update(change.key) { it.copy(completed = false) }.reopenAbove(change.key)
             is Change.Collapse -> update(change.key) { it.copy(collapsed = change.collapsed) }
+            is Change.SetIcon -> update(change.key) { it.copy(icon = change.icon) }
             is Change.Move -> {
                 val node = nodes.getValue(change.key)
                 val moved = detach(node).attach(node.copy(parent = change.parent), change.index)
@@ -230,6 +236,7 @@ data class Outline(val nodes: Map<Long, Node> = emptyMap(), val roots: List<Long
             is Change.Rename -> node?.let { listOf(Change.Rename(it.key, it.title)) }
             is Change.Complete -> node?.let { emptyList() }
             is Change.Collapse -> node?.let { listOf(Change.Collapse(it.key, it.collapsed)) }
+            is Change.SetIcon -> node?.let { listOf(Change.SetIcon(it.key, it.icon)) }
             is Change.Move -> node?.let { listOf(Change.Move(it.key, it.parent, indexOf(it.key))) }
             is Change.Delete ->
                 node?.let {
@@ -294,6 +301,7 @@ fun outlineOf(todos: List<Todo>, keyOf: (Long) -> Long = { it }): Outline {
                 collapsed = todo.collapsed,
                 children = childrenOf(todo.id),
                 comments = todo.commentCount,
+                icon = todo.icon,
             )
     }
     return Outline(nodes, childrenOf(null))

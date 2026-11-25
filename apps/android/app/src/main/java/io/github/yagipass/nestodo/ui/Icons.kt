@@ -73,6 +73,12 @@ internal object NestodoIcons {
             "Comment",
             "M8 17.5h8.5A3.5 3.5 0 0 0 20 14V8a3.5 3.5 0 0 0-3.5-3.5h-9A3.5 3.5 0 0 0 4 8v12.5z",
         )
+    val Smiley =
+        line(
+            "Smiley",
+            "M19 13a8 8 0 1 1-8-8M8 15.5c.8 1.2 1.8 1.8 3 1.8s2.2-.6 3-1.8M18.5 2.5v6M15.5 5.5h6",
+            dots = circle(8.5f, 11f, 0.75f) + circle(13.5f, 11f, 0.75f),
+        )
     val Edit = line("Edit", "M14.5 5.5l4 4L9 19H5v-4z")
     val Reopen = line("Reopen", "M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4v4h4", width = 3f)
     val Bot =

@@ -34,6 +34,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
+private const val TOOTH = "\uD83E\uDDB7"
+private const val MILK = "\uD83E\uDD5B"
+private const val EGG = "\uD83E\uDD5A"
+private const val CALENDAR = "\uD83D\uDCC5"
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class TodoViewModelTest {
     private val dispatcher = UnconfinedTestDispatcher()
@@ -69,6 +74,8 @@ class TodoViewModelTest {
     private fun TodoViewModel.caretKey(): Long = state.value.caret!!.key
 
     private fun TodoViewModel.comments(): CommentsState = state.value.comments!!
+
+    private fun TodoViewModel.icon(key: Long): String? = state.value.outline[key]!!.icon
 
     @Before
     fun setUp() {
@@ -626,6 +633,222 @@ class TodoViewModelTest {
         )
         assertEquals(original, viewModel.outline())
         assertEquals(Caret(1, 3), viewModel.state.value.caret)
+    }
+
+    @Test
+    fun `choosing an icon shows it at once, sends only the icon and keeps it on the phone`() {
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+
+        assertTrue(viewModel.setIcon(TOOTH))
+
+        assertEquals(listOf("PATCH 4 icon \"$TOOTH\""), repository.calls)
+        assertEquals(TOOTH, viewModel.icon(4))
+        assertEquals(TOOTH, cache.outline!![4]!!.icon)
+        assertNull(viewModel.state.value.choosingIcon)
+    }
+
+    @Test
+    fun `the icon picker opened from the row being typed in puts the cursor back where it was after a pick, a removal or closing it, so typing goes on`() {
+        val viewModel = viewModel()
+        val returned = mutableListOf<Caret?>()
+        val actions =
+            listOf(
+                { viewModel.setIcon(TOOTH) },
+                { viewModel.setIcon(null) },
+                viewModel::closeIconPicker,
+            )
+        for (action in actions) {
+            viewModel.select(4, 3)
+            viewModel.openIconPicker(4)
+            viewModel.blur(4)
+            action()
+            returned += viewModel.state.value.caret
+            viewModel.state.value.caret?.let(viewModel::caretShown)
+        }
+
+        assertEquals(List(3) { Caret(4, 3) }, returned)
+        assertEquals(listOf("PATCH 4 icon \"$TOOTH\"", "PATCH 4 icon null"), repository.calls)
+    }
+
+    @Test
+    fun `the icon picker opened while just browsing leaves every title unfocused after a pick, a removal or closing it, so the keyboard does not pop up`() {
+        val viewModel = viewModel()
+        val focus = mutableListOf<Pair<Caret?, Long?>>()
+        val actions =
+            listOf(
+                { viewModel.setIcon(TOOTH) },
+                { viewModel.setIcon(null) },
+                viewModel::closeIconPicker,
+            )
+        for (action in actions) {
+            viewModel.openIconPicker(4)
+            action()
+            focus += viewModel.state.value.caret to viewModel.state.value.editing
+        }
+
+        assertEquals(List(3) { null to null }, focus)
+        assertEquals(listOf("PATCH 4 icon \"$TOOTH\"", "PATCH 4 icon null"), repository.calls)
+    }
+
+    @Test
+    fun `text typed before choosing an icon is saved first, so the server applies the edits in the order made`() {
+        val viewModel = viewModel()
+        viewModel.select(4, 7)
+        viewModel.setTitle(4, "Dentist 9am")
+        viewModel.openIconPicker(4)
+
+        viewModel.setIcon(TOOTH)
+
+        assertEquals(
+            listOf("PATCH 4 title \"Dentist 9am\"", "PATCH 4 icon \"$TOOTH\""),
+            repository.calls,
+        )
+    }
+
+    @Test
+    fun `undoing the first icon of a row removes it on the server too, so the row is left as it was`() {
+        val viewModel = viewModel()
+        viewModel.openIconPicker(2)
+        viewModel.setIcon(MILK)
+
+        viewModel.undo()
+
+        assertEquals(listOf("PATCH 2 icon \"$MILK\"", "PATCH 2 icon null"), repository.calls)
+        assertNull(viewModel.icon(2))
+        assertFalse(viewModel.state.value.canUndo)
+    }
+
+    @Test
+    fun `changing and removing an icon are one Undo step each, and each Undo puts back the icon from before it`() {
+        repository.todos = listOf(groceries, milk, eggs, dentist.copy(icon = TOOTH))
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+        viewModel.setIcon(CALENDAR)
+        viewModel.openIconPicker(4)
+        viewModel.setIcon(null)
+
+        viewModel.undo()
+        assertEquals(CALENDAR, viewModel.icon(4))
+        viewModel.undo()
+        assertEquals(TOOTH, viewModel.icon(4))
+
+        assertFalse(viewModel.state.value.canUndo)
+        assertEquals(
+            listOf(
+                "PATCH 4 icon \"$CALENDAR\"",
+                "PATCH 4 icon null",
+                "PATCH 4 icon \"$CALENDAR\"",
+                "PATCH 4 icon \"$TOOTH\"",
+            ),
+            repository.calls,
+        )
+    }
+
+    @Test
+    fun `choosing the icon the row already has sends nothing and adds no Undo step`() {
+        repository.todos = listOf(groceries, milk, eggs, dentist.copy(icon = TOOTH))
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+
+        assertTrue(viewModel.setIcon(TOOTH))
+
+        assertEquals(emptyList<String>(), repository.calls)
+        assertFalse(viewModel.state.value.canUndo)
+        assertNull(viewModel.state.value.choosingIcon)
+    }
+
+    @Test
+    fun `an Other entry that is not one emoji is refused without sending anything, and the picker stays open to correct it`() {
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+
+        assertFalse(viewModel.setIcon("tooth"))
+        assertFalse(viewModel.setIcon("$TOOTH$TOOTH"))
+        assertFalse(viewModel.setIcon(" "))
+
+        assertEquals(emptyList<String>(), repository.calls)
+        assertEquals(ChoosingIcon(4, null), viewModel.state.value.choosingIcon)
+    }
+
+    @Test
+    fun `an Other entry pasted with spaces around it is trimmed, so an emoji copied with a trailing space still applies`() {
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+
+        assertTrue(viewModel.setIcon(" $TOOTH\n"))
+
+        assertEquals(listOf("PATCH 4 icon \"$TOOTH\""), repository.calls)
+    }
+
+    @Test
+    fun `Backspace at the start of a row with an icon, empty or not, leaves the outline alone so the keyboard handles the key`() {
+        repository.todos =
+            listOf(groceries, milk, eggs.copy(icon = EGG), Todo(5, 1, 2, "", icon = EGG), dentist)
+        val viewModel = viewModel()
+
+        assertFalse(viewModel.deleteBackward(3))
+        assertFalse(viewModel.deleteBackward(5))
+
+        assertEquals(emptyList<String>(), repository.calls)
+        assertEquals(listOf("Groceries", "  Milk", "  Eggs", "  ", "Dentist"), viewModel.outline())
+    }
+
+    @Test
+    fun `undoing the delete of a row with an icon brings the icon back with it, as the server's restore does`() {
+        repository.todos = listOf(groceries, milk, eggs, dentist.copy(icon = TOOTH))
+        val viewModel = viewModel()
+        viewModel.select(4, 3)
+        viewModel.startDelete()
+        viewModel.confirmDelete()
+
+        viewModel.undo()
+
+        assertEquals(listOf("DELETE 4", "RESTORE 4 under null at 1"), repository.calls)
+        assertEquals(TOOTH, viewModel.icon(4))
+    }
+
+    @Test
+    fun `an icon the server refuses is reported and the outline is reloaded, so the row never shows an icon that was not saved`() {
+        val viewModel = viewModel()
+        repository.failure = ApiException.Invalid(mapOf("icon" to "Enter one emoji"))
+        viewModel.openIconPicker(4)
+
+        viewModel.setIcon(TOOTH)
+
+        assertEquals(listOf("PATCH 4 icon \"$TOOTH\"", "GET"), repository.calls)
+        assertNull(viewModel.icon(4))
+        assertNotNull(viewModel.state.value.notice)
+    }
+
+    @Test
+    fun `the icon picker closes when its todo is gone after a reload, so it never sets an icon on a todo that no longer exists`() {
+        val viewModel = viewModel()
+        viewModel.openIconPicker(4)
+        repository.todos = listOf(groceries, milk, eggs)
+
+        viewModel.onForeground()
+
+        assertNull(viewModel.state.value.choosingIcon)
+    }
+
+    @Test
+    fun `an icon changed elsewhere ends what Undo can reverse on returning to the app, so Undo never overwrites it`() {
+        val viewModel = viewModel()
+        viewModel.select(4, 0)
+        viewModel.indent()
+        repository.todos =
+            listOf(
+                groceries,
+                milk.copy(icon = MILK),
+                eggs,
+                dentist.copy(parentId = 1, position = 2),
+            )
+
+        viewModel.onForeground()
+
+        assertFalse(viewModel.state.value.canUndo)
+        assertEquals(MILK, viewModel.icon(2))
     }
 
     @Test
