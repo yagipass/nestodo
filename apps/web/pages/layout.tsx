@@ -16,6 +16,7 @@ const SHORTCUTS: { name: string; shortcuts: Shortcut[] }[] = [
       ["Complete / reopen", "Ctrl/⌘ Enter"],
       ["Join with item above", "⌫", "at start"],
       ["Delete with children", "Ctrl/⌘ ⇧ ⌫"],
+      ["Set an icon", "Ctrl/⌘ ⇧ E"],
       ["Undo", "Ctrl/⌘ Z"],
     ],
   },

@@ -208,6 +208,7 @@ body {
 
 .shortcuts,
 .move-to,
+.icon-picker,
 .confirm {
   width: min(640px, 100% - 32px);
   max-height: 80vh;
@@ -222,6 +223,7 @@ body {
 
 .shortcuts::backdrop,
 .move-to::backdrop,
+.icon-picker::backdrop,
 .confirm::backdrop {
   background: light-dark(rgb(30 26 43 / 34%), rgb(8 6 16 / 55%));
 }
@@ -383,6 +385,70 @@ body {
 
 .move-to li[aria-selected="true"] {
   background: var(--accent-soft);
+}
+
+.icon-picker {
+  width: min(352px, 100% - 32px);
+}
+
+.icon-picker[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.icon-choices {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.icon-choices button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.icon-choices button:hover {
+  background: var(--hover);
+}
+
+.icon-choices button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.icon-other {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.icon-other[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.icon-other-error {
+  margin: -4px 0 0;
+  color: var(--danger);
+  font-size: 0.8125rem;
+}
+
+.icon-remove {
+  align-self: flex-start;
 }
 
 .move-to-path {
@@ -740,6 +806,33 @@ a {
   background: var(--accent-soft-on-bg);
 }
 
+.todo-icon {
+  display: flex;
+  flex: 0 0 26px;
+  align-self: flex-start;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  font-size: 1.0625rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.todo-icon:hover {
+  background: var(--hover-strong-on-bg);
+}
+
+.row.done .todo-icon {
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+
 .title {
   display: flex;
   flex: 1 1 auto;
@@ -834,6 +927,7 @@ a {
   background: var(--match-current);
 }
 
+.set-icon,
 .comment-button,
 .check {
   display: flex;
@@ -861,6 +955,9 @@ a {
   font-weight: 600;
 }
 
+.row:hover .set-icon,
+.row:focus-within .set-icon,
+.set-icon:focus-visible,
 .comment-button.has-comments,
 .row:hover .comment-button,
 .row:focus-within .comment-button,
@@ -875,6 +972,7 @@ a {
   color: var(--accent);
 }
 
+.set-icon:hover,
 .comment-button:hover,
 .check:hover {
   background: var(--hover-strong-on-bg);
@@ -1349,6 +1447,7 @@ kbd {
 
 @media (hover: none) {
   .fold,
+  .set-icon,
   .comment-button,
   .check,
   .thread-actions {

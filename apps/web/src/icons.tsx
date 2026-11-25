@@ -43,6 +43,14 @@ const SHAPES = {
   add: <path d="M12 5.5v13M5.5 12h13" />,
   close: <path d="M7 7l10 10M17 7 7 17" />,
   tick: <path d="M5 12l5 5 9-10" />,
+  emoji: (
+    <>
+      <circle cx="11" cy="12" r="7.5" />
+      <path d="M8.3 14c.7 1 1.6 1.5 2.7 1.5s2-.5 2.7-1.5M19.5 3v4M17.5 5h4" />
+      <circle cx="8.8" cy="10" r=".7" fill="currentColor" />
+      <circle cx="13.2" cy="10" r=".7" fill="currentColor" />
+    </>
+  ),
   comment: <path d="M8 17.5h8.5A3.5 3.5 0 0 0 20 14V8a3.5 3.5 0 0 0-3.5-3.5h-9A3.5 3.5 0 0 0 4 8v12.5z" />,
   edit: <path d="M14.5 5.5l4 4L9 19H5v-4z" />,
   trash: <path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12" />,
