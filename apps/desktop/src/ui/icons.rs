@@ -16,6 +16,7 @@ pub enum Icon {
     Up,
     Down,
     Comment,
+    AddEmoji,
     Done,
     Link,
     Add,
@@ -41,6 +42,7 @@ impl Icon {
             Icon::Up => "icons/up.svg",
             Icon::Down => "icons/down.svg",
             Icon::Comment => "icons/comment.svg",
+            Icon::AddEmoji => "icons/add-emoji.svg",
             Icon::Done => "icons/done.svg",
             Icon::Link => "icons/link.svg",
             Icon::Add => "icons/add.svg",
@@ -93,6 +95,10 @@ fn svg_for(path: &str) -> Option<String> {
         "icons/comment.svg" => line(
             "2",
             r#"<path d="M8 17.5h8.5A3.5 3.5 0 0 0 20 14V8a3.5 3.5 0 0 0-3.5-3.5h-9A3.5 3.5 0 0 0 4 8v12.5z"/>"#,
+        ),
+        "icons/add-emoji.svg" => line(
+            "2",
+            r#"<path d="M11 5a8 8 0 1 0 8 8"/><path d="M8 15.5c.8 1 1.8 1.5 3 1.5s2.2-.5 3-1.5"/><circle cx="8.5" cy="11" r=".6" fill="black"/><circle cx="13.5" cy="11" r=".6" fill="black"/><path d="M18.5 2.5v6M15.5 5.5h6"/>"#,
         ),
         "icons/done.svg" => line("2", r#"<rect x="4" y="4" width="16" height="16" rx="5"/>"#),
         "icons/link.svg" => line("2.6", r#"<path d="M8 16 16 8M10 8h6v6"/>"#),

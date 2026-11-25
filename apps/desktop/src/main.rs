@@ -23,6 +23,7 @@ use ui::widgets::MIN_WINDOW_WIDTH;
 fn bind_keys(cx: &mut App) {
     cx.bind_keys(ui::text_field::bindings());
     cx.bind_keys(ui::move_picker::bindings());
+    cx.bind_keys(ui::icon_picker::bindings());
     cx.bind_keys(ui::outline_view::bindings());
     cx.bind_keys(ui::settings_view::bindings());
     cx.bind_keys(ui::root::bindings());

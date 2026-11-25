@@ -871,6 +871,33 @@ mod tests {
     }
 
     #[test]
+    fn reads_each_todos_icon_and_takes_a_missing_one_as_none_so_a_server_from_before_icons_still_loads()
+     {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        server
+            .mock("GET", "/api/v1/todos")
+            .with_body(
+                r#"{"todos":[
+                    {"id":1,"parentId":null,"position":0,"title":"Groceries","completedAt":null,"icon":"\ud83d\uded2"},
+                    {"id":2,"parentId":null,"position":1,"title":"Trip","completedAt":null,"icon":null},
+                    {"id":3,"parentId":null,"position":2,"title":"Home","completedAt":null}
+                ]}"#,
+            )
+            .create();
+        let client = signed_in(&server, &store).unwrap();
+
+        let icons: Vec<Option<String>> = client
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|todo| todo.icon)
+            .collect();
+
+        assert_eq!(icons, [Some("\u{1F6D2}".to_owned()), None, None]);
+    }
+
+    #[test]
     fn reads_a_todos_timeline_oldest_first_so_the_log_reads_top_down_like_the_web_app() {
         let mut server = Server::new();
         let store = store_with(&[(Kind::App, &token("app", LATER))]);

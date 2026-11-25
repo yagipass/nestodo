@@ -2,6 +2,7 @@ pub mod access;
 pub mod api;
 pub mod error;
 pub mod http;
+pub mod icon;
 pub mod markdown;
 pub mod outline;
 pub mod prefs;

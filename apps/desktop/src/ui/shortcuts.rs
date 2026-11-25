@@ -12,6 +12,7 @@ const SHORTCUTS: &[(&str, &[Shortcut])] = &[
         &[
             ("New item", "Enter", None),
             ("Complete / reopen", "Ctrl/\u{2318} Enter", None),
+            ("Set icon", "Ctrl/\u{2318} \u{21e7} E", None),
             ("Join with item above", "\u{232b}", Some("at start")),
             (
                 "Delete with children",
