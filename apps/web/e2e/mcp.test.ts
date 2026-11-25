@@ -152,6 +152,31 @@ describe("MCP endpoint that Claude reaches through its own Access app", () => {
     expect((await value<{ todos: Todo[] }>(claude, "list_todos")).todos[0].commentCount).toBe(1);
   });
 
+  it("lets Claude set, show and remove an icon, so it can mark a todo the way the member would in the app", async () => {
+    const { web, claude } = await member();
+    const { todo: added } = await value<{ todo: Todo }>(claude, "add_todo", { title: "buy milk", icon: "🥛" });
+    expect((await web.todos())[0]).toMatchObject({ title: "buy milk", icon: "🥛" });
+
+    await value(claude, "update_todo", { id: added.id, icon: "🛒" });
+    expect((await value<{ todos: Todo[] }>(claude, "list_todos")).todos[0].icon).toBe("🛒");
+
+    await value(claude, "update_todo", { id: added.id, icon: null });
+    expect((await value<{ todo: Todo }>(claude, "get_todo", { id: added.id })).todo.icon).toBeNull();
+  });
+
+  it("tells Claude to put an emoji in the icon rather than the title, and refuses anything but one emoji", async () => {
+    const { web, claude } = await member();
+    const { tools } = await claude.listTools();
+    expect(propertiesOf(tools, "add_todo")?.icon?.description).toContain("rather than putting it in the title");
+    expect(propertiesOf(tools, "update_todo")?.icon?.description).toContain("null to remove it");
+
+    const { todo } = await value<{ todo: Todo }>(claude, "add_todo", { title: "pay rent" });
+    const refused = await call(claude, "update_todo", { id: todo.id, icon: "money" });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain("Icon must be one emoji");
+    expect((await web.todos())[0].icon).toBeNull();
+  });
+
   it("tells Claude that comments are a work log and that update_todo no longer edits text under the title", async () => {
     const { claude } = await member();
     const { tools } = await claude.listTools();

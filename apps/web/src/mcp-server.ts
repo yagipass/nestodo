@@ -16,6 +16,8 @@ const STATS_APP_URI = "ui://nestodo/stats.html";
 
 const COMMENT_FORMAT = "shown as Markdown with every line break kept. Tables, images and HTML are shown as written, so use a list in place of a table";
 
+const ICON_FORMAT = "One emoji shown before the title, such as 🛒, rather than putting it in the title";
+
 const id = z.number().int().positive().describe("The todo's id, as list_todos shows it");
 
 function withUtcTimes<T extends { completedAt: string | null; createdAt: string }>(todo: T): T {
@@ -46,7 +48,7 @@ export function nestodoMcpServer(userId: string) {
     "list_todos",
     {
       title: "List todos",
-      description: `List every todo of the signed-in user in outline order. parentId is the todo it is nested under, commentCount is how many comments the member's work log on it has, which get_timeline shows, createdAt is when it was added, and completedAt is when it was completed, or null while the todo is open. Both times are in UTC as ISO 8601. Completed todos are removed from this list ${KEEP_COMPLETED_DAYS} days after they were completed, or later while a todo under them is kept, so this is not a full history of finished work. get_stats still counts them on the days they were completed.`,
+      description: `List every todo of the signed-in user in outline order. parentId is the todo it is nested under, icon is the emoji shown before its title or null, commentCount is how many comments the member's work log on it has, which get_timeline shows, createdAt is when it was added, and completedAt is when it was completed, or null while the todo is open. Both times are in UTC as ISO 8601. Completed todos are removed from this list ${KEEP_COMPLETED_DAYS} days after they were completed, or later while a todo under them is kept, so this is not a full history of finished work. get_stats still counts them on the days they were completed.`,
       annotations: { readOnlyHint: true },
     },
     async () => reply({ todos: (await listTodos(userId)).map(withUtcTimes) }),
@@ -74,6 +76,7 @@ export function nestodoMcpServer(userId: string) {
         "Add a todo, at the top level or under another todo, optionally with a first comment in its work log. Adding it under a completed todo reopens that todo and the completed todos above it, since a completed todo never has open todos under it.",
       inputSchema: createTodoBody.extend({
         title: createTodoBody.shape.title.describe(`Title, up to ${MAX_TITLE_LENGTH} characters`),
+        icon: createTodoBody.shape.icon.describe(ICON_FORMAT),
         comment: createTodoBody.shape.comment.describe(
           `Optional first comment in the todo's work log, for details that do not fit in the title, such as links, up to ${MAX_COMMENT_LENGTH} characters, ${COMMENT_FORMAT}`,
         ),
@@ -92,10 +95,11 @@ export function nestodoMcpServer(userId: string) {
     {
       title: "Edit a todo",
       description:
-        "Rename, complete, reopen, collapse or move a todo. Only the fields given change. To write down progress, use add_comment instead. A completed todo never has open todos under it, so completing a todo also completes every open todo under it and returns their ids as completedUnder, and reopening a todo, or moving an open todo into a completed todo, reopens the completed todos above it.",
+        "Rename, complete, reopen, collapse or move a todo, or set its icon. Only the fields given change. To write down progress, use add_comment instead. A completed todo never has open todos under it, so completing a todo also completes every open todo under it and returns their ids as completedUnder, and reopening a todo, or moving an open todo into a completed todo, reopens the completed todos above it.",
       inputSchema: patchTodoBody.extend({
         id,
         title: patchTodoBody.shape.title.describe("New title"),
+        icon: patchTodoBody.shape.icon.describe(`${ICON_FORMAT}, or null to remove it`),
         completed: patchTodoBody.shape.completed.describe(
           "true to complete it and every open todo under it, false to reopen it and the completed todos above it",
         ),
