@@ -17,6 +17,7 @@ import {
   remove,
   searchHits,
   setCollapsed,
+  setIcon,
   split,
   subtree,
   toggleDone,
@@ -27,10 +28,11 @@ import {
 } from "./outline";
 import { MAX_DEPTH, MAX_TITLE_LENGTH } from "./todos";
 
-function todo(id: number, title: string, parentId: number | null = null, extra: { done?: boolean; collapsed?: boolean; comments?: number } = {}) {
+function todo(id: number, title: string, parentId: number | null = null, extra: { done?: boolean; collapsed?: boolean; comments?: number; icon?: string } = {}) {
   return {
     id,
     title,
+    icon: extra.icon ?? null,
     commentCount: extra.comments ?? 0,
     parentId,
     completedAt: extra.done ? "2026-10-23 09:00:00" : null,
@@ -100,6 +102,12 @@ describe("fromTodos", () => {
     expect(outline[ROOT].children).toEqual(["new1"]);
     expect(outline.new1.children).toEqual(["t2"]);
   });
+
+  it("reads a todo from a server that predates icons as having none, so the page still loads during a deploy", () => {
+    const { icon, ...older } = todo(1, "groceries", null, { icon: "🛒" });
+    expect(fromTodos([older]).t1.icon).toBeNull();
+    expect(fromTodos([{ ...older, icon }]).t1.icon).toBe("🛒");
+  });
 });
 
 describe("split", () => {
@@ -147,6 +155,29 @@ describe("split", () => {
     const outline = fromTodos([todo(1, "book hotel near the station", null, { comments: 2 })]);
     const change = split(outline, "t1", "book hotel".length, "n1", shown(outline));
     expect([change.outline.t1.comments, change.outline.n1.comments]).toEqual([2, 0]);
+  });
+
+  it("leaves the icon on the row being split, so the new row does not look like a copy of it", () => {
+    const outline = fromTodos([todo(1, "groceries milk", null, { icon: "🛒" })]);
+    const middle = split(outline, "t1", "groceries".length, "n1", shown(outline));
+    expect([middle.outline.t1.icon, middle.outline.n1.icon]).toEqual(["🛒", null]);
+    const start = split(outline, "t1", 0, "n1", shown(outline));
+    expect([start.outline.t1.icon, start.outline.n1.icon]).toEqual(["🛒", null]);
+  });
+});
+
+describe("setIcon", () => {
+  it("changes only the icon in one request, so the title being typed is never sent along with it", () => {
+    const outline = fromTodos([todo(1, "groceries")]);
+    const change = setIcon(outline, "t1", "🛒")!;
+    expect(change.outline.t1).toMatchObject({ title: "groceries", icon: "🛒" });
+    expect(change.ops).toEqual([{ type: "update", key: "t1", fields: { icon: "🛒" } }]);
+    expect(setIcon(change.outline, "t1", null)!.ops).toEqual([{ type: "update", key: "t1", fields: { icon: null } }]);
+  });
+
+  it("does nothing when the same icon is picked again, so it adds no undo step and no request", () => {
+    const outline = fromTodos([todo(1, "groceries", null, { icon: "🛒" })]);
+    expect(setIcon(outline, "t1", "🛒")).toBeNull();
   });
 });
 
@@ -315,6 +346,21 @@ describe("mergeIntoPrevious", () => {
     expect(mergeIntoPrevious(outline, rowsOf(outline), "t2")).toBeNull();
   });
 
+  it("refuses when the row has an icon, so Backspace never throws away an icon the member chose", () => {
+    const outline = fromTodos([todo(1, "buy "), todo(2, "milk", null, { icon: "🥛" })]);
+    expect(mergeIntoPrevious(outline, rowsOf(outline), "t2")).toBeNull();
+  });
+
+  it("refuses for an icon kind this app cannot draw yet, so an older app never drops what a newer one set", () => {
+    const outline = fromTodos([todo(1, "buy "), todo(2, "milk", null, { icon: "line:cart:green" })]);
+    expect(mergeIntoPrevious(outline, rowsOf(outline), "t2")).toBeNull();
+  });
+
+  it("keeps the icon of the row above when joining onto it, since that row stays", () => {
+    const outline = fromTodos([todo(1, "buy ", null, { icon: "🛒" }), todo(2, "milk")]);
+    expect(mergeIntoPrevious(outline, rowsOf(outline), "t2")!.outline.t1.icon).toBe("🛒");
+  });
+
   it("refuses when the joined title would be longer than the server accepts", () => {
     const outline = fromTodos([todo(1, "x".repeat(MAX_TITLE_LENGTH - 50)), todo(2, "y".repeat(51))]);
     expect(mergeIntoPrevious(outline, rowsOf(outline), "t2")).toBeNull();
@@ -372,6 +418,7 @@ describe("completing", () => {
 describe("undoFor", () => {
   const folded = fromTodos([todo(1, "trip"), todo(2, "packing", null, { collapsed: true }), todo(3, "socks", 2), todo(4, "passport")]);
   const pair = fromTodos([todo(1, "buy "), todo(2, "milk")]);
+  const marked = fromTodos([todo(1, "groceries", null, { icon: "🛒" }), todo(2, "dentist")]);
   const edits: [string, Outline, Change][] = [
     ["split", sample, split(sample, "t4", 3, "n1", shown(sample))],
     ["split into children", sample, split(sample, "t2", "release".length, "n1", shown(sample))],
@@ -393,6 +440,10 @@ describe("undoFor", () => {
     ["indent into a completed row", trip, indent(trip, "t4", shown(trip))!],
     ["move into a completed branch", trip, moveTo(trip, "t4", "t2")],
     ["delete inside a completed subtree", trip, remove(trip, "t3")],
+    ["set an icon", marked, setIcon(marked, "t2", "🦷")!],
+    ["change an icon", marked, setIcon(marked, "t1", "🥛")!],
+    ["remove an icon", marked, setIcon(marked, "t1", null)!],
+    ["delete a row with an icon", marked, remove(marked, "t1")],
   ];
 
   it("replays each edit's changes into the outline the editor shows, so undo starts from what is on screen", () => {
@@ -405,6 +456,12 @@ describe("undoFor", () => {
     for (const [name, before, change] of edits) {
       expect(applyOps(change.outline, undoFor(before, change.ops)), name).toEqual(before);
     }
+  });
+
+  it("puts back the icon a row had before, including none, in one request", () => {
+    const outline = fromTodos([todo(1, "groceries", null, { icon: "🛒" }), todo(2, "dentist")]);
+    expect(undoFor(outline, setIcon(outline, "t1", "🥛")!.ops)).toEqual([{ type: "update", key: "t1", fields: { icon: "🛒" } }]);
+    expect(undoFor(outline, setIcon(outline, "t2", "🦷")!.ops)).toEqual([{ type: "update", key: "t2", fields: { icon: null } }]);
   });
 
   it("reopens exactly the todos a completion took along, leaving the ones completed before it as they were", () => {
