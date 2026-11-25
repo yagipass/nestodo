@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -120,6 +119,13 @@ internal class IconImages(
         if (image !in decoded) decoded[image] = decodePicture(image, ICON_IMAGE_SIZE)
         return decoded[image]
     }
+
+    fun draws(icon: String?): Boolean =
+        when (val shown = shownIcon(icon, list)) {
+            null -> false
+            is ShownIcon.Emoji -> true
+            is ShownIcon.Image -> picture(shown.icon.id) != null
+        }
 
     fun with(icon: ImageIcon, image: ByteArray): IconImages =
         IconImages(list + icon, bytes + (icon.id to image), decoded)
@@ -560,8 +566,7 @@ private fun PreviewRow(node: Node, images: IconImages, completed: Boolean) {
         Modifier.fillMaxWidth().clearAndSetSemantics {},
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Bullet(row, enabled = false) {}
-        TodoIcon(row.icon, muted = completed, images = images, modifier = Modifier.width(30.dp))
+        Bullet(row, enabled = false, images = images) {}
         Text(
             remember(node.title, colors.primary) { shownText(node.title, colors.primary) },
             style =

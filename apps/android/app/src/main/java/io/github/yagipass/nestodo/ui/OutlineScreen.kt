@@ -902,6 +902,7 @@ private fun OutlineItem(
         )
 
     val guideColor = LocalGuideColor.current
+    val drawsIcon = images.draws(row.icon)
     Row(
         Modifier.fillMaxWidth()
             .heightIn(min = RowHeight)
@@ -909,29 +910,17 @@ private fun OutlineItem(
                 if (focused) colors.secondaryContainer else Color.Transparent,
                 RoundedCornerShape(12.dp),
             )
-            .drawBehind { drawGuide(guide, row.depth, guideColor) }
+            .drawBehind { drawGuide(guide, row.depth, guideColor, icon = drawsIcon) }
     ) {
         Spacer(Modifier.width(24.dp * row.depth))
-        Bullet(row, enabled = !readOnly) { viewModel.toggleCollapsed(key) }
-        TodoIcon(
-            row.icon,
-            muted = row.completed,
+        Bullet(
+            row,
+            enabled = !readOnly,
             images = images,
-            modifier =
-                Modifier.width(30.dp)
-                    .height(RowHeight)
-                    .focusProperties { canFocus = false }
-                    .clickable(
-                        interactionSource = null,
-                        indication = ripple(bounded = false, radius = 18.dp),
-                        enabled = !readOnly,
-                        role = Role.Button,
-                        onClick = ::openIconPicker,
-                    )
-                    .clearAndSetSemantics {
-                        contentDescription = "Change icon of ${row.title.ifEmpty { "empty item" }}"
-                    },
-        )
+            ring = if (focused) colors.secondaryContainer else colors.surfaceContainerLowest,
+        ) {
+            viewModel.toggleCollapsed(key)
+        }
         Box(Modifier.weight(1f).height(RowHeight)) {
             InterceptPlatformTextInput(interceptor) {
                 BasicTextField(
@@ -1032,7 +1021,7 @@ private fun OutlineItem(
     }
 }
 
-internal fun DrawScope.drawGuide(guide: Guide, depth: Int, color: Color) {
+internal fun DrawScope.drawGuide(guide: Guide, depth: Int, color: Color, icon: Boolean = false) {
     val stroke = 2.dp.toPx()
     val middle = RowHeight.toPx() / 2
     guide.through.forEachIndexed { level, through ->
@@ -1045,25 +1034,33 @@ internal fun DrawScope.drawGuide(guide: Guide, depth: Int, color: Color) {
                     moveTo(x, 0f)
                     lineTo(x, middle - radius)
                     arcTo(Rect(x, middle - 2 * radius, x + 2 * radius, middle), 180f, -90f, false)
-                    lineTo((level * 24 + 38).dp.toPx(), middle)
+                    lineTo((level * 24 + if (icon) 35 else 38).dp.toPx(), middle)
                 }
             drawPath(branch, color, style = Stroke(stroke))
         }
     }
     if (guide.stem) {
         val x = (depth * 24 + 22).dp.toPx()
-        drawLine(color, Offset(x, middle + 4.dp.toPx()), Offset(x, size.height), stroke)
+        val top = middle + (if (icon) 13 else 4).dp.toPx()
+        drawLine(color, Offset(x, top), Offset(x, size.height), stroke)
     }
 }
 
 @Composable
-internal fun Bullet(row: OutlineRow, enabled: Boolean, onToggle: () -> Unit) {
+internal fun Bullet(
+    row: OutlineRow,
+    enabled: Boolean,
+    images: IconImages? = null,
+    ring: Color = MaterialTheme.colorScheme.surfaceContainerLowest,
+    onToggle: () -> Unit,
+) {
     val colors = MaterialTheme.colorScheme
     val accent = colors.primary
     val onAccent = colors.onPrimary
     val frame = colors.secondaryContainer
     val tick = rememberVectorPainter(NestodoIcons.Tick)
     val name = row.title.ifEmpty { "empty item" }
+    val shownImages = images?.takeIf { it.draws(row.icon) }
     val toggle =
         if (row.hasChildren) {
             Modifier.focusProperties { canFocus = false }
@@ -1088,6 +1085,7 @@ internal fun Bullet(row: OutlineRow, enabled: Boolean, onToggle: () -> Unit) {
             if (row.collapsed && row.hasChildren) {
                 drawRoundRect(frame, cornerRadius = CornerRadius(8.dp.toPx()))
             }
+            if (shownImages != null) return@Canvas
             if (row.completed) {
                 val box = 18.dp.toPx()
                 val mark = 12.dp.toPx()
@@ -1102,6 +1100,35 @@ internal fun Bullet(row: OutlineRow, enabled: Boolean, onToggle: () -> Unit) {
                 }
             } else {
                 drawCircle(accent, radius = 4.dp.toPx())
+            }
+        }
+        if (shownImages != null) {
+            TodoIcon(row.icon, muted = row.completed, images = shownImages)
+            if (row.completed) {
+                Canvas(Modifier.size(26.dp)) {
+                    val badge = 13.dp.toPx()
+                    val edge = 2.dp.toPx()
+                    val mark = 9.dp.toPx()
+                    val corner =
+                        Offset(size.width + 1.dp.toPx() - badge, size.height + 1.dp.toPx() - badge)
+                    drawRoundRect(
+                        ring,
+                        topLeft = corner - Offset(edge, edge),
+                        size = Size(badge + 2 * edge, badge + 2 * edge),
+                        cornerRadius = CornerRadius(6.dp.toPx()),
+                    )
+                    drawRoundRect(
+                        accent,
+                        topLeft = corner,
+                        size = Size(badge, badge),
+                        cornerRadius = CornerRadius(4.dp.toPx()),
+                    )
+                    translate(corner.x + (badge - mark) / 2, corner.y + (badge - mark) / 2) {
+                        with(tick) {
+                            draw(Size(mark, mark), colorFilter = ColorFilter.tint(onAccent))
+                        }
+                    }
+                }
             }
         }
     }
