@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { fromTodos, indent, rename, split, visibleRows, type Outline } from "./outline";
+import { fromTodos, indent, rename, setIcon, split, visibleRows, type Outline } from "./outline";
 import { UndoHistory } from "./undo";
 
 function todo(id: number, title: string) {
@@ -23,6 +23,16 @@ function typing(history: UndoHistory) {
 }
 
 describe("UndoHistory", () => {
+  it("forgets every step when cleared, so undo cannot put back an image that was deleted and get refused by the server", () => {
+    const history = new UndoHistory();
+    const set = setIcon(start, "t1", "image:3f2a9c1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b")!;
+    history.record(start, set);
+    const removed = setIcon(set.outline, "t1", null)!;
+    history.record(set.outline, removed);
+    history.clear();
+    expect(history.undo(removed.outline)).toBeNull();
+  });
+
   it("takes edits back newest first and returns the cursor to where it was before each one", () => {
     const history = new UndoHistory();
     const added = split(start, "t2", 4, "n1", shown(start));

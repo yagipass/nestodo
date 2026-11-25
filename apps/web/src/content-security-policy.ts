@@ -4,6 +4,7 @@ export const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   `script-src 'self' ${REACT_FORM_REPLAY_SCRIPT}`,
   "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' blob:",
   "connect-src 'self' https://us.i.posthog.com https://us-assets.i.posthog.com",
   "object-src 'none'",
   "base-uri 'none'",

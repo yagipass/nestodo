@@ -51,6 +51,10 @@ export class UndoHistory {
     if (top) top.typing = undefined;
   }
 
+  clear() {
+    this.steps.length = 0;
+  }
+
   undo(current: Outline): Change | null {
     const step = this.steps.pop();
     if (!step) return null;

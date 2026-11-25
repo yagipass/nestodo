@@ -2,7 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type
 import { flushSync } from "react-dom";
 import { useShared } from "@void/react";
 import { AppHeader, Avatar, useBackdropClose } from "./layout";
+import { base64Of, squareImageFrom } from "../src/avatar-image";
 import { Icon } from "../src/icons";
+import { IMAGE_ICON_SIZE, nameFromFile, type ImageIcon } from "../src/image-icons";
 import type { Props } from "./index.server";
 import {
   ROOT,
@@ -30,6 +32,7 @@ import {
   subtree,
   toggleDone,
   visibleRows,
+  withoutIcon,
   type Change,
   type Focus,
   type Outline,
@@ -38,7 +41,7 @@ import { Sync } from "../src/sync";
 import { ThreadPane } from "../src/thread-pane";
 import { encodePastedUrl, findLinks, tokens } from "../src/title";
 import { MAX_TITLE_LENGTH, SHOW_DONE_COOKIE } from "../src/todos";
-import { ICON_CHOICES, isIcon, shownIcon } from "../src/todo-icon";
+import { ICON_CHOICES, imageIcon, isIcon, shownIcon, type ShownIcon } from "../src/todo-icon";
 import { Tokens } from "../src/tokens";
 import { UndoHistory } from "../src/undo";
 
@@ -54,6 +57,11 @@ function send(method: string, path: string, body?: unknown) {
 async function latestTodos() {
   const res = await send("GET", "/api/v1/todos");
   return res.ok ? ((await res.json()) as Pick<Props, "todos">).todos : null;
+}
+
+async function latestImages() {
+  const res = await send("GET", "/api/v1/icons");
+  return res.ok ? ((await res.json()) as { icons: ImageIcon[] }).icons : null;
 }
 
 function caretAt(mirror: Element, x: number, title: string) {
@@ -196,20 +204,167 @@ function MovePicker({
   );
 }
 
-function IconPicker({ outline, picking, onPick, onClose }: { outline: Outline; picking: string; onPick: (icon: string | null) => void; onClose: () => void }) {
+function TodoIconGlyph({ icon }: { icon: ShownIcon }) {
+  return "emoji" in icon ? icon.emoji : <img src={icon.image.url} alt="" />;
+}
+
+function IconPreviewRow({ title, image, done = false }: { title: string; image: string; done?: boolean }) {
+  return (
+    <div className={done ? "icon-preview-row done" : "icon-preview-row"}>
+      {done ? (
+        <span className="done-box">
+          <Icon name="tick" size={11} strokeWidth={3.6} />
+        </span>
+      ) : (
+        <span className="dot" />
+      )}
+      <img src={image} alt="" />
+      <span>{title}</span>
+    </div>
+  );
+}
+
+type ImageView =
+  | { kind: "add"; image: string; preview: string; name: string }
+  | { kind: "edit"; image: ImageIcon; name: string }
+  | { kind: "delete"; image: ImageIcon };
+
+async function problemOf(res: Response | null, fallback: string) {
+  const body = (await res?.json().catch(() => null)) as { message?: unknown; issues?: { issues: { message: string }[] }[] } | null | undefined;
+  if (typeof body?.message === "string") return body.message;
+  return body?.issues?.flatMap(({ issues }) => issues)[0]?.message ?? fallback;
+}
+
+function IconPicker({
+  outline,
+  picking,
+  images,
+  onPick,
+  onAdded,
+  onRenamed,
+  onDeleted,
+  onClose,
+}: {
+  outline: Outline;
+  picking: string;
+  images: readonly ImageIcon[];
+  onPick: (icon: string | null) => void;
+  onAdded: (image: ImageIcon) => void;
+  onRenamed: (image: ImageIcon) => void;
+  onDeleted: (id: string) => void;
+  onClose: () => void;
+}) {
   const dialog = useRef<HTMLDialogElement>(null);
   const choices = useRef<HTMLDivElement>(null);
+  const file = useRef<HTMLInputElement>(null);
+  const field = useRef<HTMLInputElement>(null);
+  const action = useRef<HTMLButtonElement>(null);
   const backdrop = useBackdropClose();
   const [other, setOther] = useState("");
   const [refused, setRefused] = useState(false);
+  const [view, setView] = useState<ImageView | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const open = useRef(true);
+  const latest = useRef({ onPick, onAdded, onRenamed, onDeleted });
   const { title, icon } = outline[picking];
   const name = title || "empty item";
+  const preview = view?.kind === "add" ? view.preview : null;
 
   useLayoutEffect(() => {
     dialog.current?.showModal();
-    const grid = choices.current;
-    (grid?.querySelector<HTMLButtonElement>('[aria-pressed="true"]') ?? grid?.querySelector("button"))?.focus();
   }, []);
+
+  useLayoutEffect(() => {
+    if (view === null) {
+      (dialog.current?.querySelector<HTMLButtonElement>('.icon-choices [aria-pressed="true"]') ?? choices.current?.querySelector("button"))?.focus();
+    } else if (view.kind === "delete") {
+      action.current?.focus();
+    } else {
+      field.current?.focus();
+      field.current?.select();
+    }
+  }, [view?.kind]);
+
+  useEffect(() => () => void (preview && URL.revokeObjectURL(preview)), [preview]);
+
+  useLayoutEffect(() => {
+    latest.current = { onPick, onAdded, onRenamed, onDeleted };
+  });
+
+  useEffect(() => {
+    open.current = true;
+    return () => {
+      open.current = false;
+    };
+  }, []);
+
+  function show(next: ImageView | null) {
+    setProblem(null);
+    setView(next);
+  }
+
+  function back() {
+    show(view?.kind === "delete" ? { kind: "edit", image: view.image, name: view.image.name } : null);
+  }
+
+  async function choose(chosen: File | undefined) {
+    if (file.current) file.current.value = "";
+    if (!chosen) return;
+    setProblem(null);
+    const square = await squareImageFrom(chosen, IMAGE_ICON_SIZE).catch(() => null);
+    const image = square && (await base64Of(square).catch(() => null));
+    if (!square || !image) {
+      setProblem("The image could not be read.");
+      return;
+    }
+    show({ kind: "add", image, preview: URL.createObjectURL(square), name: nameFromFile(chosen.name) });
+  }
+
+  async function request(method: string, path: string, body: unknown, fallback: string, alsoDone?: number) {
+    setBusy(true);
+    setProblem(null);
+    const res = await fetch(path, {
+      method,
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }).catch(() => null);
+    setBusy(false);
+    if (res && (res.ok || res.status === alsoDone)) return res;
+    setProblem(await problemOf(res, fallback));
+    return null;
+  }
+
+  function nameIn(value: string) {
+    const trimmed = value.normalize("NFC").trim();
+    if (trimmed === "") setProblem("Enter a name");
+    return trimmed === "" ? null : trimmed;
+  }
+
+  async function save() {
+    if (busy || view === null || view.kind === "delete") return;
+    const imageName = nameIn(view.name);
+    if (imageName === null) return;
+    if (view.kind === "add") {
+      const res = await request("POST", "/api/v1/icons", { name: imageName, image: view.image }, "Could not add the image.");
+      if (!res) return;
+      const { icon: added } = (await res.json()) as { icon: ImageIcon };
+      latest.current.onAdded(added);
+      if (open.current) latest.current.onPick(imageIcon(added.id));
+      return;
+    }
+    const res = await request("PATCH", `/api/v1/icons/${view.image.id}`, { name: imageName }, "Could not save the image.");
+    if (!res) return;
+    latest.current.onRenamed(((await res.json()) as { icon: ImageIcon }).icon);
+    show(null);
+  }
+
+  async function remove() {
+    if (busy || view?.kind !== "delete") return;
+    if (!(await request("DELETE", `/api/v1/icons/${view.image.id}`, undefined, "Could not delete the image.", 404))) return;
+    latest.current.onDeleted(view.image.id);
+    show(null);
+  }
 
   function onOtherKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key !== "Enter" || composingKey(event.nativeEvent)) return;
@@ -219,9 +374,141 @@ function IconPicker({ outline, picking, onPick, onClose }: { outline: Outline; p
     else setRefused(true);
   }
 
+  const problemNote = problem && (
+    <p id="icon-image-problem" className="icon-other-error" role="alert">
+      {problem}
+    </p>
+  );
+
+  if (view?.kind === "delete") {
+    const used = Object.values(outline).filter((item) => item.icon === imageIcon(view.image.id)).length;
+    return (
+      <dialog ref={dialog} className="icon-picker" aria-label={`Icon for "${name}"`} onClose={onClose} {...backdrop}>
+        <div className="icon-form-head">
+          <button type="button" className="icon-button" aria-label="Back" onClick={back}>
+            <Icon name="back" size={18} />
+          </button>
+          <h2>Delete "{view.image.name}"?</h2>
+        </div>
+        <p className="icon-form-note">
+          {used === 0
+            ? "Deleting it cannot be undone."
+            : used === 1
+              ? "It is the icon of 1 todo. Deleting it removes the icon from that todo and cannot be undone."
+              : `It is the icon of ${used} todos. Deleting it removes the icon from them and cannot be undone.`}
+        </p>
+        {problemNote}
+        <div className="icon-form-actions">
+          <button type="button" className="pill" onClick={back}>
+            Back
+          </button>
+          <button ref={action} type="button" className="pill danger" disabled={busy} onClick={() => void remove()}>
+            Delete
+          </button>
+        </div>
+      </dialog>
+    );
+  }
+
+  if (view !== null) {
+    const shown = view.kind === "add" ? view.preview : view.image.url;
+    return (
+      <dialog ref={dialog} className="icon-picker" aria-label={`Icon for "${name}"`} onClose={onClose} {...backdrop}>
+        <form
+          className="icon-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save();
+          }}
+        >
+          <div className="icon-form-head">
+            <button type="button" className="icon-button" aria-label="Back" onClick={back}>
+              <Icon name="back" size={18} />
+            </button>
+            <h2>{view.kind === "add" ? "Add image" : "Edit image"}</h2>
+          </div>
+          <div className="icon-preview">
+            <img className="icon-preview-image" src={shown} alt="" />
+            {view.kind === "add" && (
+              <div className="icon-preview-rows">
+                <p className="icon-section">In the outline</p>
+                <IconPreviewRow title={title || "Untitled"} image={shown} />
+                <IconPreviewRow title={title || "Untitled"} image={shown} done />
+              </div>
+            )}
+          </div>
+          <label className="icon-section" htmlFor="icon-image-name">
+            Name
+          </label>
+          <input
+            ref={field}
+            id="icon-image-name"
+            className="icon-other"
+            value={view.name}
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={problem !== null}
+            aria-describedby={problem ? "icon-image-problem" : undefined}
+            onChange={(event) => {
+              setProblem(null);
+              setView({ ...view, name: event.target.value });
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && composingKey(event.nativeEvent)) event.preventDefault();
+            }}
+          />
+          {problemNote}
+          <div className="icon-form-actions">
+            {view.kind === "edit" ? (
+              <button type="button" className="text-button icon-delete" onClick={() => show({ kind: "delete", image: view.image })}>
+                Delete image
+              </button>
+            ) : (
+              <button type="button" className="pill" onClick={back}>
+                Back
+              </button>
+            )}
+            <button type="submit" className="pill primary" disabled={busy}>
+              {view.kind === "add" ? "Add and use" : "Save"}
+            </button>
+          </div>
+        </form>
+      </dialog>
+    );
+  }
+
   return (
     <dialog ref={dialog} className="icon-picker" aria-label={`Icon for "${name}"`} onClose={onClose} {...backdrop}>
-      <div ref={choices} className="icon-choices">
+      <p id="icon-images-label" className="icon-section">
+        My icons
+      </p>
+      <div className="icon-choices" role="group" aria-labelledby="icon-images-label">
+        {images.map((image) => (
+          <button
+            key={image.id}
+            type="button"
+            title={image.name}
+            aria-label={image.name}
+            aria-pressed={icon === imageIcon(image.id)}
+            onClick={() => onPick(imageIcon(image.id))}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              show({ kind: "edit", image, name: image.name });
+            }}
+          >
+            <img src={image.url} alt="" />
+          </button>
+        ))}
+        <button type="button" className="icon-add" title="Add image" aria-label="Add image" onClick={() => file.current?.click()}>
+          <Icon name="add" size={18} />
+        </button>
+      </div>
+      <input ref={file} type="file" accept="image/*" hidden aria-label="Image" onChange={(event) => void choose(event.target.files?.[0])} />
+      {problemNote}
+      <p id="icon-emoji-label" className="icon-section">
+        Emoji
+      </p>
+      <div ref={choices} className="icon-choices" role="group" aria-labelledby="icon-emoji-label">
         {ICON_CHOICES.map((choice) => (
           <button key={choice} type="button" aria-pressed={choice === icon} onClick={() => onPick(choice)}>
             {choice}
@@ -316,8 +603,9 @@ function ConfirmDialog({
   );
 }
 
-export default function OutlinePage({ todos, showDone: startShown }: Props) {
+export default function OutlinePage({ todos, icons, showDone: startShown }: Props) {
   const [outline, setOutline] = useState(() => fromTodos(todos));
+  const [images, setImages] = useState<readonly ImageIcon[]>(icons);
   const [showDone, setShowDone] = useState(startShown);
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -363,8 +651,9 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
       if (refreshing.current || sync.pending || sync.failed) return;
       refreshing.current = true;
       const revision = sync.revision;
-      const latest = await latestTodos().catch(() => null);
+      const [latest, latestIcons] = await Promise.all([latestTodos().catch(() => null), latestImages().catch(() => null)]);
       refreshing.current = false;
+      if (latestIcons) setImages(latestIcons);
       if (!latest || sync.revision !== revision || sync.pending || sync.failed) return;
       const keyOf = (id: number) => sync.keyOf(id) ?? keyFor(id);
       sync.track(latest.map((todo) => [keyOf(todo.id), todo.id]));
@@ -587,6 +876,20 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
     if (!outline[picking.key] || !apply(setIcon(outline, picking.key, icon), picking, picking)) pendingFocus.current = picking;
   }
 
+  function addedImage(image: ImageIcon) {
+    setImages((current) => (current.some((candidate) => candidate.id === image.id) ? current : [...current, image]));
+  }
+
+  function renamedImage(image: ImageIcon) {
+    setImages((current) => current.map((candidate) => (candidate.id === image.id ? image : candidate)));
+  }
+
+  function deletedImage(id: string) {
+    setImages((current) => current.filter((candidate) => candidate.id !== id));
+    setOutline((current) => withoutIcon(current, imageIcon(id)));
+    history.clear();
+  }
+
   function closeIcon() {
     if (!picking) return;
     setPicking(null);
@@ -792,7 +1095,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
           {rows.map((row, index) => {
             const item = outline[row.key];
             const name = item.title || "empty item";
-            const icon = shownIcon(item.icon);
+            const icon = shownIcon(item.icon, images);
             const hasChildren = item.children.length > 0;
             const { through, stem } = lines[index];
             const toggle = () => apply(setCollapsed(outline, row.key, !item.collapsed));
@@ -844,7 +1147,7 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => openIcon(row.key)}
                   >
-                    {icon}
+                    <TodoIconGlyph icon={icon} />
                   </button>
                 )}
                 <span className="title">
@@ -945,7 +1248,18 @@ export default function OutlinePage({ todos, showDone: startShown }: Props) {
       {moving && outline[moving.key] && (
         <MovePicker outline={outline} moving={moving.key} showDone={showDone} onMove={moveRow} onClose={closeMove} />
       )}
-      {picking && outline[picking.key] && <IconPicker outline={outline} picking={picking.key} onPick={pickIcon} onClose={closeIcon} />}
+      {picking && outline[picking.key] && (
+        <IconPicker
+          outline={outline}
+          picking={picking.key}
+          images={images}
+          onPick={pickIcon}
+          onAdded={addedImage}
+          onRenamed={renamedImage}
+          onDeleted={deletedImage}
+          onClose={closeIcon}
+        />
+      )}
       {confirming && outline[confirming.key] && (
         <ConfirmDialog outline={outline} confirming={confirming} onConfirm={confirm} onClose={closeConfirm} />
       )}

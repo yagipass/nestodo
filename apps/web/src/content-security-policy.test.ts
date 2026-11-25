@@ -22,4 +22,8 @@ describe("CONTENT_SECURITY_POLICY", () => {
       expect(directive("script-src")).toContain(`'sha256-${createHash("sha256").update(script).digest("base64")}'`);
     }
   });
+
+  it("lets the icon picker preview a chosen image before uploading it, which the browser shows from a blob: URL", () => {
+    expect(directive("img-src")).toEqual(["'self'", "blob:"]);
+  });
 });

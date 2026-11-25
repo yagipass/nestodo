@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
+import type { ImageIcon } from "./image-icons";
 import { ICON_CHOICES, imageIcon, imageIdOf, isIcon, isTodoIcon, shownIcon } from "./todo-icon";
 
-const CAT = { id: "3f2a9c1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b" };
+const CAT: ImageIcon = { id: "3f2a9c1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b", name: "ミケ", url: "/api/v1/icons/3f2a9c1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b/image" };
 
 describe("isIcon", () => {
   it("accepts every emoji the picker offers, so choosing one can never be refused by the server", () => {
@@ -59,12 +60,19 @@ describe("imageIdOf", () => {
 
 describe("shownIcon", () => {
   it("draws nothing for a typed icon from a newer release instead of printing its raw text before the title", () => {
-    expect(shownIcon("line:cart:green")).toBeNull();
-    expect(shownIcon("image:3f2a9c1e-5b7d")).toBeNull();
+    expect(shownIcon("line:cart:green", [CAT])).toBeNull();
   });
 
   it("draws an emoji icon as it is stored", () => {
-    expect(shownIcon("🛒")).toBe("🛒");
-    expect(shownIcon(null)).toBeNull();
+    expect(shownIcon("🛒", [CAT])).toEqual({ emoji: "🛒" });
+    expect(shownIcon(null, [CAT])).toBeNull();
+  });
+
+  it("draws the member's image that the todo points at", () => {
+    expect(shownIcon(imageIcon(CAT.id), [CAT])).toEqual({ image: CAT });
+  });
+
+  it("draws nothing for an image missing from the member's list, such as one deleted on another device, instead of a broken picture", () => {
+    expect(shownIcon(imageIcon(CAT.id), [])).toBeNull();
   });
 });

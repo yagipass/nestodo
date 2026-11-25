@@ -5,17 +5,21 @@ export function centerSquare(width: number, height: number) {
   return { x: (width - side) / 2, y: (height - side) / 2, side };
 }
 
-export async function avatarImageFrom(file: Blob) {
+export function avatarImageFrom(file: Blob) {
+  return squareImageFrom(file, AVATAR_SIZE);
+}
+
+export async function squareImageFrom(file: Blob, size: number) {
   const bitmap = await createImageBitmap(file);
   try {
     const canvas = document.createElement("canvas");
-    canvas.width = AVATAR_SIZE;
-    canvas.height = AVATAR_SIZE;
+    canvas.width = size;
+    canvas.height = size;
     const context = canvas.getContext("2d");
     if (!context) throw new Error("The browser cannot draw the image");
     const { x, y, side } = centerSquare(bitmap.width, bitmap.height);
     context.imageSmoothingQuality = "high";
-    context.drawImage(bitmap, x, y, side, side, 0, 0, AVATAR_SIZE, AVATAR_SIZE);
+    context.drawImage(bitmap, x, y, side, side, 0, 0, size, size);
     return await new Promise<Blob>((resolve, reject) =>
       canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("The browser cannot encode the image"))), "image/webp", 0.85),
     );
