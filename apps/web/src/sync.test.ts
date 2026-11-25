@@ -47,7 +47,7 @@ describe("Sync", () => {
   it("asks the server to bring a deleted row back under its old id, so undoing a delete keeps the comments written on it", async () => {
     const { calls, send } = server();
     const sync = new Sync([["t1", 1], ["t2", 2]], send);
-    const item = { key: "t2", title: "dentist", comments: 3, done: false, collapsed: false, children: [] };
+    const item = { key: "t2", title: "dentist", icon: "🦷", comments: 3, done: false, collapsed: false, children: [] };
 
     sync.apply([{ type: "delete", key: "t2", removed: ["t2"] }]);
     sync.apply([{ type: "restore", key: "t2", parent: "t1", index: 0, items: [item] }]);
@@ -56,6 +56,20 @@ describe("Sync", () => {
     expect(calls).toEqual([
       { method: "DELETE", path: "/api/v1/todos/2", body: undefined },
       { method: "POST", path: "/api/v1/todos/2/restore", body: { parentId: 1, index: 0 } },
+    ]);
+  });
+
+  it("sends an icon change and its removal as the icon alone, so it never overwrites a title another device just changed", async () => {
+    const { calls, send } = server();
+    const sync = new Sync([["t1", 1]], send);
+
+    sync.apply([{ type: "update", key: "t1", fields: { icon: "🛒" } }]);
+    sync.apply([{ type: "update", key: "t1", fields: { icon: null } }]);
+    await vi.runAllTimersAsync();
+
+    expect(calls).toEqual([
+      { method: "PATCH", path: "/api/v1/todos/1", body: { icon: "🛒" } },
+      { method: "PATCH", path: "/api/v1/todos/1", body: { icon: null } },
     ]);
   });
 
