@@ -4,6 +4,7 @@ import { HTTPException } from "hono/http-exception";
 import statsApp from "virtual:stats-app";
 import { z } from "zod";
 import { isTimeZone } from "./stats";
+import { listImageIcons } from "./image-icon-service";
 import { activityOf } from "./stats-service";
 import { inUtc } from "./time";
 import { commentBody, createTodoBody, patchTodoBody } from "./todo-schemas";
@@ -16,7 +17,8 @@ const STATS_APP_URI = "ui://nestodo/stats.html";
 
 const COMMENT_FORMAT = "shown as Markdown with every line break kept. Tables, images and HTML are shown as written, so use a list in place of a table";
 
-const ICON_FORMAT = "One emoji shown before the title, such as 🛒, rather than putting it in the title";
+const ICON_FORMAT =
+  "One emoji shown before the title, such as 🛒, or image:<id> for one of the member's own images that list_icons shows, rather than putting it in the title";
 
 const id = z.number().int().positive().describe("The todo's id, as list_todos shows it");
 
@@ -48,10 +50,21 @@ export function nestodoMcpServer(userId: string) {
     "list_todos",
     {
       title: "List todos",
-      description: `List every todo of the signed-in user in outline order. parentId is the todo it is nested under, icon is the emoji shown before its title or null, commentCount is how many comments the member's work log on it has, which get_timeline shows, createdAt is when it was added, and completedAt is when it was completed, or null while the todo is open. Both times are in UTC as ISO 8601. Completed todos are removed from this list ${KEEP_COMPLETED_DAYS} days after they were completed, or later while a todo under them is kept, so this is not a full history of finished work. get_stats still counts them on the days they were completed.`,
+      description: `List every todo of the signed-in user in outline order. parentId is the todo it is nested under, icon is the emoji shown before its title, image:<id> for one of the member's own images that list_icons names, or null, commentCount is how many comments the member's work log on it has, which get_timeline shows, createdAt is when it was added, and completedAt is when it was completed, or null while the todo is open. Both times are in UTC as ISO 8601. Completed todos are removed from this list ${KEEP_COMPLETED_DAYS} days after they were completed, or later while a todo under them is kept, so this is not a full history of finished work. get_stats still counts them on the days they were completed.`,
       annotations: { readOnlyHint: true },
     },
     async () => reply({ todos: (await listTodos(userId)).map(withUtcTimes) }),
+  );
+
+  server.registerTool(
+    "list_icons",
+    {
+      title: "List the member's images",
+      description:
+        "List the images the member added as todo icons, in the order they were added, with the name the member gave each. To show one before a todo's title, pass image:<id> as the icon of add_todo or update_todo. Images can only be added, renamed or deleted in the apps.",
+      annotations: { readOnlyHint: true },
+    },
+    async () => reply({ icons: (await listImageIcons(userId)).map(({ id, name }) => ({ id, name })) }),
   );
 
   server.registerTool(
