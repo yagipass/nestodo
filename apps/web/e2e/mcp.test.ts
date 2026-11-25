@@ -164,6 +164,19 @@ describe("MCP endpoint that Claude reaches through its own Access app", () => {
     expect((await value<{ todo: Todo }>(claude, "get_todo", { id: added.id })).todo.icon).toBeNull();
   });
 
+  it("names the member's own images, so Claude can put one of them on a todo the way the member would", async () => {
+    const { web, claude } = await member();
+    const cat = await web.addedImage("ミケ");
+    expect(await value(claude, "list_icons")).toEqual({ icons: [{ id: cat.id, name: "ミケ" }] });
+
+    const { todo } = await value<{ todo: Todo }>(claude, "add_todo", { title: "vet", icon: `image:${cat.id}` });
+    expect((await web.todos())[0].icon).toBe(`image:${cat.id}`);
+    expect(await refusal(claude, "update_todo", { id: todo.id, icon: "image:3f2a9c1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b" })).toEqual({
+      error: "invalid_icon",
+      message: "Icon not found",
+    });
+  });
+
   it("tells Claude to put an emoji in the icon rather than the title, and refuses anything but one emoji", async () => {
     const { web, claude } = await member();
     const { tools } = await claude.listTools();
@@ -312,7 +325,7 @@ describe("MCP endpoint that Claude reaches through its own Access app", () => {
     const { claude } = await member();
     const { tools } = await claude.listTools();
 
-    expect(tools.map((tool) => tool.name).sort()).toEqual(["add_comment", "add_todo", "get_stats", "get_timeline", "get_todo", "list_todos", "update_todo"]);
+    expect(tools.map((tool) => tool.name).sort()).toEqual(["add_comment", "add_todo", "get_stats", "get_timeline", "get_todo", "list_icons", "list_todos", "update_todo"]);
   });
 
   it("tells Claude that completed todos leave the list after 8 days, so it does not take the list for everything the member finished", async () => {
