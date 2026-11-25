@@ -1,5 +1,24 @@
 # Changelog
 
+## [v0.16.0](https://github.com/yagipass/nestodo/compare/v0.15.0...v0.16.0) - 2026-11-25
+
+### MCP
+- feat(mcp): let Claude put the member's own images on todos by @yagipass in https://github.com/yagipass/nestodo/pull/198
+### Web
+- feat(web): let members upload their own images as todo icons by @yagipass in https://github.com/yagipass/nestodo/pull/197
+- feat(web): add images from the icon picker and show them in the outline by @yagipass in https://github.com/yagipass/nestodo/pull/199
+- feat(web): show a todo's icon in place of its bullet by @yagipass in https://github.com/yagipass/nestodo/pull/207
+### Android
+- feat(android): add images in the icon picker and show them as icons by @yagipass in https://github.com/yagipass/nestodo/pull/202
+- feat(android): show a todo's icon in place of its bullet by @yagipass in https://github.com/yagipass/nestodo/pull/209
+### CLI
+- feat(cli): show image icons by their names by @yagipass in https://github.com/yagipass/nestodo/pull/200
+### Desktop
+- feat(desktop): add images in the icon picker and show them as icons by @yagipass in https://github.com/yagipass/nestodo/pull/201
+- feat(desktop): show a todo's icon in place of its bullet by @yagipass in https://github.com/yagipass/nestodo/pull/208
+### Maintenance
+- chore(web): keep uploaded pictures in the nestodo-storage bucket by @yagipass in https://github.com/yagipass/nestodo/pull/204
+
 ## [v0.15.0](https://github.com/yagipass/nestodo/compare/v0.14.1...v0.15.0) - 2026-11-25
 
 ### MCP
