@@ -7,7 +7,7 @@ use url::Url;
 use crate::access::Session;
 use crate::error::Error;
 use crate::http::{Call, Http, Response};
-use crate::todo::Todo;
+use crate::todo::{Icon, Todo};
 
 const LOGIN_PATH: &str = "/cdn-cgi/access/login";
 
@@ -28,6 +28,11 @@ struct Many {
     todos: Vec<Todo>,
 }
 
+#[derive(Deserialize)]
+struct Icons {
+    icons: Vec<Icon>,
+}
+
 impl<'a> Api<'a> {
     pub fn new(http: &'a Http, base: &'a Url, session: Option<Session<'a>>, now: i64) -> Self {
         Self {
@@ -41,6 +46,11 @@ impl<'a> Api<'a> {
     pub fn list(&mut self) -> Result<Vec<Todo>, Error> {
         let response = self.call(Method::GET, "/api/v1/todos", None, None)?;
         Ok(parse::<Many>(&response)?.todos)
+    }
+
+    pub fn icons(&mut self) -> Result<Vec<Icon>, Error> {
+        let response = self.call(Method::GET, "/api/v1/icons", None, None)?;
+        Ok(parse::<Icons>(&response)?.icons)
     }
 
     pub fn create(

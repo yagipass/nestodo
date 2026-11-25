@@ -23,6 +23,12 @@ impl Todo {
     }
 }
 
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct Icon {
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Clone, Copy)]
 pub struct Style {
     pub color: bool,
@@ -109,7 +115,7 @@ impl<'a> Walk<'a> {
     }
 }
 
-pub fn tree(outline: &Outline, start: Option<&Todo>, view: &View, style: Style) -> String {
+fn walk<'a>(outline: &'a Outline, start: Option<&Todo>, view: &'a View) -> Vec<Line<'a>> {
     let mut walk = Walk {
         outline,
         view,
@@ -117,22 +123,47 @@ pub fn tree(outline: &Outline, start: Option<&Todo>, view: &View, style: Style) 
         seen: start.map(|todo| todo.id).into_iter().collect(),
     };
     walk.branch(start.map(|todo| todo.id), "", 1, false);
+    walk.lines
+}
+
+pub fn listed<'a>(outline: &'a Outline, start: Option<&Todo>, view: &'a View) -> Vec<&'a Todo> {
+    walk(outline, start, view)
+        .into_iter()
+        .map(|line| line.todo)
+        .collect()
+}
+
+pub fn tree(
+    outline: &Outline,
+    start: Option<&Todo>,
+    view: &View,
+    icons: &[Icon],
+    style: Style,
+) -> String {
+    let lines = walk(outline, start, view);
     let header = match start {
         Some(todo) => format!("{}  (#{})", outline.path(Some(todo.id)), todo.id),
         None => outline.path(None),
     };
     let mut out = vec![style.paint("1", &header)];
-    if walk.lines.is_empty() {
+    if lines.is_empty() {
         out.push(style.dim("No todos here yet."));
     }
-    let width = walk
-        .lines
+    let width = lines
         .iter()
         .map(|line| line.todo.id.to_string().len())
         .max()
         .unwrap_or(1);
-    for line in &walk.lines {
-        let mut row = render(outline, line.todo, width, &line.prefix, line.faded, style);
+    for line in &lines {
+        let mut row = render(
+            outline,
+            line.todo,
+            width,
+            &line.prefix,
+            line.faded,
+            icons,
+            style,
+        );
         if line.hidden > 0 {
             row.push_str(&style.dim(&format!("  ▸ +{}", line.hidden)));
         }
@@ -141,8 +172,8 @@ pub fn tree(outline: &Outline, start: Option<&Todo>, view: &View, style: Style) 
     out.join("\n")
 }
 
-pub fn row(outline: &Outline, todo: &Todo, style: Style) -> String {
-    render(outline, todo, 0, "", false, style)
+pub fn row(outline: &Outline, todo: &Todo, icons: &[Icon], style: Style) -> String {
+    render(outline, todo, 0, "", false, icons, style)
 }
 
 fn render(
@@ -151,13 +182,14 @@ fn render(
     width: usize,
     prefix: &str,
     faded: bool,
+    icons: &[Icon],
     style: Style,
 ) -> String {
     let faded = faded || todo.is_completed();
     let check = if todo.is_completed() { "[x]" } else { "[ ]" };
     let lead = format!("{:>width$} {check} ", todo.id);
     let children = outline.children(Some(todo.id));
-    let title = match shown_icon(todo) {
+    let title = match shown_icon(todo, icons) {
         Some(icon) => format!("{icon} {}", printable(&todo.title)),
         None => printable(&todo.title),
     };
@@ -177,7 +209,21 @@ fn render(
     line
 }
 
-fn shown_icon(todo: &Todo) -> Option<String> {
+pub fn has_image(todo: &Todo) -> bool {
+    image_id(todo).is_some()
+}
+
+fn image_id(todo: &Todo) -> Option<&str> {
+    todo.icon.as_deref()?.strip_prefix("image:")
+}
+
+fn shown_icon(todo: &Todo, icons: &[Icon]) -> Option<String> {
+    if let Some(id) = image_id(todo) {
+        return icons
+            .iter()
+            .find(|icon| icon.id == id)
+            .map(|icon| format!("[{}]", printable(&icon.name)));
+    }
     let typed = |icon: &str| {
         icon.split_once(':').is_some_and(|(kind, _)| {
             kind.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
@@ -351,7 +397,7 @@ mod tests {
     #[test]
     fn draws_the_outline_as_a_tree_with_titles_last_so_wide_characters_cannot_misalign_it() {
         assert_eq!(
-            tree(&sample(), None, &ALL, PLAIN),
+            tree(&sample(), None, &ALL, &[], PLAIN),
             "Home\n \
              1 [ ] ├── Work  0/2\n \
              4 [ ] │   ├── v2 release  1/2\n \
@@ -368,7 +414,7 @@ mod tests {
     fn starts_at_the_given_todo_and_says_where_that_is() {
         let outline = sample();
         assert_eq!(
-            tree(&outline, Some(outline.get(4).unwrap()), &ALL, PLAIN),
+            tree(&outline, Some(outline.get(4).unwrap()), &ALL, &[], PLAIN),
             "Home › Work › v2 release  (#4)\n \
              7 [ ] ├── Show the CLI list as a tree\n\
              10 [x] └── Draft the release notes"
@@ -382,7 +428,7 @@ mod tests {
             active: false,
         };
         assert_eq!(
-            tree(&sample(), None, &view, PLAIN),
+            tree(&sample(), None, &view, &[], PLAIN),
             "Home\n \
              1 [ ] ├── Work  0/2  ▸ +2\n \
              2 [x] ├── Chores  0/1  ▸ +1\n\
@@ -397,7 +443,7 @@ mod tests {
             active: true,
         };
         assert_eq!(
-            tree(&sample(), None, &view, PLAIN),
+            tree(&sample(), None, &view, &[], PLAIN),
             "Home\n \
              1 [ ] ├── Work  0/2\n \
              4 [ ] │   ├── v2 release  1/2\n \
@@ -410,24 +456,24 @@ mod tests {
     #[test]
     fn says_so_when_there_is_nothing_to_list() {
         assert_eq!(
-            tree(&Outline::default(), None, &ALL, PLAIN),
+            tree(&Outline::default(), None, &ALL, &[], PLAIN),
             "Home\nNo todos here yet."
         );
         let outline = sample();
         assert_eq!(
-            tree(&outline, Some(outline.get(11).unwrap()), &ALL, PLAIN),
+            tree(&outline, Some(outline.get(11).unwrap()), &ALL, &[], PLAIN),
             "Home › Chores › Milk  (#11)\nNo todos here yet."
         );
     }
 
     #[test]
     fn dims_open_todos_under_a_finished_one_because_finishing_the_parent_covers_them() {
-        let colored = tree(&sample(), None, &ALL, COLOR);
+        let colored = tree(&sample(), None, &ALL, &[], COLOR);
         let line = |title: &str| colored.lines().find(|line| line.contains(title)).unwrap();
         assert!(line("Milk").starts_with("\x1b[2m11 [ ] \x1b[0m"));
         assert!(line("Milk").contains("\x1b[2mMilk\x1b[0m"));
         assert!(line("dentist").starts_with("18 [ ] "));
-        assert!(!tree(&sample(), None, &ALL, PLAIN).contains('\x1b'));
+        assert!(!tree(&sample(), None, &ALL, &[], PLAIN).contains('\x1b'));
     }
 
     #[test]
@@ -467,11 +513,11 @@ mod tests {
         ]);
 
         assert_eq!(
-            tree(&outline, None, &ALL, PLAIN),
+            tree(&outline, None, &ALL, &[], PLAIN),
             format!("Home\n1 [ ] └── {shown}  0/1\n2 [ ]     └── child")
         );
         assert_eq!(
-            tree(&outline, Some(outline.get(2).unwrap()), &ALL, PLAIN),
+            tree(&outline, Some(outline.get(2).unwrap()), &ALL, &[], PLAIN),
             format!("Home › {shown} › child  (#2)\nNo todos here yet.")
         );
         assert!(
@@ -496,11 +542,11 @@ mod tests {
         ]);
 
         assert_eq!(
-            tree(&outline, None, &ALL, PLAIN),
+            tree(&outline, None, &ALL, &[], PLAIN),
             format!("Home\n1 [x] └── {shown}  0/1\n2 [ ]     └── {shown}")
         );
         assert_eq!(
-            row(&outline, outline.get(1).unwrap(), PLAIN),
+            row(&outline, outline.get(1).unwrap(), &[], PLAIN),
             format!("1 [x] {shown}  0/1")
         );
     }
@@ -513,7 +559,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            tree(&outline, None, &ALL, PLAIN),
+            tree(&outline, None, &ALL, &[], PLAIN),
             "Home\n1 [ ] └── Milk 2L  0/1\n2 [ ]     └── buy milk"
         );
         assert!(
@@ -560,7 +606,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            tree(&outline, None, &ALL, PLAIN),
+            tree(&outline, None, &ALL, &[], PLAIN),
             format!("Home\n1 [ ] └── {shown}  0/1\n2 [ ]     └── {family}")
         );
         assert!(
@@ -597,7 +643,7 @@ mod tests {
         let a = outline.get(2).unwrap();
 
         assert_eq!(
-            tree(&outline, Some(a), &ALL, PLAIN),
+            tree(&outline, Some(a), &ALL, &[], PLAIN),
             "Home › b › a  (#2)\n3 [ ] └── b  0/1"
         );
         assert_eq!(
@@ -643,7 +689,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            tree(&outline, None, &ALL, PLAIN),
+            tree(&outline, None, &ALL, &[], PLAIN),
             "Home\n \
              1 [ ] ├── 🧹 Chores  0/2\n \
              2 [ ] │   ├── 🗑\u{fe0f} Take out the trash\n \
@@ -651,7 +697,7 @@ mod tests {
              18 [x] └── 🦷 Book the dentist"
         );
         assert_eq!(
-            row(&outline, outline.get(18).unwrap(), PLAIN),
+            row(&outline, outline.get(18).unwrap(), &[], PLAIN),
             "18 [x] 🦷 Book the dentist"
         );
     }
@@ -665,9 +711,9 @@ mod tests {
         )]);
 
         assert!(
-            tree(&outline, None, &ALL, COLOR).ends_with("\x1b[2m🦷 Book the dentist\x1b[0m"),
+            tree(&outline, None, &ALL, &[], COLOR).ends_with("\x1b[2m🦷 Book the dentist\x1b[0m"),
             "{:?}",
-            tree(&outline, None, &ALL, COLOR)
+            tree(&outline, None, &ALL, &[], COLOR)
         );
     }
 
@@ -677,12 +723,12 @@ mod tests {
             let outline =
                 Outline::new(vec![with_icon(todo(1, None, 0, "Groceries", false), typed)]);
             assert_eq!(
-                tree(&outline, None, &ALL, PLAIN),
+                tree(&outline, None, &ALL, &[], PLAIN),
                 "Home\n1 [ ] └── Groceries",
                 "{typed}"
             );
             assert_eq!(
-                row(&outline, outline.get(1).unwrap(), PLAIN),
+                row(&outline, outline.get(1).unwrap(), &[], PLAIN),
                 "1 [ ] Groceries",
                 "{typed}"
             );
@@ -691,7 +737,7 @@ mod tests {
             let outline =
                 Outline::new(vec![with_icon(todo(1, None, 0, "Groceries", false), shown)]);
             assert_eq!(
-                row(&outline, outline.get(1).unwrap(), PLAIN),
+                row(&outline, outline.get(1).unwrap(), &[], PLAIN),
                 format!("1 [ ] {shown} Groceries")
             );
         }
@@ -703,7 +749,7 @@ mod tests {
         let outline = Outline::new(vec![with_icon(todo(1, None, 0, "Milk", false), stored)]);
 
         assert_eq!(
-            tree(&outline, None, &ALL, PLAIN),
+            tree(&outline, None, &ALL, &[], PLAIN),
             "Home\n1 [ ] └── \u{FFFD}]52;c;aGk=\u{FFFD}\u{FFFD} Milk"
         );
         let text = json(&outline, None, &ALL);
@@ -730,6 +776,92 @@ mod tests {
                 ]},
                 { "id": 3, "title": "Book the dentist", "icon": null, "completed": false, "collapsed": false, "children": [] },
             ])
+        );
+    }
+
+    const MIKE: &str = "3f6c2a1e-8b4d-4c2a-9e7f-1a2b3c4d5e6f";
+    const POCHI: &str = "9d1e7b20-5a3c-4f6e-8b2d-0c4a6e8f1b3d";
+
+    fn mike() -> Icon {
+        Icon {
+            id: MIKE.into(),
+            name: "ミケ".into(),
+        }
+    }
+
+    #[test]
+    fn shows_an_image_icon_as_its_name_in_brackets_where_an_emoji_goes_since_a_terminal_cannot_draw_it()
+     {
+        let outline = Outline::new(vec![
+            with_icon(
+                todo(1, None, 0, "ミケの予防接種", false),
+                &format!("image:{MIKE}"),
+            ),
+            with_icon(todo(2, None, 1, "Buy milk", false), "🥛"),
+        ]);
+        let icons = [mike()];
+
+        assert_eq!(
+            tree(&outline, None, &ALL, &icons, PLAIN),
+            "Home\n1 [ ] ├── [ミケ] ミケの予防接種\n2 [ ] └── 🥛 Buy milk"
+        );
+        assert_eq!(
+            row(&outline, outline.get(1).unwrap(), &icons, PLAIN),
+            "1 [ ] [ミケ] ミケの予防接種"
+        );
+    }
+
+    #[test]
+    fn prints_nothing_for_an_image_not_in_the_list_or_another_typed_kind_since_neither_has_a_name_to_show()
+     {
+        for (icon, icons) in [
+            (format!("image:{POCHI}"), vec![mike()]),
+            (format!("image:{MIKE}"), vec![]),
+            (format!("line:{MIKE}"), vec![mike()]),
+        ] {
+            let outline =
+                Outline::new(vec![with_icon(todo(1, None, 0, "Groceries", false), &icon)]);
+            assert_eq!(
+                tree(&outline, None, &ALL, &icons, PLAIN),
+                "Home\n1 [ ] └── Groceries",
+                "{icon}"
+            );
+            assert_eq!(
+                row(&outline, outline.get(1).unwrap(), &icons, PLAIN),
+                "1 [ ] Groceries",
+                "{icon}"
+            );
+        }
+    }
+
+    #[test]
+    fn dims_the_image_name_of_a_finished_todo_like_an_emoji_so_the_row_still_reads_as_done() {
+        let outline = Outline::new(vec![with_icon(
+            todo(1, None, 0, "ミケの予防接種", true),
+            &format!("image:{MIKE}"),
+        )]);
+
+        let shown = tree(&outline, None, &ALL, &[mike()], COLOR);
+        assert!(
+            shown.ends_with("\x1b[2m[ミケ] ミケの予防接種\x1b[0m"),
+            "{shown:?}"
+        );
+    }
+
+    #[test]
+    fn replaces_control_characters_in_image_names_too_so_a_stored_name_cannot_drive_the_terminal() {
+        let icons = [Icon {
+            id: MIKE.into(),
+            name: "ミケ\u{1b}[2J\u{202e}".into(),
+        }];
+        let outline = Outline::new(vec![with_icon(
+            todo(1, None, 0, "Milk", false),
+            &format!("image:{MIKE}"),
+        )]);
+
+        assert_eq!(
+            row(&outline, outline.get(1).unwrap(), &icons, PLAIN),
+            "1 [ ] [ミケ\u{FFFD}[2J\u{FFFD}] Milk"
         );
     }
 

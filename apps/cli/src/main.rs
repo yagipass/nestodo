@@ -19,7 +19,7 @@ use error::Error;
 use http::{Http, is_loopback};
 use outline::{Move, Outline, Removal};
 use store::{Kind, SystemStore, TokenStore};
-use todo::{Style, Todo, View};
+use todo::{Icon, Style, Todo, View};
 
 #[derive(Parser)]
 #[command(
@@ -237,7 +237,9 @@ fn todos(command: Command, api: &mut Api, style: Style) -> Result<(), Error> {
             if json {
                 println!("{}", todo::json(&outline, start, &view));
             } else {
-                println!("{}", todo::tree(&outline, start, &view, style));
+                let mut images = Images::default();
+                let icons = images.for_todos(api, &todo::listed(&outline, start, &view));
+                println!("{}", todo::tree(&outline, start, &view, icons, style));
             }
         }
         Command::Show { id } => {
@@ -268,7 +270,7 @@ fn todos(command: Command, api: &mut Api, style: Style) -> Result<(), Error> {
             };
             let created =
                 api.create(title.trim(), parent, index, icon.as_deref().map(str::trim))?;
-            placed(&outline, &created, style);
+            placed(api, &outline, &created, style);
         }
         Command::Mv(args) => {
             let mut outline = Outline::new(api.list()?);
@@ -315,9 +317,12 @@ fn change(
     for &id in ids {
         outline.get(id)?;
     }
+    let mut images = Images::default();
     for &id in ids {
         outline.update(apply(api, id)?);
-        println!("{}", todo::row(&outline, outline.get(id)?, style));
+        let todo = outline.get(id)?;
+        let icons = images.for_todos(api, &[todo]);
+        println!("{}", todo::row(&outline, todo, icons, style));
     }
     Ok(())
 }
@@ -325,10 +330,13 @@ fn change(
 fn complete(api: &mut Api, ids: &[Id], recursive: bool, style: Style) -> Result<(), Error> {
     let mut outline = Outline::new(api.list()?);
     outline.check_completions(ids, recursive)?;
+    let mut images = Images::default();
     for &id in ids {
         outline.update(api.set_completed(id, true)?);
         outline.complete_under(id);
-        println!("{}", todo::row(&outline, outline.get(id)?, style));
+        let todo = outline.get(id)?;
+        let icons = images.for_todos(api, &[todo]);
+        println!("{}", todo::row(&outline, todo, icons, style));
     }
     Ok(())
 }
@@ -341,20 +349,31 @@ fn shift(
 ) -> Result<(), Error> {
     let mut outline = Outline::new(api.list()?);
     let step = plan(&mut outline, id)?;
-    placed(
-        &outline,
-        &api.move_to(step.id, step.parent, step.index)?,
-        style,
-    );
+    let moved = api.move_to(step.id, step.parent, step.index)?;
+    placed(api, &outline, &moved, style);
     Ok(())
 }
 
-fn placed(outline: &Outline, todo: &Todo, style: Style) {
-    println!("{}", todo::row(outline, todo, style));
+fn placed(api: &mut Api, outline: &Outline, todo: &Todo, style: Style) {
+    let mut images = Images::default();
+    let icons = images.for_todos(api, &[todo]);
+    println!("{}", todo::row(outline, todo, icons, style));
     println!(
         "{}",
         style.dim(&format!("  under {}", outline.path(todo.parent_id)))
     );
+}
+
+#[derive(Default)]
+struct Images(Option<Vec<Icon>>);
+
+impl Images {
+    fn for_todos(&mut self, api: &mut Api, todos: &[&Todo]) -> &[Icon] {
+        if self.0.is_none() && todos.iter().copied().any(todo::has_image) {
+            self.0 = Some(api.icons().unwrap_or_default());
+        }
+        self.0.as_deref().unwrap_or_default()
+    }
 }
 
 #[cfg(test)]

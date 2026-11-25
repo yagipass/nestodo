@@ -604,6 +604,211 @@ fn lists_icons_before_titles_but_not_typed_ones_it_cannot_draw_while_json_passes
     );
 }
 
+const MIKE: &str = "3f6c2a1e-8b4d-4c2a-9e7f-1a2b3c4d5e6f";
+const POCHI: &str = "9d1e7b20-5a3c-4f6e-8b2d-0c4a6e8f1b3d";
+const DELETED: &str = "0b7e5c3a-1d2f-4e6a-9c8b-7a5d3f1e2c4b";
+
+fn image(id: &str) -> String {
+    format!("image:{id}")
+}
+
+fn icon_list(server: &mut ServerGuard, requests: usize) -> Mock {
+    api(server, "GET", "/api/v1/icons")
+        .with_body(
+            json!({ "icons": [
+                { "id": MIKE, "name": "ミケ", "url": format!("/api/v1/icons/{MIKE}/image") },
+                { "id": POCHI, "name": "ポチ", "url": format!("/api/v1/icons/{POCHI}/image") },
+            ]})
+            .to_string(),
+        )
+        .expect(requests)
+        .create()
+}
+
+#[test]
+fn lists_an_image_icon_by_its_name_where_an_emoji_goes_and_nothing_for_one_deleted_elsewhere() {
+    let mut server = server();
+    listing(
+        &mut server,
+        json!([
+            with_icon(item(1, None, 0, "Pets", false), "🐈"),
+            with_icon(item(2, Some(1), 0, "ミケの予防接種", false), &image(MIKE)),
+            with_icon(item(3, Some(1), 1, "ポチの散歩", true), &image(POCHI)),
+            with_icon(item(4, None, 1, "Old photo", false), &image(DELETED)),
+        ]),
+    );
+    let icons = icon_list(&mut server, 1);
+
+    let output = nestodo(&server, &["list"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    icons.assert();
+    assert_eq!(
+        stdout(&output),
+        "Home\n\
+         1 [ ] ├── 🐈 Pets  1/2\n\
+         2 [ ] │   ├── [ミケ] ミケの予防接種\n\
+         3 [x] │   └── [ポチ] ポチの散歩\n\
+         4 [ ] └── Old photo\n"
+    );
+}
+
+#[test]
+fn asks_for_the_icon_list_only_when_a_printed_row_has_an_image_so_other_listings_cost_no_extra_request()
+ {
+    let mut server = server();
+    listing(
+        &mut server,
+        json!([
+            item(1, None, 0, "Pets", false),
+            with_icon(item(2, Some(1), 0, "ミケの予防接種", false), &image(MIKE)),
+            with_icon(item(3, None, 1, "Groceries", false), "🛒"),
+            item(4, Some(3), 0, "Milk", false),
+        ]),
+    );
+    let icons = icon_list(&mut server, 0);
+
+    for args in [&["list", "3"][..], &["list", "-d", "1"], &["show", "2"]] {
+        let output = nestodo(&server, args);
+        assert!(output.status.success(), "{args:?}: {}", stderr(&output));
+    }
+    icons.assert();
+}
+
+#[test]
+fn json_gives_scripts_the_image_icon_as_stored_without_asking_for_names_it_does_not_print() {
+    let mut server = server();
+    listing(
+        &mut server,
+        json!([with_icon(
+            item(2, None, 0, "ミケの予防接種", false),
+            &image(MIKE)
+        )]),
+    );
+    let icons = icon_list(&mut server, 0);
+
+    let output = nestodo(&server, &["list", "--json"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    icons.assert();
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout(&output)).unwrap(),
+        json!([
+            { "id": 2, "title": "ミケの予防接種", "icon": image(MIKE), "completed": false, "collapsed": false, "children": [] },
+        ])
+    );
+}
+
+#[test]
+fn still_lists_the_todos_without_image_names_when_the_icon_list_fails_as_on_an_older_server() {
+    for (status, body) in [
+        (404, r#"{"error":"not_found","message":"Not found"}"#),
+        (500, ""),
+    ] {
+        let mut server = server();
+        listing(
+            &mut server,
+            json!([
+                with_icon(item(1, None, 0, "ミケの予防接種", false), &image(MIKE)),
+                with_icon(item(2, None, 1, "Groceries", false), "🛒"),
+            ]),
+        );
+        let icons = api(&mut server, "GET", "/api/v1/icons")
+            .with_status(status)
+            .with_body(body)
+            .create();
+
+        let output = nestodo(&server, &["list"]);
+
+        assert!(output.status.success(), "{status}: {}", stderr(&output));
+        icons.assert();
+        assert_eq!(
+            stdout(&output),
+            "Home\n1 [ ] ├── ミケの予防接種\n2 [ ] └── 🛒 Groceries\n",
+            "{status}"
+        );
+        assert_eq!(stderr(&output), "", "{status}");
+    }
+}
+
+#[test]
+fn shows_image_names_on_every_row_a_change_prints_with_one_icon_list_request_for_all_of_them() {
+    let mut server = server();
+    listing(
+        &mut server,
+        json!([
+            with_icon(item(1, None, 0, "ミケの予防接種", false), &image(MIKE)),
+            with_icon(item(2, None, 1, "ポチの散歩", false), &image(POCHI)),
+        ]),
+    );
+    let done = [(1, 0, "ミケの予防接種", MIKE), (2, 1, "ポチの散歩", POCHI)].map(
+        |(id, position, title, icon)| {
+            patch(
+                &mut server,
+                id,
+                json!({ "completed": true }),
+                json!({ "todo": with_icon(item(id, None, position, title, true), &image(icon)) })
+                    .to_string(),
+            )
+        },
+    );
+    let icons = icon_list(&mut server, 1);
+
+    let output = nestodo(&server, &["done", "1", "2"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    for mock in done {
+        mock.assert();
+    }
+    icons.assert();
+    assert_eq!(
+        stdout(&output),
+        "1 [x] [ミケ] ミケの予防接種\n2 [x] [ポチ] ポチの散歩\n"
+    );
+}
+
+#[test]
+fn shows_the_image_name_after_an_edit_or_a_move_and_never_sends_the_icon_back() {
+    let mut server = server();
+    listing(
+        &mut server,
+        json!([
+            item(1, None, 0, "Pets", false),
+            with_icon(item(2, None, 1, "ミケの予防接種", false), &image(MIKE)),
+        ]),
+    );
+    let edit = patch(
+        &mut server,
+        2,
+        json!({ "title": "ミケのワクチン" }),
+        json!({ "todo": with_icon(item(2, None, 1, "ミケのワクチン", false), &image(MIKE)) })
+            .to_string(),
+    );
+    let indent = patch(
+        &mut server,
+        2,
+        json!({ "parentId": 1, "index": 0 }),
+        json!({ "todo": with_icon(item(2, Some(1), 0, "ミケの予防接種", false), &image(MIKE)) })
+            .to_string(),
+    );
+    let icons = icon_list(&mut server, 2);
+
+    let output = nestodo(&server, &["edit", "2", "--title", "ミケのワクチン"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "2 [ ] [ミケ] ミケのワクチン\n");
+
+    let output = nestodo(&server, &["indent", "2"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "2 [ ] [ミケ] ミケの予防接種\n  under Home › Pets\n"
+    );
+
+    edit.assert();
+    indent.assert();
+    icons.assert();
+}
+
 #[test]
 fn adds_a_todo_with_its_icon_in_one_request_and_shows_the_icon_before_the_title() {
     let mut server = server();
