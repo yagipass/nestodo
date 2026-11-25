@@ -291,6 +291,12 @@ export function setIcon(outline: Outline, key: string, icon: string | null): Cha
   };
 }
 
+export function withoutIcon(outline: Outline, icon: string): Outline {
+  const using = Object.values(outline).filter((item) => item.icon === icon);
+  if (using.length === 0) return outline;
+  return { ...outline, ...Object.fromEntries(using.map((item) => [item.key, { ...item, icon: null }])) };
+}
+
 export function remove(outline: Outline, key: string): Change {
   const parent = parentOf(outline, key)!;
   const removed = subtree(outline, key);

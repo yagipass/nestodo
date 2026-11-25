@@ -1,4 +1,4 @@
-import { isImageIconId } from "./image-icons";
+import { isImageIconId, type ImageIcon } from "./image-icons";
 
 export const MAX_ICON_LENGTH = 32;
 
@@ -26,6 +26,8 @@ export function isIcon(value: string) {
 
 const IMAGE = "image:";
 
+export type ShownIcon = { emoji: string } | { image: ImageIcon };
+
 export function imageIcon(id: string) {
   return `${IMAGE}${id}`;
 }
@@ -40,6 +42,10 @@ export function isTodoIcon(value: string) {
   return isIcon(value) || imageIdOf(value) !== null;
 }
 
-export function shownIcon(icon: string | null) {
-  return icon !== null && !TYPED.test(icon) ? icon : null;
+export function shownIcon(icon: string | null, images: readonly ImageIcon[]): ShownIcon | null {
+  if (icon === null) return null;
+  if (!TYPED.test(icon)) return { emoji: icon };
+  const id = imageIdOf(icon);
+  const image = id === null ? undefined : images.find((candidate) => candidate.id === id);
+  return image ? { image } : null;
 }

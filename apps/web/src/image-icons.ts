@@ -3,6 +3,7 @@ import { hasUnsafeCharacters } from "./profiles";
 export const MAX_IMAGE_ICONS = 50;
 export const MAX_IMAGE_NAME_LENGTH = 30;
 export const MAX_IMAGE_BYTES = 128 * 1024;
+export const IMAGE_ICON_SIZE = 128;
 
 export type ImageIcon = { id: string; name: string; url: string };
 
@@ -21,4 +22,13 @@ export function imageNameProblem(name: string | null) {
   if (name.length > MAX_IMAGE_NAME_LENGTH) return `The name must be ${MAX_IMAGE_NAME_LENGTH} characters or fewer`;
   if (hasUnsafeCharacters(name)) return "The name cannot contain control or invisible characters";
   return null;
+}
+
+export function nameFromFile(fileName: string) {
+  let name = "";
+  for (const char of fileName.replace(/\.[^.]*$/, "").normalize("NFC").trim()) {
+    if (name.length + char.length > MAX_IMAGE_NAME_LENGTH) break;
+    name += char;
+  }
+  return name.trim();
 }

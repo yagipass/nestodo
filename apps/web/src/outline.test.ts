@@ -23,6 +23,7 @@ import {
   toggleDone,
   undoFor,
   visibleRows,
+  withoutIcon,
   type Change,
   type Outline,
 } from "./outline";
@@ -178,6 +179,22 @@ describe("setIcon", () => {
   it("does nothing when the same icon is picked again, so it adds no undo step and no request", () => {
     const outline = fromTodos([todo(1, "groceries", null, { icon: "🛒" })]);
     expect(setIcon(outline, "t1", "🛒")).toBeNull();
+  });
+});
+
+describe("withoutIcon", () => {
+  const cat = "image:3f2a9c1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b";
+
+  it("takes a deleted image off every row that showed it, matching what the server did, and leaves other icons alone", () => {
+    const outline = fromTodos([todo(1, "vet", null, { icon: cat }), todo(2, "food", 1, { icon: cat }), todo(3, "groceries", null, { icon: "🛒" })]);
+    const next = withoutIcon(outline, cat);
+    expect([next.t1.icon, next.t2.icon, next.t3.icon]).toEqual([null, null, "🛒"]);
+    expect(next.t1.title).toBe("vet");
+  });
+
+  it("returns the same outline when no row used the image, so nothing is redrawn", () => {
+    const outline = fromTodos([todo(1, "groceries", null, { icon: "🛒" })]);
+    expect(withoutIcon(outline, cat)).toBe(outline);
   });
 });
 

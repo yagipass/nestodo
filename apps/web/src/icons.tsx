@@ -36,6 +36,7 @@ const SHAPES = {
   ),
   signOut: <path d="M10 4H7.5A3.5 3.5 0 0 0 4 7.5v9A3.5 3.5 0 0 0 7.5 20H10M15 8l4 4-4 4M19 12h-9" />,
   expand: <path d="M9.5 6.5 15 12l-5.5 5.5" />,
+  back: <path d="M14.5 6.5 9 12l5.5 5.5" />,
   up: <path d="M6.5 14.5 12 9l5.5 5.5" />,
   down: <path d="M6.5 9.5 12 15l5.5-5.5" />,
   done: <rect x="4" y="4" width="16" height="16" rx="5" />,
