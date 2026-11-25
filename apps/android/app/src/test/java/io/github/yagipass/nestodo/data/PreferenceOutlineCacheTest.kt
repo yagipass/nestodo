@@ -40,14 +40,15 @@ class PreferenceOutlineCacheTest {
             listOf(
                 Todo(1, null, 0, "Groceries", collapsed = true),
                 Todo(2, 1, 0, "Milk", completedAt = "2026-11-13 09:00:00", commentCount = 2),
-                Todo(4, null, 1, "Dentist"),
+                Todo(4, null, 1, "Dentist", icon = "\uD83E\uDDB7"),
+                Todo(5, null, 2, "Bank", icon = "line:bank"),
             )
         )
 
     private fun TestScope.cache() = PreferenceOutlineCache(preferenceStore(folder), keystore)
 
     @Test
-    fun `saved todos come back as they were, so the next launch shows the same order, ticks, folds and comment counts`() =
+    fun `saved todos come back as they were, so the next launch shows the same order, ticks, folds, icons and comment counts`() =
         runTest {
             val store = preferenceStore(folder)
             PreferenceOutlineCache(store, keystore).save("nestodo.example.com", outline)

@@ -361,6 +361,7 @@ fun OutlineScreen(
     state.deleting?.let { DeleteDialog(state, it.key, viewModel) }
     state.completing?.let { CompleteDialog(state, it.key, viewModel) }
     state.comments?.let { CommentSheet(state, it, viewModel, onOpenLink) }
+    state.choosingIcon?.let { IconPicker(state, it, viewModel) }
 }
 
 @Composable
@@ -857,6 +858,11 @@ private fun OutlineItem(
         viewModel.openComments(key)
     }
 
+    fun openIconPicker() {
+        viewModel.openIconPicker(key)
+        focusManager.clearFocus()
+    }
+
     LaunchedEffect(revision, row.title) { title.follow(row.title) }
     LaunchedEffect(title) { snapshotFlow { title.typed() }.collect { if (focused) sendTitle() } }
     LaunchedEffect(titleScroll) { titleScroll.follow(title.state) { focused } }
@@ -895,6 +901,24 @@ private fun OutlineItem(
     ) {
         Spacer(Modifier.width(24.dp * row.depth))
         Bullet(row, enabled = !readOnly) { viewModel.toggleCollapsed(key) }
+        TodoIcon(
+            row.icon,
+            muted = row.completed,
+            modifier =
+                Modifier.width(30.dp)
+                    .height(RowHeight)
+                    .focusProperties { canFocus = false }
+                    .clickable(
+                        interactionSource = null,
+                        indication = ripple(bounded = false, radius = 18.dp),
+                        enabled = !readOnly,
+                        role = Role.Button,
+                        onClick = ::openIconPicker,
+                    )
+                    .clearAndSetSemantics {
+                        contentDescription = "Change icon of ${row.title.ifEmpty { "empty item" }}"
+                    },
+        )
         Box(Modifier.weight(1f).height(RowHeight)) {
             InterceptPlatformTextInput(interceptor) {
                 BasicTextField(
@@ -915,7 +939,14 @@ private fun OutlineItem(
                             }
                             .onPreviewKeyEvent {
                                 sendTitle()
-                                outlineKey(it, title.state, key, viewModel, ::openComments)
+                                outlineKey(
+                                    it,
+                                    title.state,
+                                    key,
+                                    viewModel,
+                                    ::openComments,
+                                    ::openIconPicker,
+                                )
                             }
                             .semantics { contentDescription = "Level ${row.depth + 1}" },
                     enabled = !readOnly,
@@ -983,6 +1014,7 @@ private fun OutlineItem(
                 )
             }
         }
+        IconChip(row, enabled = !readOnly, onClick = ::openIconPicker)
         CommentChip(row, enabled = !readOnly, onClick = ::openComments)
     }
 }
@@ -1059,6 +1091,36 @@ internal fun Bullet(row: OutlineRow, enabled: Boolean, onToggle: () -> Unit) {
                 drawCircle(accent, radius = 4.dp.toPx())
             }
         }
+    }
+}
+
+@Composable
+private fun IconChip(row: OutlineRow, enabled: Boolean, onClick: () -> Unit) {
+    val name = row.title.ifEmpty { "empty item" }
+    Box(
+        Modifier.height(RowHeight)
+            .widthIn(min = 48.dp)
+            .focusProperties { canFocus = false }
+            .clickable(
+                interactionSource = null,
+                indication = ripple(bounded = false, radius = 22.dp),
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .semantics {
+                contentDescription =
+                    if (row.icon == null) "Set icon for $name" else "Change icon of $name"
+            }
+            .padding(horizontal = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            NestodoIcons.Smiley,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+            modifier = Modifier.size(18.dp),
+        )
     }
 }
 
@@ -1190,18 +1252,26 @@ private fun ToolSeparator() {
 private fun isUndo(event: KeyEvent): Boolean =
     event.key == Key.Z && event.isCtrlPressed && !event.isShiftPressed && !event.isAltPressed
 
+private fun isIconKey(event: KeyEvent): Boolean =
+    event.key == Key.E && event.isCtrlPressed && event.isShiftPressed && !event.isAltPressed
+
 private fun outlineKey(
     event: KeyEvent,
     value: TextFieldState,
     key: Long,
     viewModel: TodoViewModel,
     openComments: () -> Unit,
+    openIconPicker: () -> Unit,
 ): Boolean {
     val down = event.type == KeyEventType.KeyDown
     val vertical = event.key == Key.DirectionUp || event.key == Key.DirectionDown
     return when {
         isUndo(event) -> {
             if (down && value.composition == null) viewModel.undo()
+            true
+        }
+        isIconKey(event) -> {
+            if (down && value.composition == null) openIconPicker()
             true
         }
         event.key == Key.Enter || event.key == Key.NumPadEnter -> {

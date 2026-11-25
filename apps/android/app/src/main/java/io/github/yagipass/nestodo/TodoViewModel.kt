@@ -50,11 +50,13 @@ import io.github.yagipass.nestodo.domain.delete
 import io.github.yagipass.nestodo.domain.deleteBackward
 import io.github.yagipass.nestodo.domain.enter
 import io.github.yagipass.nestodo.domain.indent
+import io.github.yagipass.nestodo.domain.isIcon
 import io.github.yagipass.nestodo.domain.moveDown
 import io.github.yagipass.nestodo.domain.moveTo
 import io.github.yagipass.nestodo.domain.moveUp
 import io.github.yagipass.nestodo.domain.outdent
 import io.github.yagipass.nestodo.domain.outlineOf
+import io.github.yagipass.nestodo.domain.setIcon
 import io.github.yagipass.nestodo.domain.singleLine
 import io.github.yagipass.nestodo.domain.toggleCollapsed
 import io.github.yagipass.nestodo.domain.toggleCompleted
@@ -148,6 +150,8 @@ data class CommentsState(
         get() = entries.any { it !is TimelineItem.Event }
 }
 
+data class ChoosingIcon(val key: Long, val returnTo: Caret?)
+
 data class TodoUiState(
     val auth: AuthState = AuthState.Checking,
     val loginError: String? = null,
@@ -167,6 +171,7 @@ data class TodoUiState(
     val moving: Caret? = null,
     val deleting: Caret? = null,
     val completing: Caret? = null,
+    val choosingIcon: ChoosingIcon? = null,
     val comments: CommentsState? = null,
     val revision: Long = 0,
     val canUndo: Boolean = false,
@@ -739,6 +744,27 @@ class TodoViewModel(
         _state.update { it.copy(completing = null, caret = completing) }
     }
 
+    fun openIconPicker(key: Long) {
+        val state = current
+        if (!state.loaded || key !in state.outline) return
+        val returnTo = Caret(key, cursor).takeIf { state.editing == key }
+        _state.update { it.copy(choosingIcon = ChoosingIcon(key, returnTo)) }
+    }
+
+    fun setIcon(icon: String?): Boolean {
+        val choosing = current.choosingIcon ?: return false
+        val value = icon?.trim()
+        if (value != null && !isIcon(value)) return false
+        closeIconPicker()
+        perform(current.outline.setIcon(choosing.key, value, choosing.returnTo), choosing.returnTo)
+        return true
+    }
+
+    fun closeIconPicker() {
+        val choosing = current.choosingIcon ?: return
+        _state.update { it.copy(choosingIcon = null, caret = choosing.returnTo ?: it.caret) }
+    }
+
     fun toggleCollapsed() = act { state, key -> state.outline.toggleCollapsed(key, cursor) }
 
     fun toggleCollapsed(key: Long) {
@@ -1203,6 +1229,7 @@ class TodoViewModel(
             is Change.Rename -> repository.rename(idOf(change.key), change.title)
             is Change.Complete -> repository.setCompleted(idOf(change.key), change.completed)
             is Change.Collapse -> repository.setCollapsed(idOf(change.key), change.collapsed)
+            is Change.SetIcon -> repository.setIcon(idOf(change.key), change.icon)
             is Change.Move ->
                 repository.move(idOf(change.key), change.parent?.let(::idOf), change.index)
             is Change.Delete ->
@@ -1230,6 +1257,7 @@ class TodoViewModel(
                 restored = false,
                 editing = state.editing?.takeIf { it in outline },
                 caret = null,
+                choosingIcon = state.choosingIcon?.takeIf { it.key in outline },
                 comments =
                     state.comments
                         ?.takeIf { it.key in outline }

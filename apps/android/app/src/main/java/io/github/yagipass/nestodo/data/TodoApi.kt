@@ -52,6 +52,8 @@ interface TodoRepository {
 
     suspend fun setCollapsed(id: Long, collapsed: Boolean): Todo
 
+    suspend fun setIcon(id: Long, icon: String?): Todo
+
     suspend fun move(id: Long, parentId: Long?, index: Int): Todo
 
     suspend fun delete(id: Long, recursive: Boolean)
@@ -136,6 +138,9 @@ class TodoApi(
 
     override suspend fun setCollapsed(id: Long, collapsed: Boolean): Todo =
         patch(id, buildJsonObject { put("collapsed", collapsed) })
+
+    override suspend fun setIcon(id: Long, icon: String?): Todo =
+        patch(id, buildJsonObject { put("icon", icon) })
 
     override suspend fun move(id: Long, parentId: Long?, index: Int): Todo =
         patch(

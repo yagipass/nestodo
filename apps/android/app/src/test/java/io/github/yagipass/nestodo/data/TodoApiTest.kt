@@ -146,6 +146,42 @@ class TodoApiTest {
         }
 
     @Test
+    fun `setting an icon sends only the icon, so it cannot undo an edit made on another device`() =
+        runTest {
+            respond(200, """{"todo":$todoJson}""")
+            api().setIcon(3, "\uD83D\uDED2")
+            val request = server.takeRequest()
+            assertEquals("PATCH /api/v1/todos/3", "${request.method} ${request.url.encodedPath}")
+            assertEquals(mapOf("icon" to JsonPrimitive("\uD83D\uDED2")), request.json())
+        }
+
+    @Test
+    fun `removing an icon sends an explicit null, because a PATCH without the icon keeps the old one`() =
+        runTest {
+            respond(200, """{"todo":$todoJson}""")
+            api().setIcon(3, null)
+            assertEquals(mapOf("icon" to JsonNull), server.takeRequest().json())
+        }
+
+    @Test
+    fun `a todo's icon is read from the server, and a todo from a server without icons has none`() =
+        runTest {
+            respond(
+                200,
+                """{"todos":[
+                    {"id":1,"parentId":null,"position":0,"title":"milk","completedAt":null,"collapsed":false,"icon":"\uD83E\uDD5B"},
+                    {"id":2,"parentId":null,"position":1,"title":"bank","completedAt":null,"collapsed":false,"icon":"line:bank"},
+                    {"id":3,"parentId":null,"position":2,"title":"eggs","completedAt":null,"collapsed":false,"icon":null},
+                    {"id":4,"parentId":null,"position":3,"title":"tax","completedAt":null,"collapsed":false}
+                ]}""",
+            )
+            assertEquals(
+                listOf("\uD83E\uDD5B", "line:bank", null, null),
+                api().list().map { it.icon },
+            )
+        }
+
+    @Test
     fun `a todo's comment count is read from the server, and a todo sent without one counts none`() =
         runTest {
             respond(
