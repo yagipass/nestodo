@@ -14,6 +14,8 @@ pub struct Todo {
     pub collapsed: bool,
     #[serde(default)]
     pub comment_count: u64,
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

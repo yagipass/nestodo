@@ -146,7 +146,9 @@ mod tests {
 
     use super::*;
     use crate::outline::fixtures::{Mark, outline_of, shown, todo, update_op};
-    use crate::outline::{Outline, ROOT, indent, remove, rename, set_comments, split, toggle_done};
+    use crate::outline::{
+        Outline, ROOT, indent, remove, rename, set_comments, set_icon, split, toggle_done,
+    };
     use crate::wire::Todo;
 
     fn row(id: u64, title: &str) -> Todo {
@@ -469,6 +471,52 @@ mod tests {
 
         assert_eq!(history.undo(&renamed_on_phone), None);
         assert_eq!(history.undo(&added.outline), None);
+    }
+
+    #[test]
+    fn takes_back_setting_an_icon_in_one_step_leaving_the_row_without_one_as_before() {
+        let start = start();
+        let mut history = UndoHistory::with_clock(|| Duration::ZERO);
+        let iconed = set_icon(&start, "t1", Some("\u{1F95B}")).unwrap();
+        history.record(&start, &iconed, Some(at("t1", 4)));
+
+        let undone = history.undo(&iconed.outline).unwrap();
+
+        assert_eq!(undone.outline, start);
+        assert_eq!(
+            undone.ops,
+            [Op::Icon {
+                key: "t1".into(),
+                icon: None
+            }]
+        );
+        assert_eq!(undone.focus, Some(at("t1", 4)));
+        assert_eq!(history.undo(&undone.outline), None);
+    }
+
+    #[test]
+    fn forgets_every_step_once_an_icon_was_changed_elsewhere_so_undo_never_overwrites_the_icon_picked_on_another_device()
+     {
+        let start = start();
+        let mut history = UndoHistory::with_clock(|| Duration::ZERO);
+        let added = split(&start, "t2", 4, "n1", &all(&start));
+        history.record(&start, &added, None);
+        let iconed_on_phone = Outline::from_todos(
+            &[
+                row(1, "milk").iconed("\u{1F95B}"),
+                row(2, "eggs"),
+                row(3, ""),
+            ],
+            |id| {
+                if id == 3 {
+                    "n1".to_owned()
+                } else {
+                    format!("t{id}")
+                }
+            },
+        );
+
+        assert_eq!(history.undo(&iconed_on_phone), None);
     }
 
     #[test]

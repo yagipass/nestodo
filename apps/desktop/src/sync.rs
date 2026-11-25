@@ -299,6 +299,9 @@ impl Sync {
                 self.todo_path(key)?,
                 Some(json!({ "title": title })),
             ),
+            Op::Icon { key, icon } => {
+                ("PATCH", self.todo_path(key)?, Some(json!({ "icon": icon })))
+            }
             Op::Move { key, parent, index } => {
                 let path = self.todo_path(key)?;
                 let parent = self.parent_id(parent)?;
@@ -330,7 +333,7 @@ impl Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::outline::fixtures::{create_op, delete_op, move_op, title_op, update_op};
+    use crate::outline::fixtures::{create_op, delete_op, icon_op, move_op, title_op, update_op};
 
     struct Server {
         calls: Vec<Request>,
@@ -520,6 +523,46 @@ mod tests {
             ]
         );
         assert!(!h.sync.failed);
+    }
+
+    #[test]
+    fn sends_only_the_icon_when_it_changes_and_null_when_it_is_removed_so_no_other_field_is_overwritten()
+     {
+        let mut h = Harness::new(&[("t1", 1)], Server::ok());
+
+        h.apply(&[icon_op("t1", Some("\u{1F6D2}"))]);
+        h.apply(&[icon_op("t1", None)]);
+        h.run_all_timers();
+
+        assert_eq!(
+            h.server.calls,
+            [
+                request(
+                    "PATCH",
+                    "/api/v1/todos/1",
+                    Some(json!({ "icon": "\u{1F6D2}" }))
+                ),
+                request("PATCH", "/api/v1/todos/1", Some(json!({ "icon": null }))),
+            ]
+        );
+    }
+
+    #[test]
+    fn never_sends_the_icon_along_with_a_title_or_a_completion_so_a_newer_kind_of_icon_set_elsewhere_is_not_overwritten()
+     {
+        let mut h = Harness::new(&[("t1", 1)], Server::ok());
+
+        h.title("t1", "oat milk");
+        h.apply(&[update_op("t1", Some(true), None)]);
+        h.run_all_timers();
+
+        assert!(
+            h.server
+                .bodies()
+                .iter()
+                .flatten()
+                .all(|body| body.get("icon").is_none())
+        );
     }
 
     #[test]

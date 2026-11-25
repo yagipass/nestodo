@@ -16,8 +16,8 @@ use nestodo_desktop::error::Error;
 use nestodo_desktop::outline::{
     END, Focus, Guide, Key, Outline, ROOT, Row, append, caret_in, destinations, guides, indent,
     key_for, merge_into_previous, move_by, move_to, next_hit, open_under, outdent, parent_of,
-    remove, rename, search_hits, set_collapsed, set_comments, split, subtree, toggle_done,
-    visible_rows,
+    remove, rename, search_hits, set_collapsed, set_comments, set_icon, split, subtree,
+    toggle_done, visible_rows,
 };
 use nestodo_desktop::sync::Sync;
 use nestodo_desktop::title::{link_label, link_target, tokens};
@@ -27,12 +27,14 @@ use nestodo_desktop::wire::Todo;
 
 use crate::ui::avatar::Avatar;
 use crate::ui::backend::Backend;
+use crate::ui::icon_picker::{IconEvent, IconPicker};
 use crate::ui::icons::Icon;
 use crate::ui::move_picker::{MovePicker, PickerEvent};
 use crate::ui::text_field::{
     Copy, FieldEvent, SelectAll, TextField, offset_from_utf16, offset_to_utf16,
 };
 use crate::ui::theme::{Theme, theme};
+use crate::ui::todo_icon::todo_icon;
 use crate::ui::widgets::{
     NAMED_TITLE_BAR_WIDTH, PAGE_WIDTH, Tooltip, icon, icon_button, kbd, modal, shadow,
 };
@@ -44,6 +46,7 @@ actions!(
         ToggleCollapse,
         DeleteRow,
         OpenMove,
+        OpenIcon,
         Complete,
         OpenComments,
         CloseComments,
@@ -88,6 +91,8 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-backspace", DeleteRow, title),
         KeyBinding::new("cmd-shift-m", OpenMove, title),
         KeyBinding::new("ctrl-shift-m", OpenMove, title),
+        KeyBinding::new("cmd-shift-e", OpenIcon, title),
+        KeyBinding::new("ctrl-shift-e", OpenIcon, title),
         KeyBinding::new("cmd-enter", Complete, title),
         KeyBinding::new("ctrl-enter", Complete, title),
         KeyBinding::new("shift-enter", OpenComments, title),
@@ -155,6 +160,8 @@ pub struct OutlineView {
     avatar: Option<Avatar>,
     moving: Option<Focus>,
     picker: Option<Entity<MovePicker>>,
+    choosing_icon: Option<Focus>,
+    icon_picker: Option<Entity<IconPicker>>,
     sync: Sync,
     history: UndoHistory,
     counter: u64,
@@ -397,6 +404,8 @@ impl OutlineView {
             avatar: None,
             moving: None,
             picker: None,
+            choosing_icon: None,
+            icon_picker: None,
             sync,
             history: UndoHistory::with_clock(move || clock.now().saturating_duration_since(start)),
             counter: 0,
@@ -431,7 +440,7 @@ impl OutlineView {
     }
 
     pub fn has_modal(&self) -> bool {
-        self.picker.is_some()
+        self.picker.is_some() || self.icon_picker.is_some()
     }
 
     fn rows(&self) -> Vec<Row> {
@@ -589,7 +598,7 @@ impl OutlineView {
     }
 
     fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sync.failed || self.picker.is_some() {
+        if self.sync.failed || self.has_modal() {
             return;
         }
         if let Some(change) = self.history.undo(&self.outline) {
@@ -814,6 +823,57 @@ impl OutlineView {
         cx.notify();
     }
 
+    fn open_icon(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sync.failed || self.has_modal() || !self.outline.contains(key) {
+            return;
+        }
+        let pos = match self.focused(cx) {
+            Some(here) if here.key == key => here.pos,
+            _ => END,
+        };
+        self.leave_editor(window, cx);
+        self.editing = None;
+        let current = self.outline.item(key).icon.clone();
+        let picker = cx.new(|cx| IconPicker::new(current, window, cx));
+        let subscription =
+            cx.subscribe_in(&picker, window, |this, _, event, window, cx| match event {
+                IconEvent::Chosen(icon) => this.choose_icon(icon.as_deref(), window, cx),
+                IconEvent::Dismissed => this.close_icon(window, cx),
+            });
+        self.subscriptions.push(subscription);
+        self.choosing_icon = Some(Focus {
+            key: key.to_owned(),
+            pos,
+        });
+        self.icon_picker = Some(picker);
+        cx.notify();
+    }
+
+    fn choose_icon(&mut self, icon: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.choosing_icon.take() else {
+            return;
+        };
+        self.icon_picker = None;
+        let change = self
+            .outline
+            .contains(&row.key)
+            .then(|| set_icon(&self.outline, &row.key, icon))
+            .flatten();
+        if !self.apply(change, Some(row.clone()), Some(row.clone()), window, cx) {
+            self.focus_row(row, window, cx);
+        }
+        cx.notify();
+    }
+
+    fn close_icon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.choosing_icon.take() else {
+            return;
+        };
+        self.icon_picker = None;
+        self.focus_row(row, window, cx);
+        cx.notify();
+    }
+
     fn on_title(&mut self, key: &str, title: &str, composing: bool, cx: &mut Context<Self>) {
         let next = rename(&self.outline, key, title);
         self.history.type_text(&self.outline, &next, key, composing);
@@ -1009,6 +1069,13 @@ impl OutlineView {
         self.open_move(here, window, cx);
     }
 
+    fn on_open_icon(&mut self, _: &OpenIcon, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(here) = self.focused(cx) else {
+            return;
+        };
+        self.open_icon(&here.key, window, cx);
+    }
+
     fn on_complete(&mut self, _: &Complete, window: &mut Window, cx: &mut Context<Self>) {
         let Some(here) = self.focused(cx) else { return };
         self.complete(&here.key, here.pos, window, cx);
@@ -1119,7 +1186,11 @@ impl OutlineView {
             return;
         };
         let item = self.outline.item(&key);
-        if item.title.is_empty() && item.comments == 0 && item.children.is_empty() {
+        if item.title.is_empty()
+            && item.comments == 0
+            && item.icon.is_none()
+            && item.children.is_empty()
+        {
             self.remove_row(&key, window, cx);
             return;
         }
@@ -1151,7 +1222,7 @@ impl OutlineView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.focus_handle.is_focused(window) || self.picker.is_some() {
+        if !self.focus_handle.is_focused(window) || self.has_modal() {
             return;
         }
         let keystroke = &event.keystroke;
@@ -1403,6 +1474,7 @@ impl OutlineView {
             colors.text
         };
         let group: SharedString = format!("row-{key}").into();
+        let name = self.name_of(&key);
         let weight = if has_children {
             FontWeight::SEMIBOLD
         } else {
@@ -1615,7 +1687,69 @@ impl OutlineView {
                 .into_any_element()
         };
 
+        let icon_slot = item
+            .icon
+            .as_deref()
+            .and_then(|value| todo_icon(value, 17., item.done))
+            .map(|glyph| {
+                let key = key.clone();
+                let selector_key = key.clone();
+                div()
+                    .id("icon")
+                    .debug_selector(move || format!("icon-{selector_key}"))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .size(px(26.))
+                    .mt(px(4.))
+                    .rounded(px(7.))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(colors.hover_strong_on_bg))
+                    .tooltip(Tooltip::text(format!("Change icon of {name}")))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_icon(&key, window, cx);
+                    }))
+                    .child(glyph)
+            });
+
         let title = div().flex().flex_col().flex_1().min_w_0().child(line);
+
+        let icon_button = {
+            let key = key.clone();
+            let selector_key = key.clone();
+            let label = if item.icon.is_some() {
+                format!("Change icon of {name}")
+            } else {
+                format!("Set icon for {name}")
+            };
+            div()
+                .id("icon-button")
+                .debug_selector(move || format!("set-icon-{selector_key}"))
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .h(px(28.))
+                .min_w(px(28.))
+                .px(px(5.))
+                .mt(px(3.))
+                .rounded(px(8.))
+                .cursor_pointer()
+                .hover(move |style| style.bg(colors.hover_strong_on_bg))
+                .when(!active, |button| {
+                    button
+                        .opacity(0.)
+                        .group_hover(group.clone(), |style| style.opacity(1.))
+                })
+                .tooltip(Tooltip::text(format!("{label} (Ctrl/\u{2318} \u{21e7} E)")))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_icon(&key, window, cx);
+                }))
+                .child(icon(Icon::AddEmoji, 17., colors.muted))
+        };
 
         let comment_button = {
             let key = key.clone();
@@ -1703,7 +1837,9 @@ impl OutlineView {
             })
             .children(guides)
             .child(marker)
+            .children(icon_slot)
             .child(title)
+            .child(icon_button)
             .child(comment_button)
             .child(check)
             .into_any_element()
@@ -1880,6 +2016,22 @@ impl Render for OutlineView {
                 .child(part)
         });
 
+        let icon_picker = self.icon_picker.clone().map(|picker| {
+            let backdrop = cx.entity().downgrade();
+            modal(
+                px(384.),
+                picker.into_any_element(),
+                move |window, cx| {
+                    backdrop
+                        .update(cx, |this, cx| this.close_icon(window, cx))
+                        .ok();
+                },
+                window,
+                cx,
+            )
+            .into_any_element()
+        });
+
         let thread = self.render_thread(window, cx);
         let picker = self.picker.clone().map(|picker| {
             let backdrop = cx.entity().downgrade();
@@ -1907,6 +2059,7 @@ impl Render for OutlineView {
             .on_action(cx.listener(Self::on_toggle_collapse))
             .on_action(cx.listener(Self::on_delete_row))
             .on_action(cx.listener(Self::on_open_move))
+            .on_action(cx.listener(Self::on_open_icon))
             .on_action(cx.listener(Self::on_complete))
             .on_action(cx.listener(Self::on_open_comments))
             .on_action(cx.listener(Self::on_close_comments))
@@ -1949,6 +2102,7 @@ impl Render for OutlineView {
             )
             .children(thread)
             .children(picker)
+            .children(icon_picker)
     }
 }
 

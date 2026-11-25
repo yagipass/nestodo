@@ -36,6 +36,7 @@ fn open<'a>(
         cx.set_global(Theme::light());
         cx.bind_keys(crate::ui::text_field::bindings());
         cx.bind_keys(crate::ui::move_picker::bindings());
+        cx.bind_keys(crate::ui::icon_picker::bindings());
         cx.bind_keys(bindings());
     });
     let todos = server.list().unwrap();
@@ -1234,6 +1235,289 @@ fn cmd_z_in_the_move_picker_leaves_the_outline_behind_it_alone(cx: &mut TestAppC
     assert!(view.read_with(cx, |view, _| view.picker.is_some()));
     cx.simulate_keystrokes("escape");
     assert!(view.read_with(cx, |view, _| view.picker.is_none()));
+}
+
+fn icon_picker_open(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> bool {
+    view.read_with(cx, |view, _| view.icon_picker.is_some())
+}
+
+fn last_sent(server: &FakeServer) -> Option<(&'static str, String, Option<serde_json::Value>)> {
+    server
+        .sent()
+        .pop()
+        .map(|request| (request.method, request.path, request.body))
+}
+
+#[gpui::test]
+fn cmd_shift_e_opens_the_icon_picker_and_a_chosen_emoji_is_saved_at_once_with_the_caret_back_in_the_title(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    focus(&view, cx, "Milk", 2);
+
+    cx.simulate_keystrokes("cmd-shift-e");
+    assert!(icon_picker_open(&view, cx));
+    assert!(cx.debug_bounds("remove-icon").is_none());
+    assert!(cx.debug_bounds("icon-choice-selected").is_none());
+    click_on(cx, "icon-choice-8");
+    settle(cx);
+
+    assert_eq!(
+        server.tree(),
+        "Groceries\n  Milk [icon: \u{1F6D2}]\n  Bread\nTrip"
+    );
+    assert_eq!(
+        last_sent(&server),
+        Some((
+            "PATCH",
+            "/api/v1/todos/2".into(),
+            Some(serde_json::json!({ "icon": "\u{1F6D2}" }))
+        ))
+    );
+    assert!(!icon_picker_open(&view, cx));
+    assert_eq!(focused(&view, cx), Some(("Milk".into(), 2)));
+}
+
+#[gpui::test]
+fn the_icon_sits_in_its_own_slot_before_the_title_level_with_it_and_clicking_it_opens_the_picker_with_it_marked(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Milk").icon("\u{1F95B}"),
+        seed("Bread"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+
+    let icon = cx.debug_bounds("icon-t1").expect("the icon was not drawn");
+    let title = cx.debug_bounds("title-t1").unwrap();
+    assert!(icon.right() <= title.left());
+    assert!((icon.center().y - title.center().y).abs() < px(0.5));
+    assert!(cx.debug_bounds("icon-t2").is_none());
+
+    click_on(cx, "icon-t1");
+
+    assert!(icon_picker_open(&view, cx));
+    assert_eq!(
+        cx.debug_bounds("icon-choice-selected"),
+        cx.debug_bounds("icon-choice-9")
+    );
+    assert!(cx.debug_bounds("remove-icon").is_some());
+}
+
+#[gpui::test]
+fn the_row_action_opens_the_picker_for_any_row_and_remove_icon_sends_null_so_the_icon_is_gone_everywhere(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Milk").icon("\u{1F95B}"),
+        seed("Bread"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+
+    click_on(cx, "set-icon-t1");
+    click_on(cx, "remove-icon");
+    settle(cx);
+
+    assert_eq!(server.tree(), "Milk\nBread");
+    assert_eq!(
+        last_sent(&server),
+        Some((
+            "PATCH",
+            "/api/v1/todos/1".into(),
+            Some(serde_json::json!({ "icon": null }))
+        ))
+    );
+    assert!(cx.debug_bounds("icon-t1").is_none());
+    assert_eq!(focused(&view, cx), Some(("Milk".into(), 4)));
+}
+
+#[gpui::test]
+fn a_typed_icon_from_a_later_release_is_never_drawn_but_still_counts_as_an_icon_so_backspace_keeps_it_and_it_can_be_removed(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Buy "),
+        seed("milk").icon("line:cart:green"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    assert!(cx.debug_bounds("icon-t2").is_none());
+
+    focus(&view, cx, "milk", 0);
+    cx.simulate_keystrokes("backspace");
+    settle(cx);
+    assert_eq!(server.tree(), "Buy \nmilk [icon: line:cart:green]");
+    assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
+
+    cx.simulate_keystrokes("cmd-shift-e");
+    click_on(cx, "remove-icon");
+    settle(cx);
+    assert_eq!(server.tree(), "Buy \nmilk");
+}
+
+#[gpui::test]
+fn backspace_never_joins_or_deletes_a_row_with_an_icon_so_the_icon_is_not_thrown_away(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Buy "),
+        seed("milk").icon("\u{1F95B}"),
+        seed("").icon("\u{1F6D2}"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    let before = server.tree();
+
+    focus(&view, cx, "milk", 0);
+    cx.simulate_keystrokes("backspace");
+    focus(&view, cx, "", 0);
+    cx.simulate_keystrokes("backspace");
+    settle(cx);
+
+    assert_eq!(server.tree(), before);
+    assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
+}
+
+#[gpui::test]
+fn enter_in_other_saves_one_typed_emoji_without_its_surrounding_spaces_and_refuses_anything_else_without_sending_it(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    focus(&view, cx, "Bread", 0);
+    cx.simulate_keystrokes("cmd-shift-e");
+
+    for refused in ["ab", "\u{2764}", "\u{1F6D2}\u{1F6D2}"] {
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_input(refused);
+        assert!(cx.debug_bounds("icon-refused").is_none());
+        cx.simulate_keystrokes("enter");
+        assert!(
+            cx.debug_bounds("icon-refused").is_some(),
+            "{refused:?} was not refused"
+        );
+        assert!(icon_picker_open(&view, cx));
+    }
+    settle(cx);
+    assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
+
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input(" \u{1F9B7} ");
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+
+    assert_eq!(
+        server.tree(),
+        "Groceries\n  Milk\n  Bread [icon: \u{1F9B7}]\nTrip"
+    );
+    assert!(!icon_picker_open(&view, cx));
+    assert_eq!(focused(&view, cx), Some(("Bread".into(), 0)));
+}
+
+#[gpui::test]
+fn escape_or_a_click_outside_closes_the_icon_picker_without_a_change_and_returns_to_where_the_caret_was(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    focus(&view, cx, "Milk", 2);
+
+    cx.simulate_keystrokes("cmd-shift-e escape");
+    assert!(!icon_picker_open(&view, cx));
+    assert_eq!(focused(&view, cx), Some(("Milk".into(), 2)));
+
+    cx.simulate_keystrokes("cmd-shift-e");
+    let outside = gpui::point(px(3.), px(3.));
+    cx.simulate_mouse_move(outside, None, gpui::Modifiers::none());
+    cx.simulate_click(outside, gpui::Modifiers::none());
+    settle(cx);
+
+    assert!(!icon_picker_open(&view, cx));
+    assert_eq!(focused(&view, cx), Some(("Milk".into(), 2)));
+    assert_eq!(server.sent(), [] as [nestodo_desktop::wire::Request; 0]);
+}
+
+#[gpui::test]
+fn cmd_z_takes_an_icon_change_back_in_one_step_restoring_the_old_icon_or_none_on_the_server(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Milk").icon("\u{1F95B}"),
+        seed("Bread"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+
+    focus(&view, cx, "Bread", 0);
+    cx.simulate_keystrokes("cmd-shift-e");
+    click_on(cx, "icon-choice-8");
+    settle(cx);
+    click_on(cx, "icon-t1");
+    click_on(cx, "icon-choice-0");
+    settle(cx);
+    assert_eq!(
+        server.tree(),
+        "Milk [icon: \u{1F3E0}]\nBread [icon: \u{1F6D2}]"
+    );
+
+    cx.simulate_keystrokes("cmd-z");
+    settle(cx);
+    assert_eq!(
+        server.tree(),
+        "Milk [icon: \u{1F95B}]\nBread [icon: \u{1F6D2}]"
+    );
+    cx.simulate_keystrokes("cmd-z");
+    settle(cx);
+    assert_eq!(server.tree(), "Milk [icon: \u{1F95B}]\nBread");
+}
+
+#[gpui::test]
+fn cmd_z_in_the_icon_picker_leaves_the_outline_behind_it_alone(cx: &mut TestAppContext) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    focus(&view, cx, "Trip", END);
+    cx.simulate_input(" to Kyoto");
+    settle(cx);
+
+    cx.simulate_keystrokes("cmd-shift-e");
+    cx.simulate_keystrokes("cmd-z");
+    settle(cx);
+
+    assert_eq!(server.tree(), "Groceries\n  Milk\n  Bread\nTrip to Kyoto");
+    assert!(icon_picker_open(&view, cx));
+}
+
+#[gpui::test]
+fn enter_keeps_the_icon_on_the_row_that_was_split_so_the_new_row_does_not_look_like_a_copy(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![seed("Book hotel").icon("\u{1F3E8}")]));
+    let (view, cx) = open(cx, &server, true);
+
+    focus(&view, cx, "Book hotel", 4);
+    cx.simulate_keystrokes("enter");
+    focus(&view, cx, "Book", 0);
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+
+    assert_eq!(server.tree(), "\nBook [icon: \u{1F3E8}]\n hotel");
+}
+
+#[gpui::test]
+fn cmd_z_after_deleting_a_row_brings_it_back_with_its_icon(cx: &mut TestAppContext) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Trip"),
+        seed("Hotel").under(1).icon("\u{1F3E8}"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    focus(&view, cx, "Hotel", 0);
+
+    cx.simulate_keystrokes("cmd-shift-backspace");
+    settle(cx);
+    assert_eq!(server.tree(), "Trip");
+    cx.simulate_keystrokes("cmd-z");
+    settle(cx);
+
+    assert_eq!(server.tree(), "Trip\n  Hotel [icon: \u{1F3E8}]");
+    assert!(cx.debug_bounds("icon-t2").is_some());
 }
 
 #[gpui::test]

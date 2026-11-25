@@ -20,6 +20,7 @@ struct Row {
     title: String,
     done: bool,
     collapsed: bool,
+    icon: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -92,6 +93,7 @@ pub struct Seed<'a> {
     pub comments: Vec<(&'a str, &'static str)>,
     pub done: bool,
     pub collapsed: bool,
+    pub icon: Option<&'a str>,
 }
 
 pub fn seed(title: &str) -> Seed<'_> {
@@ -101,10 +103,16 @@ pub fn seed(title: &str) -> Seed<'_> {
         comments: Vec::new(),
         done: false,
         collapsed: false,
+        icon: None,
     }
 }
 
-impl Seed<'_> {
+impl<'a> Seed<'a> {
+    pub fn icon(mut self, icon: &'a str) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
     pub fn under(mut self, parent: u64) -> Self {
         self.parent = Some(parent);
         self
@@ -151,6 +159,7 @@ impl FakeServer {
                     title: seed.title.to_string(),
                     done: seed.done,
                     collapsed: seed.collapsed,
+                    icon: seed.icon.map(str::to_string),
                 });
                 for (body, via) in seed.comments {
                     state.add_comment(id, body, via);
@@ -197,6 +206,9 @@ impl FakeServer {
         children.sort_by_key(|row| (row.position, row.id));
         for row in children {
             let mut line = format!("{}{}", "  ".repeat(depth), row.title);
+            if let Some(icon) = &row.icon {
+                let _ = write!(line, " [icon: {icon}]");
+            }
             if row.done {
                 line.push_str(" [done]");
             }
@@ -228,6 +240,7 @@ impl FakeServer {
                     completed_at: row.done.then(|| "2026-11-09 00:00:00".to_string()),
                     collapsed: row.collapsed,
                     comment_count: state.comments_of(row.id).count() as u64,
+                    icon: row.icon.clone(),
                 });
                 visit(state, Some(row.id), out);
             }
@@ -334,6 +347,7 @@ impl FakeServer {
                     title: body["title"].as_str().unwrap_or_default().to_string(),
                     done: false,
                     collapsed: false,
+                    icon: body["icon"].as_str().map(str::to_string),
                 });
                 let index = body["index"]
                     .as_u64()
@@ -354,6 +368,9 @@ impl FakeServer {
                 }
                 if let Some(collapsed) = body["collapsed"].as_bool() {
                     row.collapsed = collapsed;
+                }
+                if let Some(icon) = body.get("icon") {
+                    row.icon = icon.as_str().map(str::to_string);
                 }
                 let parent = row.parent;
                 let completed = body["completed"].as_bool();

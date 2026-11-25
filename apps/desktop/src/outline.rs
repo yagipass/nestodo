@@ -16,6 +16,7 @@ pub struct Item {
     pub key: Key,
     pub title: String,
     pub comments: u64,
+    pub icon: Option<String>,
     pub done: bool,
     pub collapsed: bool,
     pub children: Vec<Key>,
@@ -27,6 +28,7 @@ impl Item {
             key: key.to_owned(),
             title: title.to_owned(),
             comments: 0,
+            icon: None,
             done: false,
             collapsed: false,
             children: Vec::new(),
@@ -56,6 +58,7 @@ impl Outline {
                 done: todo.completed_at.is_some(),
                 collapsed: todo.collapsed,
                 comments: todo.comment_count,
+                icon: todo.icon.clone(),
                 ..Item::new(&key, &todo.title)
             };
             outline.items.insert(key, item);
@@ -132,6 +135,10 @@ pub enum Op {
         completed: Option<bool>,
         collapsed: Option<bool>,
     },
+    Icon {
+        key: Key,
+        icon: Option<String>,
+    },
     Move {
         key: Key,
         parent: Key,
@@ -156,6 +163,7 @@ impl Op {
             Op::Create { key, .. }
             | Op::Title { key, .. }
             | Op::Update { key, .. }
+            | Op::Icon { key, .. }
             | Op::Move { key, .. }
             | Op::Delete { key, .. }
             | Op::Restore { key, .. } => key,
@@ -411,6 +419,24 @@ pub fn set_comments(outline: &Outline, key: &str, comments: u64) -> Outline {
         item.comments = comments;
     }
     next
+}
+
+#[must_use]
+pub fn set_icon(outline: &Outline, key: &str, icon: Option<&str>) -> Option<Change> {
+    if outline.item(key).icon.as_deref() == icon {
+        return None;
+    }
+    let icon = icon.map(str::to_owned);
+    let mut next = outline.clone();
+    next.item_mut(key).icon.clone_from(&icon);
+    Some(Change {
+        outline: next,
+        ops: vec![Op::Icon {
+            key: key.to_owned(),
+            icon,
+        }],
+        focus: None,
+    })
 }
 
 #[must_use]
@@ -697,7 +723,12 @@ pub fn merge_into_previous(outline: &Outline, rows: &[Row], key: &str) -> Option
     }
     let target = outline.item(&previous.key);
     let title = format!("{}{}", target.title, item.title);
-    if item.done || target.done || item.comments > 0 || utf16_len(&title) > MAX_TITLE_LENGTH {
+    if item.done
+        || target.done
+        || item.comments > 0
+        || item.icon.is_some()
+        || utf16_len(&title) > MAX_TITLE_LENGTH
+    {
         return None;
     }
     let removed = remove(outline, key);
@@ -758,6 +789,7 @@ fn apply_op(outline: &mut Outline, op: &Op) {
             let item = outline.item_mut(key);
             item.collapsed = collapsed.unwrap_or(item.collapsed);
         }
+        Op::Icon { key, icon } => outline.item_mut(key).icon.clone_from(icon),
         Op::Move { key, parent, index } => {
             let from = parent_of(outline, key).unwrap_or_else(|| panic!("{key} has no parent"));
             outline.detach(&from, key);
@@ -809,6 +841,10 @@ fn inverse(outline: &Outline, op: &Op) -> Vec<Op> {
             })
             .into_iter()
             .collect(),
+        Op::Icon { key, .. } => vec![Op::Icon {
+            key: key.clone(),
+            icon: outline.item(key).icon.clone(),
+        }],
         Op::Move { key, .. } => {
             let parent = parent_of(outline, key).unwrap_or_else(|| panic!("{key} has no parent"));
             vec![Op::Move {
@@ -856,6 +892,7 @@ pub fn same_outline(a: &Outline, b: &Outline) -> bool {
         && a.items.iter().all(|(key, x)| {
             b.items.get(key).is_some_and(|y| {
                 x.title == y.title
+                    && x.icon == y.icon
                     && x.done == y.done
                     && x.collapsed == y.collapsed
                     && x.children == y.children
@@ -915,6 +952,7 @@ pub(crate) mod fixtures {
             completed_at: None,
             collapsed: false,
             comment_count: 0,
+            icon: None,
         }
     }
 
@@ -922,6 +960,7 @@ pub(crate) mod fixtures {
         fn done(self) -> Self;
         fn folded(self) -> Self;
         fn commented(self, comments: u64) -> Self;
+        fn iconed(self, icon: &str) -> Self;
     }
 
     impl Mark for Todo {
@@ -942,6 +981,13 @@ pub(crate) mod fixtures {
         fn commented(self, comments: u64) -> Self {
             Todo {
                 comment_count: comments,
+                ..self
+            }
+        }
+
+        fn iconed(self, icon: &str) -> Self {
+            Todo {
+                icon: Some(icon.to_owned()),
                 ..self
             }
         }
@@ -987,6 +1033,13 @@ pub(crate) mod fixtures {
             key: key.to_owned(),
             completed,
             collapsed,
+        }
+    }
+
+    pub(crate) fn icon_op(key: &str, icon: Option<&str>) -> Op {
+        Op::Icon {
+            key: key.to_owned(),
+            icon: icon.map(str::to_owned),
         }
     }
 
@@ -1133,6 +1186,51 @@ mod tests {
             assert_eq!(outline.item(ROOT).children, ["new1"]);
             assert_eq!(outline.item("new1").children, ["t2"]);
         }
+
+        #[test]
+        fn keeps_each_todos_icon_so_the_row_shows_what_was_chosen_on_any_device() {
+            let outline = outline_of(&[
+                todo(1, "milk", None).iconed("\u{1F95B}"),
+                todo(2, "bread", None),
+            ]);
+            assert_eq!(outline.item("t1").icon.as_deref(), Some("\u{1F95B}"));
+            assert_eq!(outline.item("t2").icon, None);
+        }
+    }
+
+    mod set_icon {
+        use super::*;
+
+        fn milk(icon: Option<&str>) -> Outline {
+            let milk = todo(1, "milk", None);
+            outline_of(&[match icon {
+                Some(icon) => milk.iconed(icon),
+                None => milk,
+            }])
+        }
+
+        #[test]
+        fn sets_changes_or_removes_the_icon_as_a_single_change_so_each_is_one_request_and_one_undo_step()
+         {
+            for (before, after) in [
+                (None, Some("\u{1F6D2}")),
+                (Some("\u{1F6D2}"), Some("\u{1F95B}")),
+                (Some("\u{1F6D2}"), None),
+            ] {
+                let change = set_icon(&milk(before), "t1", after).unwrap();
+                assert_eq!(change.ops, [icon_op("t1", after)]);
+                assert_eq!(change.outline, milk(after));
+            }
+        }
+
+        #[test]
+        fn does_nothing_when_the_row_already_has_that_icon_so_picking_it_again_sends_no_request() {
+            assert_eq!(
+                set_icon(&milk(Some("\u{1F6D2}")), "t1", Some("\u{1F6D2}")),
+                None
+            );
+            assert_eq!(set_icon(&milk(None), "t1", None), None);
+        }
     }
 
     mod split {
@@ -1237,6 +1335,26 @@ mod tests {
                 ],
                 [2, 0]
             );
+        }
+
+        #[test]
+        fn keeps_the_icon_on_the_row_that_was_split_so_the_new_row_does_not_look_like_a_copy() {
+            let outline = outline_of(&[todo(1, "book hotel", None).iconed("\u{1F3E8}")]);
+            for pos in [0, "book".len(), END] {
+                let change = split(&outline, "t1", pos, "n1", &all(&outline));
+                assert_eq!(
+                    [
+                        change.outline.item("t1").icon.as_deref(),
+                        change.outline.item("n1").icon.as_deref()
+                    ],
+                    [Some("\u{1F3E8}"), None],
+                    "split at {pos}"
+                );
+                assert!(
+                    change.ops.iter().all(|op| !matches!(op, Op::Icon { .. })),
+                    "split at {pos}"
+                );
+            }
         }
 
         #[test]
@@ -1558,6 +1676,36 @@ mod tests {
         }
 
         #[test]
+        fn refuses_when_the_row_has_an_icon_so_backspace_never_throws_away_the_icon_chosen_for_it()
+        {
+            let outline = outline_of(&[
+                todo(1, "buy ", None),
+                todo(2, "milk", None).iconed("\u{1F95B}"),
+            ]);
+            assert_eq!(merge(&outline, "t2"), None);
+        }
+
+        #[test]
+        fn refuses_a_row_with_a_typed_icon_it_cannot_draw_since_it_still_has_an_icon_to_lose() {
+            let outline = outline_of(&[
+                todo(1, "buy ", None),
+                todo(2, "milk", None).iconed("line:cart:green"),
+            ]);
+            assert_eq!(merge(&outline, "t2"), None);
+        }
+
+        #[test]
+        fn keeps_the_upper_rows_own_icon_when_a_row_without_one_is_joined_onto_it() {
+            let outline = outline_of(&[
+                todo(1, "buy ", None).iconed("\u{1F6D2}"),
+                todo(2, "milk", None),
+            ]);
+            let change = merge(&outline, "t2").unwrap();
+            assert_eq!(change.outline.item("t1").icon.as_deref(), Some("\u{1F6D2}"));
+            assert!(change.ops.iter().all(|op| !matches!(op, Op::Icon { .. })));
+        }
+
+        #[test]
         fn refuses_when_the_joined_title_would_be_longer_than_the_server_accepts() {
             let outline = outline_of(&[
                 todo(1, &"x".repeat(1950), None),
@@ -1661,6 +1809,10 @@ mod tests {
                 todo(4, "passport", None),
             ]);
             let pair = outline_of(&[todo(1, "buy ", None), todo(2, "milk", None)]);
+            let iconed = outline_of(&[
+                todo(1, "milk", None).iconed("\u{1F95B}"),
+                todo(2, "bread", None),
+            ]);
             let shown = all(&sample);
             let moving = moving();
             let trip = trip();
@@ -1749,6 +1901,26 @@ mod tests {
                     pair.clone(),
                     merge_into_previous(&pair, &rows(&pair, true), "t2").unwrap(),
                 ),
+                (
+                    "set an icon",
+                    iconed.clone(),
+                    set_icon(&iconed, "t2", Some("\u{1F35E}")).unwrap(),
+                ),
+                (
+                    "change an icon",
+                    iconed.clone(),
+                    set_icon(&iconed, "t1", Some("\u{1F6D2}")).unwrap(),
+                ),
+                (
+                    "remove an icon",
+                    iconed.clone(),
+                    set_icon(&iconed, "t1", None).unwrap(),
+                ),
+                (
+                    "delete a row with an icon",
+                    iconed.clone(),
+                    remove(&iconed, "t1"),
+                ),
             ]
         }
 
@@ -1822,6 +1994,37 @@ mod tests {
                 ]
             );
             assert_eq!(apply_ops(&joined.outline, &undo), outline);
+        }
+
+        #[test]
+        fn undoes_an_icon_change_by_sending_the_previous_value_even_when_there_was_none_so_cmd_z_also_takes_a_new_icon_off()
+         {
+            let outline = outline_of(&[
+                todo(1, "milk", None).iconed("\u{1F95B}"),
+                todo(2, "bread", None),
+            ]);
+            let changed = set_icon(&outline, "t1", Some("\u{1F6D2}")).unwrap();
+            let added = set_icon(&outline, "t2", Some("\u{1F35E}")).unwrap();
+
+            assert_eq!(
+                undo_for(&outline, &changed.ops),
+                [icon_op("t1", Some("\u{1F95B}"))]
+            );
+            assert_eq!(undo_for(&outline, &added.ops), [icon_op("t2", None)]);
+        }
+
+        #[test]
+        fn brings_a_deleted_row_back_with_its_icon_so_undoing_a_delete_restores_the_row_as_it_looked()
+         {
+            let outline = outline_of(&[
+                todo(1, "home", None),
+                todo(2, "milk", Some(1)).iconed("\u{1F95B}"),
+            ]);
+            let removed = remove(&outline, "t1");
+
+            let restored = apply_ops(&removed.outline, &undo_for(&outline, &removed.ops));
+
+            assert_eq!(restored.item("t2").icon.as_deref(), Some("\u{1F95B}"));
         }
 
         #[test]
