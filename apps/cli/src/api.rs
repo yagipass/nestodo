@@ -48,6 +48,7 @@ impl<'a> Api<'a> {
         title: &str,
         parent: Option<u64>,
         index: Option<usize>,
+        icon: Option<&str>,
     ) -> Result<Todo, Error> {
         let mut body = json!({ "title": title });
         if let Some(parent) = parent {
@@ -56,12 +57,27 @@ impl<'a> Api<'a> {
         if let Some(index) = index {
             body["index"] = json!(index);
         }
+        if let Some(icon) = icon {
+            body["icon"] = json!(icon);
+        }
         let response = self.call(Method::POST, "/api/v1/todos", Some(body), None)?;
         Ok(parse::<One>(&response)?.todo)
     }
 
-    pub fn edit(&mut self, id: u64, title: &str) -> Result<Todo, Error> {
-        self.patch(id, json!({ "title": title }))
+    pub fn edit(
+        &mut self,
+        id: u64,
+        title: Option<&str>,
+        icon: Option<Option<&str>>,
+    ) -> Result<Todo, Error> {
+        let mut body = json!({});
+        if let Some(title) = title {
+            body["title"] = json!(title);
+        }
+        if let Some(icon) = icon {
+            body["icon"] = json!(icon);
+        }
+        self.patch(id, body)
     }
 
     pub fn move_to(&mut self, id: u64, parent: Option<u64>, index: usize) -> Result<Todo, Error> {

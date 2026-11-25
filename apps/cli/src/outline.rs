@@ -281,6 +281,7 @@ mod tests {
             parent_id: parent,
             position,
             title: title.into(),
+            icon: None,
             completed_at: None,
             collapsed: false,
         }

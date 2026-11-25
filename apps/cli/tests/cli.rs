@@ -62,25 +62,36 @@ fn item(id: u64, parent: Option<u64>, position: usize, title: &str, done: bool) 
     })
 }
 
+fn with_icon(mut item: Value, icon: &str) -> Value {
+    item["icon"] = json!(icon);
+    item
+}
+
 fn stored(id: u64, parent: Option<u64>, position: usize, title: &str, done: bool) -> String {
     json!({ "todo": item(id, parent, position, title, done) }).to_string()
 }
 
-fn outline(server: &mut ServerGuard) -> Mock {
-    let body = json!({ "todos": [
-        item(1, None, 0, "Work", false),
-        item(4, Some(1), 0, "v2 release", false),
-        item(7, Some(4), 0, "Show the CLI list as a tree", false),
-        item(8, Some(4), 1, "Check the Android IME toolbar", false),
-        item(9, Some(4), 2, "Build the web outline screen", false),
-        item(10, Some(4), 3, "Draft the release notes", true),
-        item(5, Some(1), 1, "Prepare for the 1on1", false),
-        item(2, None, 1, "Chores", false),
-        item(18, None, 2, "Book the dentist", false),
-    ]});
+fn listing(server: &mut ServerGuard, todos: Value) -> Mock {
     api(server, "GET", "/api/v1/todos")
-        .with_body(body.to_string())
+        .with_body(json!({ "todos": todos }).to_string())
         .create()
+}
+
+fn outline(server: &mut ServerGuard) -> Mock {
+    listing(
+        server,
+        json!([
+            item(1, None, 0, "Work", false),
+            item(4, Some(1), 0, "v2 release", false),
+            item(7, Some(4), 0, "Show the CLI list as a tree", false),
+            item(8, Some(4), 1, "Check the Android IME toolbar", false),
+            item(9, Some(4), 2, "Build the web outline screen", false),
+            item(10, Some(4), 3, "Draft the release notes", true),
+            item(5, Some(1), 1, "Prepare for the 1on1", false),
+            item(2, None, 1, "Chores", false),
+            item(18, None, 2, "Book the dentist", false),
+        ]),
+    )
 }
 
 fn patch(server: &mut ServerGuard, id: u64, body: Value, response: String) -> Mock {
@@ -548,14 +559,217 @@ fn edits_only_the_title() {
 }
 
 #[test]
-fn edit_without_a_new_title_says_to_pass_one_and_sends_nothing() {
+fn edit_without_anything_to_change_says_what_it_can_change_and_sends_nothing() {
     let output = nestodo_sending_nothing(&["edit", "3"]);
 
     assert_eq!(output.status.code(), Some(2));
     assert!(
         stderr(&output).starts_with(
-            "error: the following required arguments were not provided:\n  --title <TITLE>\n"
+            "error: the following required arguments were not provided:\n  <--title <TITLE>|--icon <EMOJI>|--no-icon>\n"
         ),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn lists_icons_before_titles_but_not_typed_ones_it_cannot_draw_while_json_passes_all_on() {
+    let mut server = server();
+    listing(
+        &mut server,
+        json!([
+            with_icon(item(2, None, 0, "Groceries", false), "🛒"),
+            with_icon(item(3, Some(2), 0, "Milk", false), "line:cart:green"),
+            item(4, None, 1, "Book the dentist", false),
+        ]),
+    );
+
+    let output = nestodo(&server, &["list"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "Home\n2 [ ] ├── 🛒 Groceries  0/1\n3 [ ] │   └── Milk\n4 [ ] └── Book the dentist\n"
+    );
+
+    let output = nestodo(&server, &["list", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout(&output)).unwrap(),
+        json!([
+            { "id": 2, "title": "Groceries", "icon": "🛒", "completed": false, "collapsed": false, "children": [
+                { "id": 3, "title": "Milk", "icon": "line:cart:green", "completed": false, "collapsed": false, "children": [] },
+            ]},
+            { "id": 4, "title": "Book the dentist", "icon": null, "completed": false, "collapsed": false, "children": [] },
+        ])
+    );
+}
+
+#[test]
+fn adds_a_todo_with_its_icon_in_one_request_and_shows_the_icon_before_the_title() {
+    let mut server = server();
+    let list = untouched(&mut server, "GET");
+    let create = api(&mut server, "POST", "/api/v1/todos")
+        .match_body(Matcher::Json(json!({ "title": "Buy milk", "icon": "🥛" })))
+        .with_status(201)
+        .with_body(
+            json!({ "todo": with_icon(item(19, None, 3, "Buy milk", false), "🥛") }).to_string(),
+        )
+        .create();
+
+    let output = nestodo(&server, &["add", "Buy milk", "--icon", "🥛"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    create.assert();
+    list.assert();
+    assert_eq!(stdout(&output), "19 [ ] 🥛 Buy milk\n  under Home\n");
+}
+
+#[test]
+fn sets_only_the_icon_so_the_title_need_not_be_retyped_and_cannot_be_changed_by_mistake() {
+    let mut server = server();
+    outline(&mut server);
+    let edit = patch(
+        &mut server,
+        5,
+        json!({ "icon": "🗓\u{fe0f}" }),
+        json!({ "todo": with_icon(item(5, Some(1), 1, "Prepare for the 1on1", false), "🗓\u{fe0f}") })
+            .to_string(),
+    );
+
+    let output = nestodo(&server, &["edit", "5", "--icon", "🗓\u{fe0f}"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    edit.assert();
+    assert_eq!(stdout(&output), "5 [ ] 🗓\u{fe0f} Prepare for the 1on1\n");
+}
+
+#[test]
+fn removes_the_icon_by_sending_null_which_the_server_reads_as_remove_rather_than_leave_alone() {
+    let mut server = server();
+    listing(
+        &mut server,
+        json!([with_icon(
+            item(18, None, 0, "Book the dentist", false),
+            "🦷"
+        )]),
+    );
+    let edit = patch(
+        &mut server,
+        18,
+        json!({ "icon": null }),
+        stored(18, None, 0, "Book the dentist", false),
+    );
+
+    let output = nestodo(&server, &["edit", "18", "--no-icon"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    edit.assert();
+    assert_eq!(stdout(&output), "18 [ ] Book the dentist\n");
+}
+
+#[test]
+fn edits_the_title_without_sending_the_icon_back_so_a_typed_icon_from_a_newer_app_survives() {
+    let mut server = server();
+    listing(
+        &mut server,
+        json!([with_icon(
+            item(3, None, 0, "Groceries", false),
+            "line:cart:green"
+        )]),
+    );
+    let edit = patch(
+        &mut server,
+        3,
+        json!({ "title": "Weekly groceries" }),
+        json!({ "todo": with_icon(item(3, None, 0, "Weekly groceries", false), "line:cart:green") })
+            .to_string(),
+    );
+
+    let output = nestodo(&server, &["edit", "3", "--title", "Weekly groceries"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    edit.assert();
+    assert_eq!(stdout(&output), "3 [ ] Weekly groceries\n");
+}
+
+#[test]
+fn edits_title_and_icon_in_one_request_so_the_server_applies_both_or_neither() {
+    let mut server = server();
+    outline(&mut server);
+    let edit = patch(
+        &mut server,
+        18,
+        json!({ "title": "Dentist at 3pm", "icon": "🦷" }),
+        json!({ "todo": with_icon(item(18, None, 2, "Dentist at 3pm", false), "🦷") }).to_string(),
+    );
+
+    let output = nestodo(
+        &server,
+        &["edit", "18", "--title", "Dentist at 3pm", "--icon", "🦷"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    edit.assert();
+    assert_eq!(stdout(&output), "18 [ ] 🦷 Dentist at 3pm\n");
+}
+
+#[test]
+fn trims_the_icon_like_the_apps_icon_field_so_a_pasted_space_is_not_refused() {
+    let mut server = server();
+    outline(&mut server);
+    let create = api(&mut server, "POST", "/api/v1/todos")
+        .match_body(Matcher::Json(json!({ "title": "Buy milk", "icon": "🥛" })))
+        .with_status(201)
+        .with_body(
+            json!({ "todo": with_icon(item(19, None, 3, "Buy milk", false), "🥛") }).to_string(),
+        )
+        .create();
+    let edit = patch(
+        &mut server,
+        18,
+        json!({ "icon": "🦷" }),
+        json!({ "todo": with_icon(item(18, None, 2, "Book the dentist", false), "🦷") })
+            .to_string(),
+    );
+
+    for args in [
+        &["add", "Buy milk", "--icon", " 🥛\n"][..],
+        &["edit", "18", "--icon", "🦷 "],
+    ] {
+        let output = nestodo(&server, args);
+        assert!(output.status.success(), "{}", stderr(&output));
+    }
+    create.assert();
+    edit.assert();
+}
+
+#[test]
+fn leaves_judging_icons_to_the_server_so_newer_emoji_work_and_shows_its_refusal() {
+    let mut server = server();
+    outline(&mut server);
+    let refused = api(&mut server, "PATCH", "/api/v1/todos/5")
+        .match_body(Matcher::Json(json!({ "icon": "a" })))
+        .with_status(400)
+        .with_body(
+            r#"{"error":"Validation failed","issues":[{"slot":"body","issues":[{"message":"Icon must be one emoji","path":"icon"}]}]}"#,
+        )
+        .create();
+
+    let output = nestodo(&server, &["edit", "5", "--icon", "a"]);
+
+    assert_eq!(output.status.code(), Some(1));
+    refused.assert();
+    assert_eq!(stderr(&output), "error: Icon must be one emoji\n");
+}
+
+#[test]
+fn refuses_icon_with_no_icon_because_it_cannot_tell_which_was_meant_and_sends_nothing() {
+    let output = nestodo_sending_nothing(&["edit", "5", "--icon", "🛒", "--no-icon"]);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output)
+            .starts_with("error: the argument '--icon <EMOJI>' cannot be used with '--no-icon'\n"),
         "{}",
         stderr(&output)
     );
