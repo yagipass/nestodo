@@ -6,7 +6,7 @@ import { profileOf } from "../src/profile-service";
 const SAFE_METHODS = ["GET", "HEAD", "OPTIONS"];
 const SAME_ORIGIN_FETCH_SITES = ["same-origin", "none"];
 const BODY_METHODS = ["POST", "PUT", "PATCH"];
-const AVATAR_PATH = "/api/v1/avatars/";
+const IMMUTABLE_PATHS = [/^\/api\/v1\/avatars\//, /^\/api\/v1\/icons\/[^/]+\/image$/];
 
 function isJson(contentType: string | undefined) {
   return contentType?.split(";", 1)[0].trim().toLowerCase() === "application/json";
@@ -32,5 +32,5 @@ export default defineMiddleware(async (c, next) => {
   c.set("accessUser", user);
   c.set("shared", { auth: { user, profile } });
   await next();
-  if (user && !c.req.path.startsWith(AVATAR_PATH)) c.header("Cache-Control", "no-store");
+  if (user && !IMMUTABLE_PATHS.some((path) => path.test(c.req.path))) c.header("Cache-Control", "no-store");
 });

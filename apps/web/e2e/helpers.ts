@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { deflateSync } from "node:zlib";
 import { importJWK, SignJWT, type JWK } from "jose";
 import { expect, inject } from "vite-plus/test";
 import { PAGE_HEADERS, pageData } from "./pages-client";
@@ -179,6 +180,39 @@ export async function accessAssertion({
     .sign(await importJWK(signingKey, "RS256"));
 }
 
+function crc32(data: Buffer) {
+  let crc = ~0;
+  for (const byte of data) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return ~crc >>> 0;
+}
+
+function chunk(type: string, data: Buffer) {
+  const typed = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(typed));
+  return Buffer.concat([length, typed, crc]);
+}
+
+export function png([red, green, blue]: [number, number, number]) {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(1, 0);
+  header.writeUInt32BE(1, 4);
+  header.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(Buffer.from([0, red, green, blue]))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+export type ImageIcon = { id: string; name: string; url: string };
+
 export class Session {
   constructor(private assertion?: string) {}
 
@@ -205,7 +239,7 @@ export class Session {
   async page(cookie?: string) {
     const res = await this.request("/", { page: true, cookie });
     expect(res.status).toBe(200);
-    return pageData<{ props: { todos: Todo[]; showDone: boolean } }>(await res.text()).props;
+    return pageData<{ props: { todos: Todo[]; icons: ImageIcon[]; showDone: boolean } }>(await res.text()).props;
   }
 
   async todos(): Promise<Todo[]> {
@@ -326,6 +360,37 @@ export class Session {
 
   avatar(url: string) {
     return this.request(url, { origin: null });
+  }
+
+  async images() {
+    const res = await this.request("/api/v1/icons");
+    expect(res.status).toBe(200);
+    return (await json<{ icons: ImageIcon[] }>(res)).icons;
+  }
+
+  addImage(name: unknown, image: Uint8Array | string = png([200, 80, 160])) {
+    return this.request("/api/v1/icons", {
+      method: "POST",
+      body: { name, image: typeof image === "string" ? image : Buffer.from(image).toString("base64") },
+    });
+  }
+
+  async addedImage(name: string, image?: Uint8Array) {
+    const res = await this.addImage(name, image);
+    expect(res.status).toBe(201);
+    return (await json<{ icon: ImageIcon }>(res)).icon;
+  }
+
+  renameImage(id: string, name: unknown) {
+    return this.request(`/api/v1/icons/${id}`, { method: "PATCH", body: { name } });
+  }
+
+  deleteImage(id: string) {
+    return this.request(`/api/v1/icons/${id}`, { method: "DELETE" });
+  }
+
+  image(url: string) {
+    return this.request(url);
   }
 }
 

@@ -90,6 +90,17 @@ export const analyticsConsents = sqliteTable("analytics_consents", {
   userId: text("user_id").primaryKey(),
 });
 
+export const customIcons = sqliteTable(
+  "custom_icons",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    name: text("name").notNull(),
+    createdAt: text("created_at").notNull().default(sql`(strftime('%Y-%m-%d %H:%M:%f', 'now'))`),
+  },
+  (table) => [index("custom_icons_user_id_created_at_idx").on(table.userId, table.createdAt)],
+);
+
 export const profiles = sqliteTable("profiles", {
   userId: text("user_id").primaryKey(),
   name: text("name"),

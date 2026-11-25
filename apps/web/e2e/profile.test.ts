@@ -1,40 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { deflateSync } from "node:zlib";
 import { describe, expect, it } from "vite-plus/test";
-import { json, Session, signedInUser, type Profile } from "./helpers";
+import { json, png, Session, signedInUser, type Profile } from "./helpers";
 
 const MAX_AVATAR_BYTES = 512 * 1024;
-
-function crc32(data: Buffer) {
-  let crc = ~0;
-  for (const byte of data) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
-  }
-  return ~crc >>> 0;
-}
-
-function chunk(type: string, data: Buffer) {
-  const typed = Buffer.concat([Buffer.from(type, "ascii"), data]);
-  const length = Buffer.alloc(4);
-  length.writeUInt32BE(data.length);
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(typed));
-  return Buffer.concat([length, typed, crc]);
-}
-
-function png([red, green, blue]: [number, number, number]) {
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(1, 0);
-  header.writeUInt32BE(1, 4);
-  header.set([8, 2, 0, 0, 0], 8);
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk("IHDR", header),
-    chunk("IDAT", deflateSync(Buffer.from([0, red, green, blue]))),
-    chunk("IEND", Buffer.alloc(0)),
-  ]);
-}
 
 function pngOfSize(size: number) {
   const bytes = Buffer.alloc(size);
