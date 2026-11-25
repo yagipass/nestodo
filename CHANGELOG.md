@@ -1,5 +1,21 @@
 # Changelog
 
+## [v0.15.0](https://github.com/yagipass/nestodo/compare/v0.14.1...v0.15.0) - 2026-11-25
+
+### MCP
+- feat(mcp): let Claude set and see todo icons by @yagipass in https://github.com/yagipass/nestodo/pull/189
+### Web
+- feat(web): span the header across the window, above the comments pane by @yagipass in https://github.com/yagipass/nestodo/pull/185
+- feat(web): store one emoji icon per todo in the API by @yagipass in https://github.com/yagipass/nestodo/pull/188
+- feat(web): keep todo icons through undo, split and join by @yagipass in https://github.com/yagipass/nestodo/pull/190
+- feat(web): show todo icons and pick them in the outline by @yagipass in https://github.com/yagipass/nestodo/pull/191
+### Android
+- feat(android): show todo icons and pick them in the outline by @yagipass in https://github.com/yagipass/nestodo/pull/194
+### CLI
+- feat(cli): show and set todo icons by @yagipass in https://github.com/yagipass/nestodo/pull/192
+### Desktop
+- feat(desktop): show todo icons and pick them in the outline by @yagipass in https://github.com/yagipass/nestodo/pull/193
+
 ## [v0.14.1](https://github.com/yagipass/nestodo/compare/v0.14.0...v0.14.1) - 2026-11-22
 
 ### Web
