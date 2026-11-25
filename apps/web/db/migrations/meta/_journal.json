@@ -36,6 +36,13 @@
       "when": 1795568874057,
       "tag": "20261125010754_add_icons_to_todos",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1795581048486,
+      "tag": "20261125043048_add_custom_icons",
+      "breakpoints": true
     }
   ]
 }

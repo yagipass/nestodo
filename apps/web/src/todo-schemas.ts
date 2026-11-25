@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createInsertSchema } from "void/drizzle-zod";
 import { todos } from "@schema";
-import { isIcon } from "./todo-icon";
+import { isTodoIcon } from "./todo-icon";
 import { MAX_COMMENT_LENGTH, MAX_TITLE_LENGTH } from "./todos";
 
 function maxUtf16Length(schema: z.ZodString, name: string, limit: number) {
@@ -11,7 +11,7 @@ function maxUtf16Length(schema: z.ZodString, name: string, limit: number) {
 const todoFields = createInsertSchema(todos, {
   title: (schema) => maxUtf16Length(schema.overwrite((title) => title.replace(/\r\n?|\n/g, " ")), "Title", MAX_TITLE_LENGTH),
   parentId: (schema) => schema.int().positive(),
-  icon: (schema) => schema.refine(isIcon, "Icon must be one emoji"),
+  icon: (schema) => schema.refine(isTodoIcon, "Icon must be one emoji or one of your images"),
 });
 
 const index = z.number().int().min(0);

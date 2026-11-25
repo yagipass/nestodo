@@ -14,10 +14,14 @@ export function normalizeName(name: string) {
   return normalized === "" ? null : normalized;
 }
 
+export function hasUnsafeCharacters(text: string) {
+  return UNSAFE_NAME_CHARACTERS.test(text);
+}
+
 export function nameProblem(name: string | null) {
   if (name === null) return null;
   if (name.length > MAX_NAME_LENGTH) return `The name must be ${MAX_NAME_LENGTH} characters or fewer`;
-  if (UNSAFE_NAME_CHARACTERS.test(name)) return "The name cannot contain control or invisible characters";
+  if (hasUnsafeCharacters(name)) return "The name cannot contain control or invisible characters";
   return null;
 }
 
@@ -34,10 +38,14 @@ export function avatarTypeOf(bytes: Uint8Array): AvatarType | null {
   return null;
 }
 
-export function avatarProblem(bytes: Uint8Array) {
-  if (bytes.length > MAX_AVATAR_BYTES) return `The image must be ${MAX_AVATAR_BYTES / 1024} KB or smaller`;
+export function imageProblem(bytes: Uint8Array, maxBytes: number) {
+  if (bytes.length > maxBytes) return `The image must be ${maxBytes / 1024} KB or smaller`;
   if (avatarTypeOf(bytes) === null) return "The image must be a PNG, JPEG or WebP file";
   return null;
+}
+
+export function avatarProblem(bytes: Uint8Array) {
+  return imageProblem(bytes, MAX_AVATAR_BYTES);
 }
 
 export function isAvatarId(id: string) {

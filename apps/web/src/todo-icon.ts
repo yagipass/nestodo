@@ -1,3 +1,5 @@
+import { isImageIconId } from "./image-icons";
+
 export const MAX_ICON_LENGTH = 32;
 
 export const ICON_CHOICES = [
@@ -20,6 +22,22 @@ export function isIcon(value: string) {
   if (value === "" || value.length > MAX_ICON_LENGTH) return false;
   if (!STARTS_AS_EMOJI.test(value) || !SHOWN_AS_EMOJI.test(value)) return false;
   return [...graphemes.segment(value)].length === 1;
+}
+
+const IMAGE = "image:";
+
+export function imageIcon(id: string) {
+  return `${IMAGE}${id}`;
+}
+
+export function imageIdOf(icon: string | null) {
+  if (icon === null || !icon.startsWith(IMAGE)) return null;
+  const id = icon.slice(IMAGE.length);
+  return isImageIconId(id) ? id : null;
+}
+
+export function isTodoIcon(value: string) {
+  return isIcon(value) || imageIdOf(value) !== null;
 }
 
 export function shownIcon(icon: string | null) {

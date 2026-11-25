@@ -2,7 +2,9 @@ import { env } from "cloudflare:workers";
 import { HTTPException } from "hono/http-exception";
 import { and, db, eq, gt, gte, inArray, isNotNull, isNull, lte, ne, notInArray, sql } from "void/db";
 import { archivedTodos, todoComments, todoEvents, todos, trashedTodos } from "@schema";
+import { hasImageIcon } from "./image-icon-service";
 import { DAY, inUtc, sqliteTime } from "./time";
+import { imageIdOf } from "./todo-icon";
 import { awaitingCommentWindow, clampIndex, depthOf, heightOf, isWithin, KEEP_COMPLETED_DAYS, MAX_COMMENT_LENGTH, MAX_DEPTH, outlineOrder, type Placed } from "./todos";
 
 export type TodoChanges = {
@@ -41,6 +43,11 @@ function rejected(status: 400 | 409, error: string, message: string) {
 
 function invalidPlacement(message: string) {
   return rejected(400, "invalid_placement", message);
+}
+
+async function assertIcon(userId: string, icon: string | null | undefined) {
+  const id = imageIdOf(icon ?? null);
+  if (id !== null && !(await hasImageIcon(userId, id))) throw rejected(400, "invalid_icon", "Icon not found");
 }
 
 function ownedBy(userId: string, id: number) {
@@ -190,6 +197,7 @@ export async function createTodo(
   via: Via = "app",
 ): Promise<Todo> {
   const parentId = input.parentId ?? null;
+  await assertIcon(userId, input.icon);
   const rows = await placementsOf(userId);
   assertParent(rows, parentId);
   assertDepth(rows, parentId, 1);
@@ -210,6 +218,7 @@ export async function createTodo(
 }
 
 export async function updateTodo(userId: string, id: number, changes: TodoChanges) {
+  await assertIcon(userId, changes.icon);
   const completedAt =
     changes.completed === undefined ? undefined : changes.completed ? sql`coalesce(${todos.completedAt}, datetime('now'))` : null;
   const fields = { title: changes.title, icon: changes.icon, collapsed: changes.collapsed, completedAt, updatedAt: now };
