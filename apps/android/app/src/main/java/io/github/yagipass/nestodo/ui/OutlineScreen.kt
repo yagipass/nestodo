@@ -164,6 +164,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
+import androidx.compose.ui.window.PopupProperties
 import androidx.core.view.WindowCompat
 import io.github.yagipass.nestodo.AuthState
 import io.github.yagipass.nestodo.R
@@ -278,6 +279,10 @@ fun OutlineScreen(
                     editing,
                     state.canUndo,
                     viewModel,
+                    onIcon = {
+                        viewModel.openIconPicker(editing.key)
+                        focusManager.clearFocus()
+                    },
                     onComments = {
                         focusManager.clearFocus()
                         viewModel.openComments(editing.key)
@@ -1016,8 +1021,7 @@ private fun OutlineItem(
                 )
             }
         }
-        IconChip(row, enabled = !readOnly, onClick = ::openIconPicker)
-        CommentChip(row, enabled = !readOnly, onClick = ::openComments)
+        if (row.comments > 0) CommentChip(row, enabled = !readOnly, onClick = ::openComments)
     }
 }
 
@@ -1135,42 +1139,10 @@ internal fun Bullet(
 }
 
 @Composable
-private fun IconChip(row: OutlineRow, enabled: Boolean, onClick: () -> Unit) {
-    val name = row.title.ifEmpty { "empty item" }
-    Box(
-        Modifier.height(RowHeight)
-            .widthIn(min = 48.dp)
-            .focusProperties { canFocus = false }
-            .clickable(
-                interactionSource = null,
-                indication = ripple(bounded = false, radius = 22.dp),
-                enabled = enabled,
-                role = Role.Button,
-                onClick = onClick,
-            )
-            .semantics {
-                contentDescription =
-                    if (row.icon == null) "Set icon for $name" else "Change icon of $name"
-            }
-            .padding(horizontal = 6.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            NestodoIcons.Smiley,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-            modifier = Modifier.size(18.dp),
-        )
-    }
-}
-
-@Composable
 private fun CommentChip(row: OutlineRow, enabled: Boolean, onClick: () -> Unit) {
-    val colors = MaterialTheme.colorScheme
     val name = row.title.ifEmpty { "empty item" }
     val count = row.comments
-    val tint =
-        if (count > 0) colors.onSurfaceVariant else colors.onSurfaceVariant.copy(alpha = 0.4f)
+    val tint = MaterialTheme.colorScheme.onSurfaceVariant
     Row(
         Modifier.height(RowHeight)
             .widthIn(min = 48.dp)
@@ -1184,11 +1156,7 @@ private fun CommentChip(row: OutlineRow, enabled: Boolean, onClick: () -> Unit) 
             )
             .semantics {
                 contentDescription =
-                    when (count) {
-                        0 -> "Comment on $name"
-                        1 -> "1 comment on $name"
-                        else -> "$count comments on $name"
-                    }
+                    if (count == 1) "1 comment on $name" else "$count comments on $name"
             }
             .padding(horizontal = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterHorizontally),
@@ -1200,14 +1168,12 @@ private fun CommentChip(row: OutlineRow, enabled: Boolean, onClick: () -> Unit) 
             tint = tint,
             modifier = Modifier.size(18.dp),
         )
-        if (count > 0) {
-            Text(
-                "$count",
-                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = tint,
-                modifier = Modifier.clearAndSetSemantics {},
-            )
-        }
+        Text(
+            "$count",
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = tint,
+            modifier = Modifier.clearAndSetSemantics {},
+        )
     }
 }
 
@@ -1216,10 +1182,12 @@ private fun EditToolbar(
     row: OutlineRow,
     canUndo: Boolean,
     viewModel: TodoViewModel,
+    onIcon: () -> Unit,
     onComments: () -> Unit,
     onHideKeyboard: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
+    var more by remember { mutableStateOf(false) }
     Surface(color = colors.surfaceContainerLowest) {
         Column(Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
             HorizontalDivider(color = colors.outlineVariant)
@@ -1234,23 +1202,44 @@ private fun EditToolbar(
                 ToolButton(NestodoIcons.Indent, "Indent", onClick = viewModel::indent)
                 ToolButton(NestodoIcons.MoveUp, "Move up", onClick = viewModel::moveUp)
                 ToolButton(NestodoIcons.MoveDown, "Move down", onClick = viewModel::moveDown)
-                ToolButton(NestodoIcons.MoveTo, "Move to", onClick = viewModel::startMove)
                 ToolSeparator()
                 ToolButton(
                     NestodoIcons.Completed,
                     if (row.completed) "Mark as not done" else "Complete",
                     onClick = viewModel::toggleCompleted,
                 )
-                ToolButton(
-                    NestodoIcons.Fold,
-                    if (row.collapsed) "Expand" else "Collapse",
-                    enabled = row.hasChildren,
-                    onClick = viewModel::toggleCollapsed,
-                )
-                ToolButton(NestodoIcons.Comment, "Comments", onClick = onComments)
-                ToolButton(NestodoIcons.Delete, "Delete", onClick = viewModel::startDelete)
-                ToolSeparator()
                 ToolButton(NestodoIcons.Undo, "Undo", enabled = canUndo, onClick = viewModel::undo)
+                ToolSeparator()
+                ToolButton(
+                    NestodoIcons.More,
+                    "More actions",
+                    onClick = { more = true },
+                ) {
+                    DropdownMenu(
+                        expanded = more,
+                        onDismissRequest = { more = false },
+                        properties = PopupProperties(focusable = false),
+                        shape = RoundedCornerShape(14.dp),
+                        containerColor = colors.surfaceContainerLowest,
+                    ) {
+                        listOf(
+                                Triple(NestodoIcons.MoveTo, "Move to", viewModel::startMove),
+                                Triple(NestodoIcons.Smiley, "Icon", onIcon),
+                                Triple(NestodoIcons.Comment, "Comments", onComments),
+                                Triple(NestodoIcons.Delete, "Delete", viewModel::startDelete),
+                            )
+                            .forEach { (icon, label, action) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    leadingIcon = { Icon(icon, contentDescription = null) },
+                                    onClick = {
+                                        more = false
+                                        action()
+                                    },
+                                )
+                            }
+                    }
+                }
                 ToolButton(NestodoIcons.HideKeyboard, "Hide keyboard", onClick = onHideKeyboard)
             }
         }
@@ -1263,6 +1252,7 @@ private fun RowScope.ToolButton(
     label: String,
     enabled: Boolean = true,
     onClick: () -> Unit,
+    menu: @Composable () -> Unit = {},
 ) {
     val colors = MaterialTheme.colorScheme
     Box(
@@ -1281,6 +1271,7 @@ private fun RowScope.ToolButton(
             tint = if (enabled) colors.onSurface else colors.onSurface.copy(alpha = 0.38f),
             modifier = Modifier.size(22.dp),
         )
+        menu()
     }
 }
 
