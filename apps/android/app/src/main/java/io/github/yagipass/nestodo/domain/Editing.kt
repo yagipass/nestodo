@@ -107,12 +107,14 @@ fun Outline.destinations(viewport: Viewport, key: Long?, query: String): List<De
         walk(null, emptyList())
     }
 
-fun Outline.destinationTree(viewport: Viewport, query: String): List<Branch> {
+fun Outline.destinationTree(viewport: Viewport, key: Long?, query: String): List<Branch> {
     val match = query.trim()
+    val levels = key?.let { height(it) } ?: 1
     fun walk(parent: Long?, depth: Int, dimmed: Boolean): List<Branch> = buildList {
         for (child in children(parent)) {
             val node = getValue(child)
-            if (!isShown(child, viewport) || depth + 1 >= MAX_DEPTH) continue
+            if (child == key || !isShown(child, viewport)) continue
+            if (depth + 1 + levels > MAX_DEPTH) continue
             val under = walk(child, depth + 1, dimmed || node.completed)
             val offered = node.matches(match)
             if (!offered && under.isEmpty()) continue

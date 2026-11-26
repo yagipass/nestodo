@@ -1,6 +1,5 @@
 package io.github.yagipass.nestodo.ui
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,10 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -43,26 +39,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -71,11 +62,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.yagipass.nestodo.R
 import io.github.yagipass.nestodo.ShareState
 import io.github.yagipass.nestodo.ShareViewModel
-import io.github.yagipass.nestodo.domain.Branch
-import io.github.yagipass.nestodo.domain.Guide
 import io.github.yagipass.nestodo.domain.MAX_TITLE_LENGTH
 import io.github.yagipass.nestodo.domain.destinationTree
-import io.github.yagipass.nestodo.domain.guides
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 
@@ -226,12 +214,10 @@ private fun Picker(state: ShareState.Ready, onToggle: (Long) -> Unit, onPick: (L
     }
     val pick = { parent: Long? -> if (armed) onPick(parent) }
     val match = query.text.toString().trim()
-    val browsing = match.isEmpty()
     val tree =
         remember(state.outline, state.viewport, match) {
-            state.outline.destinationTree(state.viewport, match)
+            state.outline.destinationTree(state.viewport, null, match)
         }
-    val lines = remember(tree) { guides(tree.map { it.row }) }
 
     SearchField(
         query = query,
@@ -251,8 +237,8 @@ private fun Picker(state: ShareState.Ready, onToggle: (Long) -> Unit, onPick: (L
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
         )
     }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 4.dp)) {
-        if (browsing) {
+    DestinationTree(tree, match, onToggle, onPick = pick) {
+        if (match.isEmpty()) {
             state.last?.let { last ->
                 item(key = "last") {
                     Column {
@@ -274,73 +260,6 @@ private fun Picker(state: ShareState.Ready, onToggle: (Long) -> Unit, onPick: (L
             item(key = "top") { DestinationRow("Top level", emptyList()) { pick(null) } }
         } else if (tree.isEmpty()) {
             item { NoMatches() }
-        }
-        itemsIndexed(tree, key = { _, branch -> branch.row.key }) { index, branch ->
-            BranchRow(
-                branch = branch,
-                guide = lines[index],
-                match = match,
-                foldable = browsing,
-                onToggle = { onToggle(branch.row.key) },
-                onPick = { pick(branch.row.key) },
-            )
-        }
-    }
-}
-
-@Composable
-private fun BranchRow(
-    branch: Branch,
-    guide: Guide,
-    match: String,
-    foldable: Boolean,
-    onToggle: () -> Unit,
-    onPick: () -> Unit,
-) {
-    val row = branch.row
-    val colors = MaterialTheme.colorScheme
-    val guideColor = LocalGuideColor.current
-    val mark = colors.primary.copy(alpha = 0.2f)
-    val title =
-        remember(row.title, match, colors.primary, mark) {
-            marked(shownText(row.title, colors.primary), match, mark)
-        }
-    val faded = row.completed || row.dimmed || !branch.offered
-    Row(
-        Modifier.fillMaxWidth()
-            .height(RowHeight)
-            .clickable(enabled = branch.offered, role = Role.Button, onClick = onPick)
-            .drawBehind { drawGuide(guide, row.depth, guideColor) },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Spacer(Modifier.width(24.dp * row.depth))
-        Box(Modifier.alpha(if (branch.offered) 1f else 0.5f)) {
-            Bullet(row, enabled = foldable, onToggle = onToggle)
-        }
-        Text(
-            title,
-            style =
-                MaterialTheme.typography.bodyLarge.copy(
-                    fontWeight = if (row.hasChildren) FontWeight.SemiBold else null,
-                    textDecoration = if (row.completed) TextDecoration.LineThrough else null,
-                ),
-            color = if (faded) colors.onSurfaceVariant else colors.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            inlineContent = LinkIcon,
-            modifier = Modifier.weight(1f).padding(start = 4.dp, end = 16.dp),
-        )
-    }
-}
-
-internal fun marked(text: AnnotatedString, match: String, color: Color): AnnotatedString {
-    if (match.isEmpty()) return text
-    return buildAnnotatedString {
-        append(text)
-        var at = text.text.indexOf(match, ignoreCase = true)
-        while (at >= 0) {
-            addStyle(SpanStyle(background = color), at, at + match.length)
-            at = text.text.indexOf(match, at + match.length, ignoreCase = true)
         }
     }
 }

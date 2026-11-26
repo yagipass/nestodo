@@ -417,7 +417,7 @@ class EditingTest {
 
     @Test
     fun `the destination tree lists todos under their parents in outline order, so the place to add under is found where it sits in the main list`() {
-        val tree = outline.destinationTree(all, "")
+        val tree = outline.destinationTree(all, null, "")
         assertEquals(listOf("Groceries", "  Milk", "  Eggs", "Dentist"), tree.render())
         assertEquals(listOf(1L, 2L, 3L, 4L), tree.offered())
     }
@@ -425,14 +425,14 @@ class EditingTest {
     @Test
     fun `the destination tree starts with the todos folded in the main list still folded, so a long list is as short as the member keeps it`() {
         val folded = with(groceries.copy(collapsed = true), milk, eggs, dentist)
-        val tree = folded.destinationTree(all, "")
+        val tree = folded.destinationTree(all, null, "")
         assertEquals(listOf("Groceries", "Dentist"), tree.render())
         assertTrue(tree.first().row.collapsed && tree.first().row.hasChildren)
     }
 
     @Test
     fun `a search keeps the todos above a match so it is seen in its place, but offers only the match`() {
-        val tree = outline.destinationTree(all, " EGG ")
+        val tree = outline.destinationTree(all, null, " EGG ")
         assertEquals(listOf("Groceries", "  Eggs"), tree.render())
         assertEquals(listOf(3L), tree.offered())
     }
@@ -440,14 +440,14 @@ class EditingTest {
     @Test
     fun `a search opens folded todos to show a match inside them`() {
         val folded = with(groceries.copy(collapsed = true), milk, eggs, dentist)
-        val tree = folded.destinationTree(all, "egg")
+        val tree = folded.destinationTree(all, null, "egg")
         assertEquals(listOf("Groceries", "  Eggs"), tree.render())
         assertFalse(tree.first().row.collapsed)
     }
 
     @Test
     fun `a matching parent whose children do not match no longer shows that it has any, so its bullet offers nothing to open`() {
-        val tree = outline.destinationTree(all, "groc")
+        val tree = outline.destinationTree(all, null, "groc")
         assertEquals(listOf("Groceries"), tree.render())
         assertFalse(tree.single().row.hasChildren)
     }
@@ -456,7 +456,7 @@ class EditingTest {
     fun `a todo without a title is kept in the tree only to hold the titled todos under it, and is never offered`() {
         val blank =
             with(groceries.copy(title = " "), milk, eggs, dentist, todo(5, "", position = 2))
-        val tree = blank.destinationTree(all, "")
+        val tree = blank.destinationTree(all, null, "")
         assertEquals(listOf(1L, 2L, 3L, 4L), tree.map { it.row.key })
         assertEquals(listOf(2L, 3L, 4L), tree.offered())
     }
@@ -466,16 +466,37 @@ class EditingTest {
         val done = with(groceries.copy(completedAt = "2026-10-23 09:00:00"), milk, eggs, dentist)
         assertEquals(
             listOf("Dentist"),
-            done.destinationTree(Viewport(showCompleted = false), "").render(),
+            done.destinationTree(Viewport(showCompleted = false), null, "").render(),
         )
-        assertEquals(listOf(1L, 2L, 3L, 4L), done.destinationTree(all, "").offered())
+        assertEquals(listOf(1L, 2L, 3L, 4L), done.destinationTree(all, null, "").offered())
     }
 
     @Test
     fun `the destination tree leaves out a todo at the deepest level the server allows, because nothing can be added under it`() {
         assertEquals(
             (1L until MAX_DEPTH).toList() + listOf(100L, 101L),
-            tooDeep.destinationTree(all, "").map { it.row.key },
+            tooDeep.destinationTree(all, null, "").map { it.row.key },
+        )
+    }
+
+    @Test
+    fun `the destination tree for a moved todo leaves out the todo and everything under it, which it cannot be moved into`() {
+        assertEquals(listOf("Dentist"), outline.destinationTree(all, 1, "").render())
+        assertEquals(
+            listOf("Groceries", "  Eggs", "Dentist"),
+            outline.destinationTree(all, 2, "").render(),
+        )
+    }
+
+    @Test
+    fun `the destination tree for a moved todo leaves out todos where it and the todos under it would end up deeper than the server allows`() {
+        assertEquals(
+            (1L..MAX_DEPTH - 2).toList(),
+            tooDeep.destinationTree(all, 100, "").map { it.row.key },
+        )
+        assertEquals(
+            (1L until MAX_DEPTH).toList() + 100L,
+            tooDeep.destinationTree(all, 101, "").map { it.row.key },
         )
     }
 

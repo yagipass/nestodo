@@ -5,7 +5,7 @@ import androidx.compose.ui.text.AnnotatedString
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-class ShareScreenTest {
+class DestinationTreeTest {
     private fun marks(title: String, match: String) =
         marked(AnnotatedString(title), match, Color.Yellow).spanStyles.map { it.start to it.end }
 
