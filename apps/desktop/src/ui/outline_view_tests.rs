@@ -615,6 +615,40 @@ fn clicking_a_rows_comment_button_opens_its_comments_ready_to_type(cx: &mut Test
 }
 
 #[gpui::test]
+fn the_comments_trail_shows_each_parents_icon_before_its_name_so_the_parents_are_known_at_a_glance_as_in_the_outline(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(
+        FakeServer::with(vec![
+            seed("Home").icon("\u{1F3E0}"),
+            seed("Pets").under(1).icon("image:img1"),
+            seed("Mike").under(2),
+            seed("Vaccination").under(3),
+        ])
+        .with_images(&["Cat"]),
+    );
+    let (view, cx) = open(cx, &server, true);
+    settle(cx);
+    open_comments_on(&view, cx, "Vaccination");
+
+    let crumb = |cx: &mut VisualTestContext, icon: &'static str, name: &'static str| {
+        let icon = cx
+            .debug_bounds(icon)
+            .unwrap_or_else(|| panic!("{icon} was not drawn"));
+        let name = cx.debug_bounds(name).unwrap();
+        assert!(icon.right() <= name.left());
+        assert!((icon.center().y - name.center().y).abs() < px(1.));
+        (icon, name)
+    };
+    let (_, home) = crumb(cx, "crumb-icon-t1", "crumb-t1");
+    let (pets_icon, pets) = crumb(cx, "crumb-icon-t2", "crumb-t2");
+    let mike = cx.debug_bounds("crumb-t3").unwrap();
+    assert!(home.right() < pets_icon.left() && pets.right() < mike.left());
+    assert!(cx.debug_bounds("crumb-icon-t3").is_none());
+    assert!(cx.debug_bounds("crumb-t4").is_none());
+}
+
+#[gpui::test]
 fn escape_in_the_comment_box_goes_back_to_the_row_with_the_pane_still_open_and_escape_on_the_row_closes_it(
     cx: &mut TestAppContext,
 ) {

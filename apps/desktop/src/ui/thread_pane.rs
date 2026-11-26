@@ -593,14 +593,57 @@ impl OutlineView {
         cx.notify();
     }
 
-    fn path_of(&self, key: &str) -> Vec<String> {
+    fn path_of(&self, key: &str) -> Vec<Key> {
         let mut path = Vec::new();
         let mut current = parent_of(&self.outline, key);
         while let Some(parent) = current.filter(|parent| parent != ROOT) {
-            path.insert(0, self.name_of(&parent));
             current = parent_of(&self.outline, &parent);
+            path.insert(0, parent);
         }
         path
+    }
+
+    fn crumbs(&self, path: &[Key], colors: &Theme) -> Div {
+        let last = path.len().saturating_sub(1);
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_x(px(4.))
+            .mb(px(4.))
+            .text_size(px(12.))
+            .line_height(px(18.))
+            .text_color(colors.muted)
+            .children(path.iter().enumerate().map(|(index, key)| {
+                let glyph = self
+                    .outline
+                    .item(key)
+                    .icon
+                    .as_deref()
+                    .and_then(|value| todo_icon(value, 13., false, &self.icons));
+                let icon_key = key.clone();
+                let name_key = key.clone();
+                div()
+                    .flex()
+                    .items_center()
+                    .min_w_0()
+                    .children(glyph.map(|glyph| {
+                        div()
+                            .debug_selector(move || format!("crumb-icon-{icon_key}"))
+                            .flex_none()
+                            .mr(px(3.))
+                            .child(glyph)
+                    }))
+                    .child(
+                        div()
+                            .debug_selector(move || format!("crumb-{name_key}"))
+                            .min_w_0()
+                            .child(self.name_of(key)),
+                    )
+                    .when(index < last, |crumb| {
+                        crumb.child(div().flex_none().ml(px(4.)).child("\u{203a}"))
+                    })
+            }))
     }
 
     pub(super) fn on_open_comments(
@@ -1170,13 +1213,7 @@ impl OutlineView {
                     .flex()
                     .flex_col()
                     .when(!path.is_empty(), |heading| {
-                        heading.child(
-                            div()
-                                .mb(px(4.))
-                                .text_size(px(12.))
-                                .text_color(colors.muted)
-                                .child(path.join(" \u{203a} ")),
-                        )
+                        heading.child(self.crumbs(&path, &colors))
                     })
                     .child(
                         div()
