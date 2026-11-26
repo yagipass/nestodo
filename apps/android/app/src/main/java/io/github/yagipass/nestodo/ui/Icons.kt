@@ -67,7 +67,7 @@ internal object NestodoIcons {
             "M5.5 15v-3.5a5 5 0 0 1 5-5H19M15.5 3 19 6.5 15.5 10",
             dots = circle(5.5f, 18.5f, 0.75f),
         )
-    val Fold = line("Fold", "M7.5 15.5 12 20l4.5-4.5M7.5 8.5 12 4l4.5 4.5")
+    val More = line("More", circle(5.5f, 12f, 1f) + circle(12f, 12f, 1f) + circle(18.5f, 12f, 1f))
     val Comment =
         line(
             "Comment",

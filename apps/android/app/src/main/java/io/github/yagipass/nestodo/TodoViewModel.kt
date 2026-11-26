@@ -912,8 +912,6 @@ class TodoViewModel(
         enqueue(Task.SaveIcon(iconRequest, call))
     }
 
-    fun toggleCollapsed() = act { state, key -> state.outline.toggleCollapsed(key, cursor) }
-
     fun toggleCollapsed(key: Long) {
         val state = current
         val edit = state.outline.toggleCollapsed(key, cursor) ?: return
