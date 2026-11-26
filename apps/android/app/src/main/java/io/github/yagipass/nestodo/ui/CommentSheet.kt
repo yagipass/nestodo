@@ -20,6 +20,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.clearText
@@ -68,8 +70,12 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
@@ -77,6 +83,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import io.github.yagipass.nestodo.CommentsState
 import io.github.yagipass.nestodo.TodoUiState
@@ -135,11 +142,26 @@ internal fun logLines(comments: CommentsState, now: Instant, zone: ZoneId): List
         if (comments.failed) add(LogLine.Unloaded)
     }
 
+internal data class Crumb(val title: String, val icon: String?)
+
+internal fun crumbText(path: List<Crumb>, draws: (String) -> Boolean): AnnotatedString =
+    buildAnnotatedString {
+        path.forEachIndexed { index, crumb ->
+            if (index > 0) append(" › ")
+            crumb.icon?.takeIf(draws)?.let {
+                appendInlineContent(it, "\uFFFC")
+                append("\u202F")
+            }
+            append(crumb.title)
+        }
+    }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun CommentSheet(
     state: TodoUiState,
     comments: CommentsState,
+    images: IconImages,
     viewModel: TodoViewModel,
     onOpenLink: (String) -> Unit,
 ) {
@@ -150,13 +172,14 @@ internal fun CommentSheet(
     val expand: () -> Unit = { scope.launch { sheetState.expand() } }
     val path =
         generateSequence(node.parent) { state.outline[it]?.parent }
-            .mapNotNull { state.outline[it]?.title?.ifEmpty { "Untitled" } }
+            .mapNotNull { state.outline[it] }
+            .map { Crumb(it.title.ifEmpty { "Untitled" }, it.icon) }
             .toList()
             .asReversed()
 
     ModalBottomSheet(onDismissRequest = viewModel::closeComments, sheetState = sheetState) {
         Column(Modifier.fillMaxWidth().fillMaxHeight().inView(sheetState).imePadding()) {
-            Header(path, node.title, node.completed, node.comments) {
+            Header(path, images, node.title, node.completed, node.comments) {
                 scope
                     .launch { sheetState.hide() }
                     .invokeOnCompletion {
@@ -181,8 +204,36 @@ private fun Modifier.inView(sheet: SheetState): Modifier = layout { measurable, 
 }
 
 @Composable
+private fun Crumbs(path: List<Crumb>, images: IconImages) {
+    val style = MaterialTheme.typography.bodySmall
+    val text = remember(path, images) { crumbText(path, images::draws) }
+    val side = with(LocalDensity.current) { (style.fontSize * 1.3f).toDp() }
+    val icons =
+        path
+            .mapNotNull { it.icon }
+            .distinct()
+            .associateWith { icon ->
+                InlineTextContent(
+                    Placeholder(1.3.em, 1.3.em, PlaceholderVerticalAlign.TextCenter)
+                ) {
+                    TodoIcon(icon, muted = false, images = images, size = side)
+                }
+            }
+    Text(
+        text,
+        style = style,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        inlineContent = icons,
+        modifier = Modifier.padding(bottom = 4.dp),
+    )
+}
+
+@Composable
 private fun Header(
-    path: List<String>,
+    path: List<Crumb>,
+    images: IconImages,
     title: String,
     done: Boolean,
     count: Int,
@@ -193,16 +244,7 @@ private fun Header(
     val name = title.ifEmpty { "Untitled" }
     Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, bottom = 14.dp)) {
         Column(Modifier.weight(1f).padding(top = 4.dp)) {
-            if (path.isNotEmpty()) {
-                Text(
-                    path.joinToString(" › "),
-                    style = typography.bodySmall,
-                    color = colors.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(bottom = 4.dp),
-                )
-            }
+            if (path.isNotEmpty()) Crumbs(path, images)
             Text(
                 remember(name, colors.primary) { shownText(name, colors.primary) },
                 style = typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
