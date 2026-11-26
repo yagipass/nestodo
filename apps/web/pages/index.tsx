@@ -38,7 +38,7 @@ import {
   type Outline,
 } from "../src/outline";
 import { Sync } from "../src/sync";
-import { ThreadPane } from "../src/thread-pane";
+import { ThreadPane, type Crumb } from "../src/thread-pane";
 import { encodePastedUrl, findLinks, tokens } from "../src/title";
 import { MAX_TITLE_LENGTH, SHOW_DONE_COOKIE } from "../src/todos";
 import { ICON_CHOICES, imageIcon, isIcon, shownIcon, type ShownIcon } from "../src/todo-icon";
@@ -933,9 +933,10 @@ export default function OutlinePage({ todos, icons, showDone: startShown }: Prop
   }
 
   function pathOf(key: string) {
-    const path: string[] = [];
+    const path: Crumb[] = [];
     for (let parent = parentOf(outline, key); parent !== null && parent !== ROOT; parent = parentOf(outline, parent)) {
-      path.unshift(outline[parent].title || "Untitled");
+      const icon = shownIcon(outline[parent].icon, images);
+      path.unshift({ key: parent, title: outline[parent].title || "Untitled", icon: icon && <TodoIconGlyph icon={icon} /> });
     }
     return path;
   }
