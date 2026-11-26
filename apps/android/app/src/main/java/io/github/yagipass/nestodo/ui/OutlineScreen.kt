@@ -172,12 +172,13 @@ import io.github.yagipass.nestodo.TodoUiState
 import io.github.yagipass.nestodo.TodoViewModel
 import io.github.yagipass.nestodo.domain.Avatar
 import io.github.yagipass.nestodo.domain.Caret
+import io.github.yagipass.nestodo.domain.Change
 import io.github.yagipass.nestodo.domain.Guide
 import io.github.yagipass.nestodo.domain.Link
 import io.github.yagipass.nestodo.domain.MAX_TITLE_LENGTH
 import io.github.yagipass.nestodo.domain.OutlineRow
 import io.github.yagipass.nestodo.domain.caretIn
-import io.github.yagipass.nestodo.domain.destinations
+import io.github.yagipass.nestodo.domain.destinationTree
 import io.github.yagipass.nestodo.domain.encodePaste
 import io.github.yagipass.nestodo.domain.findLinks
 import io.github.yagipass.nestodo.domain.guides
@@ -444,7 +445,16 @@ private fun CompleteDialog(state: TodoUiState, completing: Long, viewModel: Todo
 private fun MovePicker(state: TodoUiState, moving: Long, viewModel: TodoViewModel) {
     val colors = MaterialTheme.colorScheme
     val query = remember { TextFieldState() }
-    val found = state.outline.destinations(state.viewport, moving, query.text.toString())
+    var folds by remember { mutableStateOf(emptyMap<Long, Boolean>()) }
+    val match = query.text.toString().trim()
+    val tree =
+        remember(state.outline, state.viewport, moving, match, folds) {
+            folds.entries
+                .fold(state.outline) { outline, (key, collapsed) ->
+                    outline.apply(Change.Collapse(key, collapsed))
+                }
+                .destinationTree(state.viewport, moving, match)
+        }
     val name = state.outline[moving]?.title?.ifEmpty { null } ?: "empty item"
 
     Dialog(
@@ -462,8 +472,6 @@ private fun MovePicker(state: TodoUiState, moving: Long, viewModel: TodoViewMode
                 }
             }
         }
-        val requester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { requester.requestFocus() }
         Surface(Modifier.fillMaxSize(), color = colors.background) {
             Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                 Row(
@@ -477,20 +485,21 @@ private fun MovePicker(state: TodoUiState, moving: Long, viewModel: TodoViewMode
                     SearchField(
                         query = query,
                         label = "Move \"$name\" to",
-                        modifier = Modifier.weight(1f).focusRequester(requester),
+                        modifier = Modifier.weight(1f),
                     )
                 }
                 HorizontalDivider(color = colors.outlineVariant)
-                LazyColumn(
-                    Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(vertical = 4.dp),
+                DestinationTree(
+                    tree,
+                    match,
+                    onToggle = { key ->
+                        tree
+                            .firstOrNull { it.row.key == key }
+                            ?.let { folds = folds + (key to !it.row.collapsed) }
+                    },
+                    onPick = viewModel::moveTo,
                 ) {
-                    if (found.isEmpty()) item { NoMatches() }
-                    items(found, key = { it.key }) { destination ->
-                        DestinationRow(destination.title, destination.path) {
-                            viewModel.moveTo(destination.key)
-                        }
-                    }
+                    if (tree.isEmpty()) item { NoMatches() }
                 }
             }
         }
