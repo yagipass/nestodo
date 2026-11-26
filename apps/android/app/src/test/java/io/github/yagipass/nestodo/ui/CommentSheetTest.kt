@@ -32,6 +32,28 @@ class CommentSheetTest {
     ) = isPostKey(enter = true, shift, ctrl, meta, alt = false, hardware)
 
     @Test
+    fun `each parent's icon leads its name in the trail above the comments, so the parents are known at a glance as in the outline`() {
+        val text =
+            crumbText(
+                listOf(Crumb("Home", "🏠"), Crumb("Pets", "image:img1"), Crumb("Mike", null)),
+                draws = { true },
+            )
+
+        assertEquals("\uFFFC\u202FHome › \uFFFC\u202FPets › Mike", text.text)
+        assertEquals(
+            listOf(0 to "🏠", 9 to "image:img1"),
+            text.getStringAnnotations(0, text.length).map { it.start to it.item },
+        )
+    }
+
+    @Test
+    fun `a parent whose image is not shown yet keeps just its name in the trail, with no gap left where the icon would be`() {
+        val text = crumbText(listOf(Crumb("Pets", "image:gone"), Crumb("Mike", null))) { false }
+
+        assertEquals("Pets › Mike", text.text)
+    }
+
+    @Test
     fun `a hardware keyboard posts with Enter, and with Ctrl or Cmd+Enter for those used to it from other apps`() {
         assertEquals(
             listOf(true, true, true),

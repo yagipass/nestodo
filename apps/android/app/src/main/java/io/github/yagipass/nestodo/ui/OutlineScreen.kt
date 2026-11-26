@@ -375,7 +375,7 @@ fun OutlineScreen(
     state.moving?.let { MovePicker(state, it.key, viewModel) }
     state.deleting?.let { DeleteDialog(state, it.key, viewModel) }
     state.completing?.let { CompleteDialog(state, it.key, viewModel) }
-    state.comments?.let { CommentSheet(state, it, viewModel, onOpenLink) }
+    state.comments?.let { CommentSheet(state, it, images, viewModel, onOpenLink) }
     state.choosingIcon?.let { IconPicker(state, it, images, viewModel) }
 }
 
