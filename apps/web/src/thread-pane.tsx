@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Icon } from "./icons";
 import type { Sync } from "./sync";
 import { byDay, isPostKey, type Comment, type Entry, type TimelineItem } from "./thread";
@@ -21,10 +21,12 @@ const EVENT_LABELS = { created: "Created", completed: "Completed", reopened: "Re
 
 const EVENT_ICONS = { created: "add", completed: "tick", reopened: "reopen" } as const;
 
+export type Crumb = { key: string; title: string; icon: ReactNode };
+
 type Props = {
   todoKey: string;
   title: string;
-  path: string[];
+  path: Crumb[];
   done: boolean;
   count: number;
   serverId: number | null;
@@ -280,7 +282,17 @@ export function ThreadPane({
     <aside className="thread" aria-label={`Comments on ${title || "Untitled"}`}>
       <header className="thread-head">
         <div className="thread-heading">
-          {path.length > 0 && <p className="thread-path">{path.join(" › ")}</p>}
+          {path.length > 0 && (
+            <p className="thread-path">
+              {path.map((crumb, index) => (
+                <Fragment key={crumb.key}>
+                  {index > 0 && " › "}
+                  {crumb.icon && <span className="thread-path-icon">{crumb.icon}</span>}
+                  {crumb.title}
+                </Fragment>
+              ))}
+            </p>
+          )}
           <h2>{title || "Untitled"}</h2>
           <p className="thread-meta">
             <span className={done ? "thread-state done" : "thread-state"}>{done ? "Completed" : "Open"}</span>

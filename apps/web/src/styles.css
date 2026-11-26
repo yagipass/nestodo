@@ -1194,7 +1194,21 @@ body:has(.thread) .app {
   margin: 0 0 4px;
   color: var(--muted);
   font-size: 0.75rem;
+  line-height: 18px;
   overflow-wrap: anywhere;
+}
+
+.thread-path-icon {
+  margin-right: 3px;
+  font-size: 0.8125rem;
+}
+
+.thread-path-icon img {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  object-fit: cover;
+  vertical-align: -4px;
 }
 
 .thread-meta {
