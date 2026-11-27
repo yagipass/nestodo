@@ -9,7 +9,7 @@ use nestodo_desktop::api::StatsResponse;
 use nestodo_desktop::error::Error;
 use nestodo_desktop::icon::{ImageIcon, image_id};
 use nestodo_desktop::profile::Profile;
-use nestodo_desktop::thread::{Timeline, TimelineItem};
+use nestodo_desktop::thread::{CommentImage, Timeline, TimelineItem};
 use nestodo_desktop::webhook::{Analytics, WebhookEdit, Webhooks};
 use nestodo_desktop::wire::{Reply, Request, Todo};
 
@@ -89,6 +89,18 @@ struct Comment {
     body: String,
     via: &'static str,
     edited: bool,
+    pictures: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct StoredPicture {
+    id: String,
+    bytes: Vec<u8>,
+    posted: bool,
+}
+
+fn picture_url(id: &str) -> String {
+    format!("/api/v1/comment-images/{id}")
 }
 
 #[derive(Default)]
@@ -110,6 +122,10 @@ struct State {
     image_lists: usize,
     image_downloads: usize,
     failing_image_lists: usize,
+    pictures: Vec<StoredPicture>,
+    next_picture: u64,
+    picture_downloads: usize,
+    refusing_pictures: Option<String>,
 }
 
 impl State {
@@ -121,9 +137,42 @@ impl State {
             body: body.to_string(),
             via,
             edited: false,
+            pictures: Vec::new(),
         };
         self.comments.push(comment.clone());
         comment
+    }
+
+    fn store_picture(&mut self, bytes: Vec<u8>) -> String {
+        self.next_picture += 1;
+        let id = format!("pic{}", self.next_picture);
+        self.pictures.push(StoredPicture {
+            id: id.clone(),
+            bytes,
+            posted: false,
+        });
+        id
+    }
+
+    fn take_pictures(&mut self, ids: &[String]) -> bool {
+        let unique = ids
+            .iter()
+            .enumerate()
+            .all(|(index, id)| !ids[..index].contains(id));
+        let free = ids.iter().all(|id| {
+            self.pictures
+                .iter()
+                .any(|picture| &picture.id == id && !picture.posted)
+        });
+        if !unique || !free {
+            return false;
+        }
+        for picture in &mut self.pictures {
+            if ids.contains(&picture.id) {
+                picture.posted = true;
+            }
+        }
+        true
     }
 
     fn comments_of(&self, todo: u64) -> impl Iterator<Item = &Comment> {
@@ -138,12 +187,18 @@ fn at_of(comment: &Comment) -> String {
 }
 
 fn comment_json(comment: &Comment) -> Value {
+    let images: Vec<Value> = comment
+        .pictures
+        .iter()
+        .map(|id| json!({ "id": id, "url": picture_url(id) }))
+        .collect();
     json!({
         "id": comment.id,
         "body": comment.body,
         "via": comment.via,
         "at": at_of(comment),
         "editedAt": comment.edited.then_some("2026-11-16T11:00:00.000Z"),
+        "images": images,
     })
 }
 
@@ -155,7 +210,7 @@ pub struct FakeServer {
 pub struct Seed<'a> {
     pub title: &'a str,
     pub parent: Option<u64>,
-    pub comments: Vec<(&'a str, &'static str)>,
+    pub comments: Vec<(&'a str, &'static str, usize)>,
     pub done: bool,
     pub collapsed: bool,
     pub icon: Option<&'a str>,
@@ -184,12 +239,17 @@ impl<'a> Seed<'a> {
     }
 
     pub fn comment(mut self, body: &'static str) -> Self {
-        self.comments.push((body, "app"));
+        self.comments.push((body, "app", 0));
+        self
+    }
+
+    pub fn comment_with_pictures(mut self, body: &'static str, pictures: usize) -> Self {
+        self.comments.push((body, "app", pictures));
         self
     }
 
     pub fn comment_via_mcp(mut self, body: &'static str) -> Self {
-        self.comments.push((body, "mcp"));
+        self.comments.push((body, "mcp", 0));
         self
     }
 
@@ -226,8 +286,17 @@ impl FakeServer {
                     collapsed: seed.collapsed,
                     icon: seed.icon.map(str::to_string),
                 });
-                for (body, via) in seed.comments {
-                    state.add_comment(id, body, via);
+                for (body, via, pictures) in seed.comments {
+                    let comment = state.add_comment(id, body, via).id;
+                    let ids: Vec<String> = (0..pictures)
+                        .map(|_| state.store_picture(png(12, 8)))
+                        .collect();
+                    state.take_pictures(&ids);
+                    if let Some(comment) =
+                        state.comments.iter_mut().find(|known| known.id == comment)
+                    {
+                        comment.pictures = ids;
+                    }
                 }
             }
         }
@@ -269,6 +338,27 @@ impl FakeServer {
             .iter()
             .find(|image| image.id == id)
             .map(|image| image.bytes.clone())
+    }
+
+    pub fn picture_bytes(&self, id: &str) -> Option<Vec<u8>> {
+        let state = self.state.lock().unwrap();
+        state
+            .pictures
+            .iter()
+            .find(|picture| picture.id == id)
+            .map(|picture| picture.bytes.clone())
+    }
+
+    pub fn pictures_uploaded(&self) -> usize {
+        self.state.lock().unwrap().pictures.len()
+    }
+
+    pub fn picture_downloads(&self) -> usize {
+        self.state.lock().unwrap().picture_downloads
+    }
+
+    pub fn refuse_pictures(&self, message: &str) {
+        self.state.lock().unwrap().refusing_pictures = Some(message.to_string());
     }
 
     pub fn image_calls(&self) -> Vec<String> {
@@ -334,7 +424,14 @@ impl FakeServer {
                 line.push_str(" [collapsed]");
             }
             for comment in state.comments_of(row.id) {
-                let _ = write!(line, " [comment: {}]", comment.body.replace('\n', "\\n"));
+                let body = comment.body.replace('\n', "\\n");
+                let pictures = comment.pictures.join(", ");
+                let shown = match (body.is_empty(), pictures.is_empty()) {
+                    (_, true) => body,
+                    (true, false) => format!("({pictures})"),
+                    (false, false) => format!("{body} ({pictures})"),
+                };
+                let _ = write!(line, " [comment: {shown}]");
             }
             out.push(line);
             Self::walk(state, Some(row.id), depth + 1, out);
@@ -572,11 +669,28 @@ impl FakeServer {
                     return not_found();
                 }
                 let text = body["body"].as_str().unwrap_or_default();
-                if text.trim().is_empty() {
+                let pictures: Vec<String> = body["images"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| id.as_str().map(str::to_string))
+                    .collect();
+                if text.trim().is_empty() && pictures.is_empty() {
                     return reply(400, json!({ "error": "invalid_body" }));
                 }
-                let comment = state.add_comment(id, text, "app");
-                reply(201, json!({ "comment": comment_json(&comment) }))
+                if !state.take_pictures(&pictures) {
+                    return reply(
+                        400,
+                        json!({ "error": "invalid_images", "message": "Image not found" }),
+                    );
+                }
+                let comment = state.add_comment(id, text, "app").id;
+                let Some(comment) = state.comments.iter_mut().find(|known| known.id == comment)
+                else {
+                    return not_found();
+                };
+                comment.pictures = pictures;
+                reply(201, json!({ "comment": comment_json(comment) }))
             }
             ("PATCH", ["comments", _], Some(id)) => {
                 let Some(comment) = state.comments.iter_mut().find(|comment| comment.id == id)
@@ -584,6 +698,9 @@ impl FakeServer {
                     return not_found();
                 };
                 let text = body["body"].as_str().unwrap_or_default();
+                if text.trim().is_empty() && comment.pictures.is_empty() {
+                    return reply(400, json!({ "error": "invalid_body" }));
+                }
                 if comment.body != text {
                     comment.body = text.to_string();
                     comment.edited = true;
@@ -591,11 +708,13 @@ impl FakeServer {
                 reply(200, json!({ "comment": comment_json(comment) }))
             }
             ("DELETE", ["comments", _], Some(id)) => {
-                let before = state.comments.len();
-                state.comments.retain(|comment| comment.id != id);
-                if state.comments.len() == before {
+                let Some(gone) = state.comments.iter().position(|comment| comment.id == id) else {
                     return not_found();
-                }
+                };
+                let gone = state.comments.remove(gone);
+                state
+                    .pictures
+                    .retain(|picture| !gone.pictures.contains(&picture.id));
                 Reply {
                     status: 204,
                     body: None,
@@ -796,6 +915,32 @@ impl Backend for FakeServer {
             }
         }
         Ok(())
+    }
+
+    fn add_comment_image(&self, image: &[u8]) -> Result<CommentImage, Error> {
+        let mut state = self.state.lock().unwrap();
+        if let Some(message) = state.refusing_pictures.clone() {
+            return Err(Error::Refused(vec![("image".into(), message)]));
+        }
+        let id = state.store_picture(image.to_vec());
+        Ok(CommentImage {
+            url: picture_url(&id),
+            id,
+        })
+    }
+
+    fn comment_image(&self, url: &str) -> Result<Vec<u8>, Error> {
+        let mut state = self.state.lock().unwrap();
+        state.picture_downloads += 1;
+        state
+            .pictures
+            .iter()
+            .find(|picture| picture_url(&picture.id) == url)
+            .map(|picture| picture.bytes.clone())
+            .ok_or(Error::Server {
+                status: 404,
+                message: "Image not found".into(),
+            })
     }
 
     fn icon_image(&self, url: &str) -> Result<Vec<u8>, Error> {

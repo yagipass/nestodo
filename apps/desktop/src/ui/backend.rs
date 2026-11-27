@@ -2,7 +2,7 @@ use nestodo_desktop::api::{Client, StatsResponse};
 use nestodo_desktop::error::Error;
 use nestodo_desktop::icon::ImageIcon;
 use nestodo_desktop::profile::Profile;
-use nestodo_desktop::thread::TimelineItem;
+use nestodo_desktop::thread::{CommentImage, TimelineItem};
 use nestodo_desktop::webhook::{Analytics, WebhookEdit, Webhooks};
 use nestodo_desktop::wire::{Reply, Request, Todo};
 
@@ -26,6 +26,8 @@ pub trait Backend: Send + Sync + 'static {
     fn rename_icon(&self, id: &str, name: &str) -> Result<ImageIcon, Error>;
     fn delete_icon(&self, id: &str) -> Result<(), Error>;
     fn icon_image(&self, url: &str) -> Result<Vec<u8>, Error>;
+    fn add_comment_image(&self, image: &[u8]) -> Result<CommentImage, Error>;
+    fn comment_image(&self, url: &str) -> Result<Vec<u8>, Error>;
 }
 
 impl Backend for Client {
@@ -103,5 +105,13 @@ impl Backend for Client {
 
     fn icon_image(&self, url: &str) -> Result<Vec<u8>, Error> {
         Client::icon_image(self, url)
+    }
+
+    fn add_comment_image(&self, image: &[u8]) -> Result<CommentImage, Error> {
+        Client::add_comment_image(self, image)
+    }
+
+    fn comment_image(&self, url: &str) -> Result<Vec<u8>, Error> {
+        Client::comment_image(self, url)
     }
 }

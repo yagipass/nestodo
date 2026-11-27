@@ -3,11 +3,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, Hsla, KeyBinding,
-    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
-    SharedString, Style, Task, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine,
-    actions, div, fill, point, prelude::*, px, size,
+    App, Bounds, ClipboardEntry, ClipboardItem, Context, CursorStyle, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    GlobalElementId, Hsla, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style, Task, TextRun, UTF16Selection,
+    UnderlineStyle, Window, WrappedLine, actions, div, fill, point, prelude::*, px, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -118,6 +118,7 @@ pub fn bindings() -> Vec<KeyBinding> {
 pub enum FieldEvent {
     Changed { composing: bool },
     CompositionEnded,
+    PastedImages(Vec<Vec<u8>>),
 }
 
 #[derive(Clone)]
@@ -240,6 +241,7 @@ pub struct TextField {
     max_len: Option<usize>,
     read_only: bool,
     encode_urls: bool,
+    takes_images: bool,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
@@ -253,6 +255,23 @@ pub struct TextField {
 }
 
 impl EventEmitter<FieldEvent> for TextField {}
+
+fn pasted_images(item: &ClipboardItem) -> Vec<Vec<u8>> {
+    let entries = item.entries();
+    if entries
+        .iter()
+        .any(|entry| matches!(entry, ClipboardEntry::String(_)))
+    {
+        return Vec::new();
+    }
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            ClipboardEntry::Image(image) => Some(image.bytes.clone()),
+            _ => None,
+        })
+        .collect()
+}
 
 impl Focusable for TextField {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -272,6 +291,7 @@ impl TextField {
             max_len: None,
             read_only: false,
             encode_urls: false,
+            takes_images: false,
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -322,6 +342,11 @@ impl TextField {
 
     pub fn encode_urls(mut self) -> Self {
         self.encode_urls = true;
+        self
+    }
+
+    pub fn takes_images(mut self) -> Self {
+        self.takes_images = true;
         self
     }
 
@@ -790,7 +815,17 @@ impl TextField {
     }
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pasted) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        if self.takes_images && !self.read_only {
+            let images = pasted_images(&item);
+            if !images.is_empty() {
+                cx.emit(FieldEvent::PastedImages(images));
+                return;
+            }
+        }
+        let Some(pasted) = item.text() else {
             return;
         };
         if self.encode_urls
