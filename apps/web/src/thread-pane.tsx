@@ -1,7 +1,10 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
+import { base64Of, commentImageFrom } from "./avatar-image";
+import { MAX_COMMENT_IMAGES, type CommentImage } from "./comment-images";
 import { Icon } from "./icons";
+import { problemOf } from "./problem";
 import type { Sync } from "./sync";
-import { byDay, isPostKey, type Comment, type Entry, type TimelineItem } from "./thread";
+import { byDay, isPostKey, type Attachment, type Comment, type Entry, type TimelineItem } from "./thread";
 import { Tokens } from "./tokens";
 import { MAX_COMMENT_LENGTH } from "./todos";
 
@@ -21,6 +24,8 @@ const EVENT_LABELS = { created: "Created", completed: "Completed", reopened: "Re
 
 const EVENT_ICONS = { created: "add", completed: "tick", reopened: "reopen" } as const;
 
+let attachments = 0;
+
 export type Crumb = { key: string; title: string; icon: ReactNode };
 
 type Props = {
@@ -37,6 +42,8 @@ type Props = {
   focusRequest: number;
   draft: string;
   onDraft: (key: string, update: (current: string) => string) => void;
+  attached: readonly Attachment[];
+  onAttached: (key: string, update: (current: readonly Attachment[]) => readonly Attachment[]) => void;
   onCount: (key: string, delta: number) => void;
   onBack: () => void;
   onClose: () => void;
@@ -55,6 +62,58 @@ async function timelineOf(id: number) {
   const res = await fetch(`/api/v1/todos/${id}/timeline`, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`timeline failed with ${res.status}`);
   return ((await res.json()) as { items: TimelineItem[] }).items;
+}
+
+async function uploadCommentImage(file: Blob) {
+  const image = await commentImageFrom(file)
+    .then(base64Of)
+    .catch(() => null);
+  if (image === null) throw new Error("The image could not be read.");
+  const res = await fetch("/api/v1/comment-images", {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ image }),
+  }).catch(() => null);
+  if (!res?.ok) throw new Error(await problemOf(res, "Could not add the image."));
+  return ((await res.json()) as { image: CommentImage }).image;
+}
+
+function imageFiles(files: FileList) {
+  return [...files].filter((file) => file.type.startsWith("image/"));
+}
+
+function imageCount(count: number) {
+  return count === 1 ? "1 image" : `${count} images`;
+}
+
+function CommentImages({ urls, onOpen }: { urls: readonly string[]; onOpen: (url: string) => void }) {
+  if (urls.length === 0) return null;
+  return (
+    <div className="thread-images">
+      {urls.map((url, index) => (
+        <button key={url} type="button" className="thread-image" aria-label={`Open image ${index + 1} of ${urls.length}`} onClick={() => onOpen(url)}>
+          <img src={url} alt="" loading="lazy" />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ImageDialog({ url, onClose }: { url: string; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+
+  useLayoutEffect(() => {
+    dialog.current?.showModal();
+  }, []);
+
+  return (
+    <dialog ref={dialog} className="image-view" aria-label="Image" onClose={onClose} onClick={() => dialog.current?.close()}>
+      <img src={url} alt="" />
+      <button type="button" className="icon-button image-view-close" aria-label="Close image" autoFocus>
+        <Icon name="close" size={18} />
+      </button>
+    </dialog>
+  );
 }
 
 function Body({ text, query, view: View }: { text: string; query: string; view: MarkdownView | null }) {
@@ -80,7 +139,7 @@ function DeleteDialog({ comment, onConfirm, onClose }: { comment: Comment; onCon
   return (
     <dialog ref={dialog} className="confirm" aria-labelledby="delete-comment-title" onClose={onClose}>
       <h2 id="delete-comment-title">Delete this comment?</h2>
-      <p className="confirm-quote">{comment.body}</p>
+      <p className="confirm-quote">{comment.body || imageCount(comment.images.length)}</p>
       <div className="confirm-actions">
         <button type="button" className="pill" onClick={() => dialog.current?.close()}>
           Cancel
@@ -107,6 +166,8 @@ export function ThreadPane({
   focusRequest,
   draft,
   onDraft,
+  attached,
+  onAttached,
   onCount,
   onBack,
   onClose,
@@ -114,11 +175,14 @@ export function ThreadPane({
   const [items, setItems] = useState<TimelineItem[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [local, setLocal] = useState<Entry[]>([]);
-  const [editing, setEditing] = useState<{ id: number; body: string } | null>(null);
+  const [editing, setEditing] = useState<{ id: number; body: string; hasImages: boolean } | null>(null);
   const [deleting, setDeleting] = useState<Comment | null>(null);
+  const [viewing, setViewing] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const list = useRef<HTMLOListElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
   const shownDone = useRef(done);
   const counter = useRef(0);
   const mutations = useRef(0);
@@ -196,32 +260,84 @@ export function ThreadPane({
   const entries: Entry[] = items === null ? [] : [...items, ...local];
   const days = byDay(entries, new Date());
   const written = entries.some((entry) => entry.type !== "event");
+  const uploading = attached.some((attachment) => attachment.image === null);
+  const postable = editable && !uploading && (draft.trim() !== "" || attached.length > 0);
 
   useLayoutEffect(() => {
     const element = list.current;
     if (element) element.scrollTop = element.scrollHeight;
   }, [entries.length]);
 
+  function attach(files: readonly File[]) {
+    if (!editable || files.length === 0) return;
+    const room = Math.max(0, MAX_COMMENT_IMAGES - attached.length);
+    setProblem(files.length > room ? `A comment can have up to ${MAX_COMMENT_IMAGES} images` : null);
+    for (const file of files.slice(0, room)) {
+      attachments += 1;
+      const key = `attachment${attachments}`;
+      const preview = URL.createObjectURL(file);
+      onAttached(todoKey, (current) => [...current, { key, preview, image: null }]);
+      uploadCommentImage(file).then(
+        (image) => onAttached(todoKey, (current) => current.map((attachment) => (attachment.key === key ? { ...attachment, image } : attachment))),
+        (error: unknown) => {
+          URL.revokeObjectURL(preview);
+          onAttached(todoKey, (current) => current.filter((attachment) => attachment.key !== key));
+          setProblem(error instanceof Error ? error.message : "Could not add the image.");
+        },
+      );
+    }
+  }
+
+  function detach(attachment: Attachment) {
+    URL.revokeObjectURL(attachment.preview);
+    onAttached(todoKey, (current) => current.filter((other) => other.key !== attachment.key));
+  }
+
+  function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = imageFiles(event.clipboardData.files);
+    if (files.length === 0 || event.clipboardData.types.includes("text/plain")) return;
+    event.preventDefault();
+    attach(files);
+  }
+
+  function onDragOver(event: DragEvent<HTMLFormElement>) {
+    if (editable && event.dataTransfer.types.includes("Files")) event.preventDefault();
+  }
+
+  function onDrop(event: DragEvent<HTMLFormElement>) {
+    if (!editable || !event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    const files = imageFiles(event.dataTransfer.files);
+    if (files.length === 0) setProblem("Only images can be added");
+    else attach(files);
+  }
+
   function post() {
+    if (!postable) return;
     const body = draft.trim();
-    if (!editable || body === "") return;
+    const sent = attached;
     counter.current += 1;
     const key = `pending${counter.current}`;
     const settled = () => setLocal((current) => current.filter((entry) => !(entry.type === "pending" && entry.key === key)));
-    setLocal((current) => [...current, { type: "pending", key, body, at: new Date().toISOString() }]);
+    const previews = sent.map((attachment) => attachment.preview);
+    setLocal((current) => [...current, { type: "pending", key, body, at: new Date().toISOString(), images: previews }]);
     onDraft(todoKey, () => "");
+    onAttached(todoKey, () => []);
+    setProblem(null);
     onCount(todoKey, 1);
     mutations.current += 1;
-    sync.comment(todoKey, body).then(
+    sync.comment(todoKey, body, sent.flatMap((attachment) => (attachment.image ? [attachment.image.id] : []))).then(
       (comment) => {
         mutations.current += 1;
         settled();
         setItems((current) => [...(current ?? []), { type: "comment", ...comment }]);
+        for (const preview of previews) URL.revokeObjectURL(preview);
       },
       () => {
         settled();
         onCount(todoKey, -1);
         onDraft(todoKey, (current) => (current === "" ? body : current));
+        onAttached(todoKey, (current) => (current.length === 0 ? sent : current));
       },
     );
   }
@@ -229,7 +345,7 @@ export function ThreadPane({
   function save() {
     if (!editing || !editable) return;
     const body = editing.body.trim();
-    if (body === "") return;
+    if (body === "" && !editing.hasImages) return;
     const { id } = editing;
     setEditing(null);
     setItems((current) => current?.map((item) => (item.type === "comment" && item.id === id ? { ...item, body } : item)) ?? null);
@@ -338,7 +454,8 @@ export function ThreadPane({
                       </span>
                       <div className="thread-comment-body">
                         <p className="thread-comment-meta">Sending…</p>
-                        <Body text={entry.body} query={query} view={view} />
+                        {entry.body !== "" && <Body text={entry.body} query={query} view={view} />}
+                        <CommentImages urls={entry.images} onOpen={setViewing} />
                       </div>
                     </li>
                   );
@@ -360,7 +477,7 @@ export function ThreadPane({
                               type="button"
                               className="icon-button"
                               aria-label="Edit this comment"
-                              onClick={() => setEditing({ id: entry.id, body: entry.body })}
+                              onClick={() => setEditing({ id: entry.id, body: entry.body, hasImages: entry.images.length > 0 })}
                             >
                               <Icon name="edit" size={15} />
                             </button>
@@ -378,21 +495,22 @@ export function ThreadPane({
                             maxLength={MAX_COMMENT_LENGTH}
                             rows={3}
                             autoFocus
-                            onChange={(event) => setEditing({ id: entry.id, body: event.target.value })}
+                            onChange={(event) => setEditing({ ...edit, body: event.target.value })}
                             onKeyDown={onEditKeyDown}
                           />
                           <div className="thread-edit-actions">
                             <button type="button" className="pill" onClick={() => setEditing(null)}>
                               Cancel
                             </button>
-                            <button type="button" className="pill primary" disabled={edit.body.trim() === ""} onClick={save}>
+                            <button type="button" className="pill primary" disabled={edit.body.trim() === "" && !edit.hasImages} onClick={save}>
                               Save
                             </button>
                           </div>
                         </div>
                       ) : (
-                        <Body text={entry.body} query={query} view={view} />
+                        entry.body !== "" && <Body text={entry.body} query={query} view={view} />
                       )}
+                      <CommentImages urls={entry.images.map((image) => image.url)} onOpen={setViewing} />
                     </div>
                   </li>
                 );
@@ -409,7 +527,21 @@ export function ThreadPane({
           event.preventDefault();
           post();
         }}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
       >
+        {attached.length > 0 && (
+          <ul className="thread-attachments" aria-label="Images to post">
+            {attached.map((attachment) => (
+              <li key={attachment.key} className={attachment.image ? "thread-attachment" : "thread-attachment uploading"} aria-busy={attachment.image === null}>
+                <img src={attachment.preview} alt="" />
+                <button type="button" className="thread-attachment-remove" aria-label="Remove image" onClick={() => detach(attachment)}>
+                  <Icon name="close" size={12} strokeWidth={3} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <textarea
           ref={composer}
           aria-label="Add a comment"
@@ -423,18 +555,47 @@ export function ThreadPane({
             onDraft(todoKey, () => value);
           }}
           onKeyDown={onComposerKeyDown}
+          onPaste={onPaste}
         />
+        {problem && (
+          <p className="thread-problem" role="alert">
+            {problem}
+          </p>
+        )}
         <div className="thread-compose-foot">
           <span className="thread-hint">
             <kbd>Enter</kbd> to post, <kbd>Esc</kbd> back to the item
           </span>
-          <button type="submit" className="pill primary" disabled={!editable || draft.trim() === ""}>
-            Post
-          </button>
+          <div className="thread-compose-actions">
+            <input
+              ref={picker}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(event) => {
+                attach([...(event.target.files ?? [])]);
+                event.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Add images"
+              disabled={!editable || attached.length >= MAX_COMMENT_IMAGES}
+              onClick={() => picker.current?.click()}
+            >
+              <Icon name="image" size={18} />
+            </button>
+            <button type="submit" className="pill primary" disabled={!postable}>
+              Post
+            </button>
+          </div>
         </div>
       </form>
 
       {deleting && <DeleteDialog comment={deleting} onConfirm={() => remove(deleting)} onClose={() => setDeleting(null)} />}
+      {viewing && <ImageDialog url={viewing} onClose={() => setViewing(null)} />}
     </aside>
   );
 }

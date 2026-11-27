@@ -1,3 +1,4 @@
+import { COMMENT_IMAGE_EDGE, fitWithin } from "./comment-images";
 import { AVATAR_SIZE } from "./profiles";
 
 export function centerSquare(width: number, height: number) {
@@ -20,9 +21,35 @@ export async function squareImageFrom(file: Blob, size: number) {
     const { x, y, side } = centerSquare(bitmap.width, bitmap.height);
     context.imageSmoothingQuality = "high";
     context.drawImage(bitmap, x, y, side, side, 0, 0, size, size);
-    return await new Promise<Blob>((resolve, reject) =>
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("The browser cannot encode the image"))), "image/webp", 0.85),
-    );
+    return await encode(canvas, "image/webp", 0.85);
+  } finally {
+    bitmap.close();
+  }
+}
+
+function encode(canvas: HTMLCanvasElement, type: string, quality: number) {
+  return new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("The browser cannot encode the image"))), type, quality),
+  );
+}
+
+export async function commentImageFrom(file: Blob) {
+  const bitmap = await createImageBitmap(file);
+  try {
+    const { width, height } = fitWithin(bitmap.width, bitmap.height, COMMENT_IMAGE_EDGE);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("The browser cannot draw the image");
+    context.imageSmoothingQuality = "high";
+    context.drawImage(bitmap, 0, 0, width, height);
+    const webp = await encode(canvas, "image/webp", 0.85);
+    if (webp.type === "image/webp") return webp;
+    context.globalCompositeOperation = "destination-over";
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, width, height);
+    return await encode(canvas, "image/jpeg", 0.85);
   } finally {
     bitmap.close();
   }

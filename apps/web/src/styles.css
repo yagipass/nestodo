@@ -1529,6 +1529,131 @@ body:has(.thread) .app {
   margin-top: 10px;
 }
 
+.thread-compose-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.thread-compose-actions .icon-button:disabled {
+  background: none;
+  opacity: 0.4;
+}
+
+.thread-problem {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 0.8125rem;
+}
+
+.thread-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.thread-image {
+  width: 96px;
+  height: 96px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--accent-soft);
+  cursor: zoom-in;
+}
+
+.thread-image:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.thread-image img,
+.thread-attachment img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.thread-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-attachment {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--accent-soft);
+}
+
+.thread-attachment.uploading img {
+  opacity: 0.4;
+}
+
+.thread-attachment-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 60%);
+  color: #fff;
+}
+
+.image-view {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  padding: 16px;
+  border: none;
+  background: transparent;
+  cursor: zoom-out;
+}
+
+.image-view[open] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-view::backdrop {
+  background: rgb(8 6 16 / 85%);
+}
+
+.image-view img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+.image-view-close,
+.image-view-close:hover {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  background: rgb(0 0 0 / 45%);
+  color: #fff;
+}
+
 .thread-hint {
   display: flex;
   flex-wrap: wrap;
