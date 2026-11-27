@@ -44,6 +44,18 @@ export const todoComments = sqliteTable(
   (table) => [index("todo_comments_user_id_todo_id_idx").on(table.userId, table.todoId, table.createdAt)],
 );
 
+export const commentImages = sqliteTable(
+  "comment_images",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    commentId: integer("comment_id"),
+    position: integer("position").notNull().default(0),
+    createdAt: text("created_at").notNull().default(sql`(strftime('%Y-%m-%d %H:%M:%f', 'now'))`),
+  },
+  (table) => [index("comment_images_comment_id_created_at_idx").on(table.commentId, table.createdAt)],
+);
+
 export const trashedTodos = sqliteTable(
   "trashed_todos",
   {

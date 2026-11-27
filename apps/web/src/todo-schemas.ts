@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { createInsertSchema } from "void/drizzle-zod";
 import { todos } from "@schema";
+import { isCommentImageId, MAX_COMMENT_IMAGE_BYTES, MAX_COMMENT_IMAGES } from "./comment-images";
+import { base64Image } from "./profile-schemas";
 import { isTodoIcon } from "./todo-icon";
 import { MAX_COMMENT_LENGTH, MAX_TITLE_LENGTH } from "./todos";
 
@@ -35,7 +37,20 @@ export const todoIdParams = z.object({ id: z.coerce.number().int().positive() })
 
 export const deleteTodoQuery = z.object({ recursive: z.stringbool().default(false) });
 
-export const commentInput = z.object({ body: commentBody });
+const commentText = maxUtf16Length(z.string(), "Comment", MAX_COMMENT_LENGTH).transform((body) => (body.trim() === "" ? "" : body));
+
+const commentImageIds = z
+  .array(z.string().refine(isCommentImageId, "Image not found"))
+  .max(MAX_COMMENT_IMAGES, `A comment can have up to ${MAX_COMMENT_IMAGES} images`)
+  .refine((ids) => new Set(ids).size === ids.length, "Each image can be added once");
+
+export const commentInput = z
+  .object({ body: commentText.default(""), images: commentImageIds.default([]) })
+  .refine((comment) => comment.body !== "" || comment.images.length > 0, { message: "Comment must not be empty", path: ["body"] });
+
+export const commentEditInput = z.object({ body: commentText });
+
+export const commentImageInput = z.object({ image: base64Image(MAX_COMMENT_IMAGE_BYTES) });
 
 export const commentIdParams = z.object({ id: z.coerce.number().int().positive() });
 
