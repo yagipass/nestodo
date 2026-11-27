@@ -68,4 +68,34 @@ class CommentsTest {
 
         assertEquals(entries, byDay(entries, now, tokyo).single().entries.map { it.entry })
     }
+
+    @Test
+    fun `a large photo is shrunk until its longer side fits, keeping its shape, so an upload stays small without cropping anything`() {
+        assertEquals(Size(2048, 1536), fitWithin(4032, 3024))
+        assertEquals(Size(946, 2048), fitWithin(1170, 2532))
+    }
+
+    @Test
+    fun `a small screenshot is never enlarged, which would only blur it and make it bigger`() {
+        assertEquals(Size(800, 600), fitWithin(800, 600))
+    }
+
+    @Test
+    fun `a very thin image keeps at least one pixel on each side, so it can still be drawn`() {
+        assertEquals(Size(2048, 1), fitWithin(10000, 1))
+    }
+
+    @Test
+    fun `kept pictures drop the oldest once over budget, but never one the open log shows or the one just added`() {
+        val kept =
+            mapOf("old" to ByteArray(4), "shown" to ByteArray(4), "older" to ByteArray(4))
+                .keeping("new", ByteArray(4), budget = 8, shown = setOf("shown"))
+
+        assertEquals(listOf("shown", "new"), kept.keys.toList())
+    }
+
+    @Test
+    fun `a comment of only pictures is described by how many it has, as the web says it`() {
+        assertEquals(listOf("1 image", "2 images"), listOf(imageCount(1), imageCount(2)))
+    }
 }

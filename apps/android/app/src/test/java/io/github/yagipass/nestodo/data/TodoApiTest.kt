@@ -1,6 +1,7 @@
 package io.github.yagipass.nestodo.data
 
 import io.github.yagipass.nestodo.domain.Analytics
+import io.github.yagipass.nestodo.domain.CommentImage
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.Profile
 import io.github.yagipass.nestodo.domain.TimelineItem
@@ -280,7 +281,10 @@ class TodoApiTest {
                 "POST /api/v1/todos/3/comments",
                 "${posted.method} ${posted.url.encodedPath}",
             )
-            assertEquals(mapOf("body" to JsonPrimitive("Called them")), posted.json())
+            assertEquals(
+                Json.parseToJsonElement("""{"body":"Called them","images":[]}"""),
+                posted.json(),
+            )
             val edited = server.takeRequest()
             assertEquals("PATCH /api/v1/comments/7", "${edited.method} ${edited.url.encodedPath}")
             assertEquals(mapOf("body" to JsonPrimitive("Called them twice")), edited.json())
@@ -289,6 +293,89 @@ class TodoApiTest {
                 "DELETE /api/v1/comments/7",
                 "${deleted.method} ${deleted.url.encodedPath}",
             )
+        }
+
+    @Test
+    fun `a picture is uploaded on its own as base64 JSON and then posted with the comment by id, in the order chosen`() =
+        runTest {
+            val image = byteArrayOf(0x52, 0x49, 0x46, 0x46, -5, -1, 0x00, 0x3e)
+            val first = CommentImage("a1", "/api/v1/comment-images/a1")
+            respond(201, """{"image":{"id":"a1","url":"/api/v1/comment-images/a1"}}""")
+            respond(
+                201,
+                """{"comment":{"id":7,"body":"","via":"app","at":"2026-11-16T02:20:01Z","editedAt":null,"images":[
+                    {"id":"b2","url":"/api/v1/comment-images/b2"},{"id":"a1","url":"/api/v1/comment-images/a1"}
+                ]}}""",
+            )
+
+            assertEquals(first, api().addCommentImage(image))
+            val posted = api().comment(3, "", listOf("b2", "a1"))
+
+            assertEquals(
+                listOf(CommentImage("b2", "/api/v1/comment-images/b2"), first),
+                posted.images,
+            )
+            val uploaded = server.takeRequest()
+            assertEquals(
+                "POST /api/v1/comment-images",
+                "${uploaded.method} ${uploaded.url.encodedPath}",
+            )
+            assertEquals(
+                Json.parseToJsonElement(
+                    """{"image":"${Base64.getEncoder().encodeToString(image)}"}"""
+                ),
+                uploaded.json(),
+            )
+            assertEquals(
+                Json.parseToJsonElement("""{"body":"","images":["b2","a1"]}"""),
+                server.takeRequest().json(),
+            )
+        }
+
+    @Test
+    fun `a comment sent without pictures, as an older server sends it, reads as having none`() =
+        runTest {
+            respond(
+                200,
+                """{"items":[{"type":"comment","id":7,"body":"Called","via":"app","at":"2026-11-16T02:20:01Z","editedAt":null}]}""",
+            )
+            assertEquals(
+                emptyList<CommentImage>(),
+                (api().timeline(3).single() as TimelineItem.Comment).images,
+            )
+        }
+
+    @Test
+    fun `a refused picture keeps the server's reason, so the member reads why it was not added`() =
+        runTest {
+            respond(
+                400,
+                """{"error":"Validation failed","issues":[{"slot":"body","issues":[{"message":"The image must be 2048 KB or smaller","path":"image"}]}]}""",
+            )
+            val refused = failsWith<ApiException.Invalid> { api().addCommentImage(byteArrayOf(1)) }
+            assertEquals(mapOf("image" to "The image must be 2048 KB or smaller"), refused.fields)
+        }
+
+    @Test
+    fun `a comment picture is downloaded with the Access token, and nothing outside the comment pictures is requested`() =
+        runTest {
+            val image = byteArrayOf(0x52, 0x49, 0x46, 0x46, 0x00, -1, 0x0a)
+            server.enqueue(MockResponse.Builder().code(200).body(Buffer().write(image)).build())
+            val credentials = FakeCredentials(server.hostName, "app-token", null)
+
+            assertArrayEquals(image, api(credentials).commentImage("/api/v1/comment-images/a1"))
+            failsWith<IllegalArgumentException> {
+                api(credentials).commentImage("/api/v1/comment-images/../todos")
+            }
+            failsWith<IllegalArgumentException> {
+                api(credentials)
+                    .commentImage("https://elsewhere.example.com/api/v1/comment-images/a1")
+            }
+
+            val request = server.takeRequest()
+            assertEquals("/api/v1/comment-images/a1", request.url.encodedPath)
+            assertEquals("app-token", request.headers["cf-access-token"])
+            assertEquals(1, server.requestCount)
         }
 
     @Test
