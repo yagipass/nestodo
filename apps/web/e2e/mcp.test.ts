@@ -152,6 +152,24 @@ describe("MCP endpoint that Claude reaches through its own Access app", () => {
     expect((await value<{ todos: Todo[] }>(claude, "list_todos")).todos[0].commentCount).toBe(1);
   });
 
+  it("tells Claude how many pictures a comment has without links it could not open, so it knows something is shown there that it cannot see", async () => {
+    const { web, claude } = await member();
+    const fence = await web.createTodo("paint the fence");
+    const photos = [await web.uploadedCommentImage(), await web.uploadedCommentImage()];
+    await web.postComment(fence.id, { body: "two coats needed", images: photos.map((photo) => photo.id) });
+    await web.postComment(fence.id, { images: [(await web.uploadedCommentImage()).id] });
+
+    const { items } = await value<{ items: Record<string, unknown>[] }>(claude, "get_timeline", { id: fence.id });
+    const { comment } = await value<{ comment: Record<string, unknown> }>(claude, "add_comment", { id: fence.id, body: "bought white paint" });
+
+    expect(items.filter((item) => item.type === "comment").map(({ body, imageCount, images }) => ({ body, imageCount, images }))).toEqual([
+      { body: "two coats needed", imageCount: 2, images: undefined },
+      { body: "", imageCount: 1, images: undefined },
+    ]);
+    expect(comment).toMatchObject({ body: "bought white paint", imageCount: 0 });
+    expect(comment).not.toHaveProperty("images");
+  });
+
   it("lets Claude set, show and remove an icon, so it can mark a todo the way the member would in the app", async () => {
     const { web, claude } = await member();
     const { todo: added } = await value<{ todo: Todo }>(claude, "add_todo", { title: "buy milk", icon: "🥛" });
