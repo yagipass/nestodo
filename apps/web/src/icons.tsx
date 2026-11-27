@@ -53,6 +53,13 @@ const SHAPES = {
     </>
   ),
   comment: <path d="M8 17.5h8.5A3.5 3.5 0 0 0 20 14V8a3.5 3.5 0 0 0-3.5-3.5h-9A3.5 3.5 0 0 0 4 8v12.5z" />,
+  image: (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="4" />
+      <circle cx="9" cy="10" r="1.5" />
+      <path d="m4.5 17 4.5-4.5 3.5 3.5 2.5-2.5 4.5 4.5" />
+    </>
+  ),
   edit: <path d="M14.5 5.5l4 4L9 19H5v-4z" />,
   trash: <path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12" />,
   reopen: <path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4v4h4" />,

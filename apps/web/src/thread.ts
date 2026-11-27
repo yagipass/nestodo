@@ -1,8 +1,12 @@
-export type Comment = { id: number; body: string; via: "app" | "mcp"; at: string; editedAt: string | null };
+import type { CommentImage } from "./comment-images";
+
+export type Comment = { id: number; body: string; via: "app" | "mcp"; at: string; editedAt: string | null; images: CommentImage[] };
 
 export type TimelineItem = { type: "event"; kind: "created" | "completed" | "reopened"; at: string } | ({ type: "comment" } & Comment);
 
-export type Entry = TimelineItem | { type: "pending"; key: string; body: string; at: string };
+export type Entry = TimelineItem | { type: "pending"; key: string; body: string; at: string; images: readonly string[] };
+
+export type Attachment = { key: string; preview: string; image: CommentImage | null };
 
 export type Day = { label: string; entries: { entry: Entry; time: string }[] };
 

@@ -1,5 +1,6 @@
 export const MAX_COMMENT_IMAGES = 4;
 export const MAX_COMMENT_IMAGE_BYTES = 2 * 1024 * 1024;
+export const COMMENT_IMAGE_EDGE = 2048;
 export const KEEP_UNATTACHED_IMAGE_HOURS = 24;
 
 export type CommentImage = { id: string; url: string };
@@ -16,4 +17,9 @@ export function commentImageUrl(id: string) {
 
 export function presentCommentImage(id: string): CommentImage {
   return { id, url: commentImageUrl(id) };
+}
+
+export function fitWithin(width: number, height: number, edge: number) {
+  const scale = Math.min(1, edge / Math.max(width, height));
+  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
 }

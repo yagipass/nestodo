@@ -10,7 +10,7 @@ type Typed = Extract<Op, { type: "title" }>;
 type Settle<T> = { resolve: (value: T) => void; reject: (error: unknown) => void };
 
 type CommentJob =
-  | ({ type: "comment"; key: string; body: string } & Settle<Comment>)
+  | ({ type: "comment"; key: string; body: string; images: readonly string[] } & Settle<Comment>)
   | ({ type: "comment-edit"; id: number; body: string } & Settle<Comment>)
   | ({ type: "comment-delete"; id: number } & Settle<void>);
 
@@ -83,8 +83,8 @@ export class Sync {
     void this.pump();
   }
 
-  comment(key: string, body: string) {
-    return this.enqueue<Comment>((settle) => ({ type: "comment", key, body, ...settle }));
+  comment(key: string, body: string, images: readonly string[] = []) {
+    return this.enqueue<Comment>((settle) => ({ type: "comment", key, body, images, ...settle }));
   }
 
   editComment(id: number, body: string) {
@@ -170,7 +170,8 @@ export class Sync {
         return;
       }
       case "comment": {
-        const res = await this.expect(await this.send("POST", `/api/v1/todos/${this.serverId(job.key)}/comments`, { body: job.body }), "comment");
+        const path = `/api/v1/todos/${this.serverId(job.key)}/comments`;
+        const res = await this.expect(await this.send("POST", path, { body: job.body, images: job.images }), "comment");
         job.resolve(((await res.json()) as { comment: Comment }).comment);
         return;
       }

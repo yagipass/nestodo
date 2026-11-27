@@ -111,9 +111,18 @@ describe("Sync", () => {
 
     expect(calls.map(({ method, path, body }) => [method, path, body])).toEqual([
       ["POST", "/api/v1/todos", { title: "book hotel", parentId: null, index: 0 }],
-      ["POST", "/api/v1/todos/100/comments", { body: "near the station" }],
+      ["POST", "/api/v1/todos/100/comments", { body: "near the station", images: [] }],
     ]);
     expect(await posted).toMatchObject({ body: "near the station" });
+  });
+
+  it("sends the pictures already uploaded with the comment, in the order they were added, so the comment shows them as they were chosen", async () => {
+    const { calls, send } = server();
+    const sync = new Sync([["t1", 1]], send);
+
+    await Promise.all([sync.comment("t1", "", ["b2", "a1"]), vi.runAllTimersAsync()]);
+
+    expect(calls).toEqual([{ method: "POST", path: "/api/v1/todos/1/comments", body: { body: "", images: ["b2", "a1"] } }]);
   });
 
   it("edits and deletes comments by their own ids, in the order they were made", async () => {

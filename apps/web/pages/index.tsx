@@ -6,6 +6,7 @@ import { base64Of, squareImageFrom } from "../src/avatar-image";
 import { Icon } from "../src/icons";
 import { IMAGE_ICON_SIZE, nameFromFile, type ImageIcon } from "../src/image-icons";
 import type { Props } from "./index.server";
+import { problemOf } from "../src/problem";
 import {
   ROOT,
   append,
@@ -38,12 +39,15 @@ import {
   type Outline,
 } from "../src/outline";
 import { Sync } from "../src/sync";
+import type { Attachment } from "../src/thread";
 import { ThreadPane, type Crumb } from "../src/thread-pane";
 import { encodePastedUrl, findLinks, tokens } from "../src/title";
 import { MAX_TITLE_LENGTH, SHOW_DONE_COOKIE } from "../src/todos";
 import { ICON_CHOICES, imageIcon, isIcon, shownIcon, type ShownIcon } from "../src/todo-icon";
 import { Tokens } from "../src/tokens";
 import { UndoHistory } from "../src/undo";
+
+const NO_ATTACHMENTS: readonly Attachment[] = [];
 
 function send(method: string, path: string, body?: unknown) {
   return fetch(path, {
@@ -232,12 +236,6 @@ type ImageView =
   | { kind: "add"; image: string; preview: string; name: string }
   | { kind: "edit"; image: ImageIcon; name: string }
   | { kind: "delete"; image: ImageIcon };
-
-async function problemOf(res: Response | null, fallback: string) {
-  const body = (await res?.json().catch(() => null)) as { message?: unknown; issues?: { issues: { message: string }[] }[] } | null | undefined;
-  if (typeof body?.message === "string") return body.message;
-  return body?.issues?.flatMap(({ issues }) => issues)[0]?.message ?? fallback;
-}
 
 function IconPicker({
   outline,
@@ -618,6 +616,7 @@ export default function OutlinePage({ todos, icons, showDone: startShown }: Prop
   const [thread, setThread] = useState<string | null>(null);
   const [threadFocus, setThreadFocus] = useState<{ key: string; request: number } | null>(null);
   const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const [attachments, setAttachments] = useState<ReadonlyMap<string, readonly Attachment[]>>(() => new Map());
   const [, setTracked] = useState(0);
   const [moving, setMoving] = useState<Focus | null>(null);
   const [picking, setPicking] = useState<Focus | null>(null);
@@ -924,6 +923,16 @@ export default function OutlinePage({ todos, icons, showDone: startShown }: Prop
       const next = new Map(current);
       if (text === "") next.delete(key);
       else next.set(key, text);
+      return next;
+    });
+  }
+
+  function editAttachments(key: string, update: (current: readonly Attachment[]) => readonly Attachment[]) {
+    setAttachments((current) => {
+      const list = update(current.get(key) ?? NO_ATTACHMENTS);
+      const next = new Map(current);
+      if (list.length === 0) next.delete(key);
+      else next.set(key, list);
       return next;
     });
   }
@@ -1237,6 +1246,8 @@ export default function OutlinePage({ todos, icons, showDone: startShown }: Prop
           focusRequest={threadFocus?.key === thread ? threadFocus.request : 0}
           draft={drafts.get(thread) ?? ""}
           onDraft={editDraft}
+          attached={attachments.get(thread) ?? NO_ATTACHMENTS}
+          onAttached={editAttachments}
           onCount={countComments}
           onBack={() => focusRow({ key: thread, pos: -1 })}
           onClose={() => {
