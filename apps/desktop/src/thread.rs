@@ -3,6 +3,8 @@ use std::fmt::Display;
 use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Deserializer};
 
+pub const MAX_COMMENT_IMAGES: usize = 4;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Via {
@@ -37,6 +39,12 @@ fn utc<'de, D: Deserializer<'de>>(deserializer: D) -> Result<DateTime<Utc>, D::E
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct CommentImage {
+    pub id: String,
+    pub url: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Comment {
     pub id: u64,
@@ -45,6 +53,8 @@ pub struct Comment {
     #[serde(deserialize_with = "utc")]
     pub at: DateTime<Utc>,
     pub edited_at: Option<String>,
+    #[serde(default)]
+    pub images: Vec<CommentImage>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -70,6 +80,7 @@ pub enum Entry {
         ticket: u64,
         body: String,
         at: DateTime<Utc>,
+        images: Vec<CommentImage>,
     },
 }
 
@@ -87,6 +98,15 @@ impl Entry {
     #[must_use]
     pub fn is_written(&self) -> bool {
         !matches!(self, Entry::Logged(TimelineItem::Event { .. }))
+    }
+}
+
+#[must_use]
+pub fn image_count(count: usize) -> String {
+    if count == 1 {
+        "1 image".to_owned()
+    } else {
+        format!("{count} images")
     }
 }
 
@@ -171,7 +191,7 @@ mod tests {
             r#"{"items":[
                 {"type":"event","kind":"created","at":"2026-11-16T02:19:55Z"},
                 {"type":"comment","id":3,"body":"asked\nB","via":"mcp","at":"2026-11-16T02:19:55.282Z","editedAt":null},
-                {"type":"comment","id":4,"body":"done","via":"app","at":"2026-11-16T03:00:00.000Z","editedAt":"2026-11-16T03:05:00.000Z"}
+                {"type":"comment","id":4,"body":"done","via":"app","at":"2026-11-16T03:00:00.000Z","editedAt":"2026-11-16T03:05:00.000Z","images":[]}
             ]}"#,
         )
         .unwrap();
@@ -189,6 +209,7 @@ mod tests {
                     via: Via::Mcp,
                     at: time("2026-11-16T02:19:55.282Z"),
                     edited_at: None,
+                    images: Vec::new(),
                 }),
                 TimelineItem::Comment(Comment {
                     id: 4,
@@ -196,10 +217,39 @@ mod tests {
                     via: Via::App,
                     at: time("2026-11-16T03:00:00Z"),
                     edited_at: Some("2026-11-16T03:05:00.000Z".into()),
+                    images: Vec::new(),
                 }),
             ]
         );
         assert!(time("2026-11-16T02:19:55.282Z") > time("2026-11-16T02:19:55Z"));
+    }
+
+    #[test]
+    fn reads_the_pictures_of_a_comment_in_the_order_the_member_chose_them() {
+        let timeline: Timeline = serde_json::from_str(
+            r#"{"items":[
+                {"type":"comment","id":5,"body":"","via":"app","at":"2026-11-16T03:00:00.000Z","editedAt":null,
+                 "images":[{"id":"b2","url":"/api/v1/comment-images/b2"},{"id":"a1","url":"/api/v1/comment-images/a1"}]}
+            ]}"#,
+        )
+        .unwrap();
+
+        let [TimelineItem::Comment(comment)] = timeline.items.as_slice() else {
+            panic!("expected one comment");
+        };
+        let ids: Vec<&str> = comment
+            .images
+            .iter()
+            .map(|image| image.id.as_str())
+            .collect();
+        assert_eq!(ids, ["b2", "a1"]);
+        assert_eq!(comment.images[0].url, "/api/v1/comment-images/b2");
+    }
+
+    #[test]
+    fn counts_the_pictures_in_words_for_a_comment_that_has_no_text_to_quote() {
+        assert_eq!(image_count(1), "1 image");
+        assert_eq!(image_count(3), "3 images");
     }
 
     #[test]
@@ -271,6 +321,7 @@ mod tests {
                 ticket: 1,
                 body: "sending".into(),
                 at: time("2026-11-16T02:00:00Z"),
+                images: Vec::new(),
             },
         ];
 

@@ -16,7 +16,7 @@ use crate::icon::ImageIcon;
 use crate::profile::Profile;
 use crate::stats::Day;
 use crate::store::{Kind, TokenStore};
-use crate::thread::{Timeline, TimelineItem};
+use crate::thread::{CommentImage, Timeline, TimelineItem};
 use crate::webhook::{Analytics, WebhookEdit, Webhooks};
 use crate::wire::{Reply, Request, Todo};
 
@@ -28,6 +28,8 @@ const AVATAR_PATH: &str = "/api/v1/profile/avatar";
 const AVATARS_PATH: &str = "/api/v1/avatars/";
 const ICONS_PATH: &str = "/api/v1/icons";
 const ICON_IMAGES_PATH: &str = "/api/v1/icons/";
+const COMMENT_IMAGES_PATH: &str = "/api/v1/comment-images";
+const COMMENT_IMAGE_PATH: &str = "/api/v1/comment-images/";
 
 pub struct Client {
     http: Http,
@@ -65,6 +67,11 @@ struct Icons {
 #[derive(Deserialize)]
 struct OneIcon {
     icon: ImageIcon,
+}
+
+#[derive(Deserialize)]
+struct OneImage {
+    image: CommentImage,
 }
 
 impl Client {
@@ -249,6 +256,22 @@ impl Client {
 
     pub fn icon_image(&self, url: &str) -> Result<Vec<u8>, Error> {
         self.download(url, ICON_IMAGES_PATH, "an icon image")
+    }
+
+    pub fn add_comment_image(&self, image: &[u8]) -> Result<CommentImage, Error> {
+        let reply = self.request(&Request {
+            method: "POST",
+            path: COMMENT_IMAGES_PATH.into(),
+            body: Some(serde_json::json!({ "image": STANDARD.encode(image) })),
+        })?;
+        if !reply.is_success() {
+            return Err(told(&reply));
+        }
+        Ok(decoded::<OneImage>(reply)?.image)
+    }
+
+    pub fn comment_image(&self, url: &str) -> Result<Vec<u8>, Error> {
+        self.download(url, COMMENT_IMAGE_PATH, "a comment image")
     }
 
     fn save_icon(
@@ -1749,5 +1772,90 @@ mod tests {
         get.assert();
         elsewhere.assert();
         todos.assert();
+    }
+
+    #[test]
+    fn a_comment_picture_is_sent_as_base64_of_the_exact_bytes_and_comes_back_with_the_id_to_post_with_the_comment()
+     {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        let jpeg = b"\xff\xd8\xffnot really pixels".to_vec();
+        let post = server
+            .mock("POST", "/api/v1/comment-images")
+            .match_body(Matcher::Json(json!({"image": STANDARD.encode(&jpeg)})))
+            .with_status(201)
+            .with_body(r#"{"image":{"id":"c3","url":"/api/v1/comment-images/c3"}}"#)
+            .create();
+
+        let added = signed_in(&server, &store)
+            .unwrap()
+            .add_comment_image(&jpeg)
+            .unwrap();
+
+        post.assert();
+        assert_eq!(
+            added,
+            CommentImage {
+                id: "c3".into(),
+                url: "/api/v1/comment-images/c3".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_comment_picture_the_server_refuses_carries_its_own_words_so_the_pane_can_say_why() {
+        let mut server = Server::new();
+        let store = store_with(&[(Kind::App, &token("app", LATER))]);
+        server
+            .mock("POST", "/api/v1/comment-images")
+            .with_status(400)
+            .with_body(
+                r#"{"error":"Validation failed","issues":[{"slot":"body","issues":[
+                    {"message":"The image must be 2048 KB or smaller","path":"image"}
+                ]}]}"#,
+            )
+            .create();
+
+        let refused = signed_in(&server, &store)
+            .unwrap()
+            .add_comment_image(b"jpeg");
+
+        let Err(error @ Error::Refused(_)) = refused else {
+            panic!("expected the server's reason, got {refused:?}");
+        };
+        assert_eq!(error.to_string(), "The image must be 2048 KB or smaller");
+    }
+
+    #[test]
+    fn a_comment_picture_downloads_with_the_login_but_only_from_the_same_servers_comment_pictures()
+    {
+        let mut server = Server::new();
+        let mut other = Server::new();
+        let saved = token("app", LATER);
+        let store = store_with(&[(Kind::App, &saved)]);
+        let image = vec![0xff, 0xd8, 0xff, 0, 1, 2];
+        let get = server
+            .mock("GET", "/api/v1/comment-images/c3")
+            .match_header("cf-access-token", saved.as_str())
+            .with_header("content-type", "image/jpeg")
+            .with_body(image.clone())
+            .create();
+        let elsewhere = other.mock("GET", Matcher::Any).expect(0).create();
+        let client = signed_in(&server, &store).unwrap();
+
+        assert_eq!(
+            client.comment_image("/api/v1/comment-images/c3").unwrap(),
+            image
+        );
+        assert!(matches!(
+            client.comment_image(&format!("{}/api/v1/comment-images/c3", other.url())),
+            Err(Error::Invalid(_))
+        ));
+        assert!(matches!(
+            client.comment_image("/api/v1/avatars/7f1c"),
+            Err(Error::Invalid(_))
+        ));
+        get.assert();
+        elsewhere.assert();
     }
 }

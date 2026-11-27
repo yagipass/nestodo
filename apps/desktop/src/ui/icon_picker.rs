@@ -27,7 +27,7 @@ actions!(icon_picker, [ApplyOther, SaveImageName, CloseIconPicker]);
 const PER_ROW: usize = 8;
 const TILE: f32 = 40.;
 const LARGE: f32 = 72.;
-const UNREADABLE: &str = "The image could not be read.";
+pub const UNREADABLE: &str = "The image could not be read.";
 const NAMELESS: &str = "Enter a name";
 
 pub fn bindings() -> Vec<KeyBinding> {
@@ -105,7 +105,7 @@ fn read_image(path: &Path) -> Option<(String, Vec<u8>, Arc<Image>)> {
     Some((icon_name_from(path), png, picture))
 }
 
-fn told(error: &Error, otherwise: &str) -> String {
+pub fn told(error: &Error, otherwise: &str) -> String {
     match error {
         Error::Refused(_) => error.to_string(),
         _ => otherwise.to_string(),

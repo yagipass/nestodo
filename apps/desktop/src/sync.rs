@@ -19,9 +19,19 @@ struct Typed {
 #[derive(Clone, Debug, PartialEq)]
 enum Job {
     Op(Op),
-    Comment { ticket: u64, key: Key, body: String },
-    EditComment { id: u64, body: String },
-    DeleteComment { id: u64 },
+    Comment {
+        ticket: u64,
+        key: Key,
+        body: String,
+        images: Vec<String>,
+    },
+    EditComment {
+        id: u64,
+        body: String,
+    },
+    DeleteComment {
+        id: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,13 +119,14 @@ impl Sync {
         });
     }
 
-    pub fn comment(&mut self, key: &str, body: &str) -> u64 {
+    pub fn comment(&mut self, key: &str, body: &str, images: &[String]) -> u64 {
         self.tickets += 1;
         let ticket = self.tickets;
         self.enqueue(Job::Comment {
             ticket,
             key: key.to_owned(),
             body: body.to_owned(),
+            images: images.to_vec(),
         });
         ticket
     }
@@ -245,10 +256,12 @@ impl Sync {
     fn request(&self, job: &Job) -> Option<Request> {
         let (method, path, body) = match job {
             Job::Op(op) => return self.op_request(op),
-            Job::Comment { key, body, .. } => (
+            Job::Comment {
+                key, body, images, ..
+            } => (
                 "POST",
                 format!("{}/comments", self.todo_path(key)?),
-                Some(json!({ "body": body })),
+                Some(json!({ "body": body, "images": images })),
             ),
             Job::EditComment { id, body } => (
                 "PATCH",
@@ -614,7 +627,7 @@ mod tests {
         let mut h = Harness::new(&[], Server::ok());
 
         h.sync.apply(&[create_op("new1", ROOT, 0, "book hotel")]);
-        let ticket = h.sync.comment("new1", "near the station");
+        let ticket = h.sync.comment("new1", "near the station", &[]);
         h.run_all_timers();
 
         assert_eq!(
@@ -628,7 +641,7 @@ mod tests {
                 request(
                     "POST",
                     "/api/v1/todos/100/comments",
-                    Some(json!({ "body": "near the station" }))
+                    Some(json!({ "body": "near the station", "images": [] }))
                 ),
             ]
         );
@@ -637,6 +650,25 @@ mod tests {
             [Saved::Posted { key, ticket: posted, comment }]
                 if key == "new1" && *posted == ticket && comment.body == "near the station"
         ));
+    }
+
+    #[test]
+    fn sends_the_uploaded_pictures_with_the_comment_in_the_order_they_were_added_so_the_comment_shows_them_as_chosen()
+     {
+        let mut h = Harness::new(&[("t1", 1)], Server::ok());
+
+        h.sync
+            .comment("t1", "", &["b2".to_owned(), "a1".to_owned()]);
+        h.run_all_timers();
+
+        assert_eq!(
+            h.server.calls,
+            [request(
+                "POST",
+                "/api/v1/todos/1/comments",
+                Some(json!({ "body": "", "images": ["b2", "a1"] }))
+            )]
+        );
     }
 
     #[test]
@@ -678,8 +710,8 @@ mod tests {
         });
         let mut h = Harness::new(&[("t1", 1), ("t2", 2)], server);
 
-        h.sync.comment("t1", "first");
-        h.sync.comment("t2", "second");
+        h.sync.comment("t1", "first", &[]);
+        h.sync.comment("t2", "second", &[]);
         h.run_all_timers();
 
         assert_eq!(h.server.paths(), ["/api/v1/todos/1/comments"]);
@@ -717,7 +749,7 @@ mod tests {
      {
         let mut sync = Sync::new([("t1".to_owned(), 1)]);
 
-        sync.comment("t1", "near the station");
+        sync.comment("t1", "near the station", &[]);
         assert!(sync.start().is_some());
         let saved = sync.finish(Ok(Reply {
             status: 201,
@@ -733,14 +765,14 @@ mod tests {
         let mut h = Harness::new(&[("t1", 1)], Server::ok());
 
         h.title("t1", "book hotel");
-        h.sync.comment("t1", "near the station");
+        h.sync.comment("t1", "near the station", &[]);
         h.run_all_timers();
 
         assert_eq!(
             h.server.bodies(),
             [
                 Some(json!({ "title": "book hotel" })),
-                Some(json!({ "body": "near the station" }))
+                Some(json!({ "body": "near the station", "images": [] }))
             ]
         );
     }

@@ -3185,3 +3185,385 @@ fn holding_the_mouse_above_the_log_keeps_scrolling_and_selecting_so_a_long_comme
     let expected = notes[..79].join("\n") + "\n";
     assert_eq!(copied(cx), Some(expected));
 }
+
+fn attachments(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> Vec<Option<String>> {
+    view.read_with(cx, |view, _| {
+        view.thread
+            .as_ref()
+            .map(|thread| {
+                thread
+                    .attachments
+                    .iter()
+                    .map(|attachment| attachment.image.as_ref().map(|image| image.id.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
+fn uploaded(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> Vec<String> {
+    attachments(view, cx)
+        .into_iter()
+        .map(|id| id.expect("every picture has finished uploading"))
+        .collect()
+}
+
+fn problem(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> Option<String> {
+    view.read_with(cx, |view, _| {
+        view.thread
+            .as_ref()
+            .and_then(|thread| thread.problem.clone())
+    })
+}
+
+fn posted_pictures(view: &Entity<OutlineView>, cx: &mut VisualTestContext) -> Vec<Vec<String>> {
+    view.read_with(cx, |view, _| {
+        view.thread
+            .as_ref()
+            .and_then(|thread| thread.items.as_ref())
+            .into_iter()
+            .flatten()
+            .filter_map(|item| match item {
+                TimelineItem::Comment(comment) => Some(
+                    comment
+                        .images
+                        .iter()
+                        .map(|image| image.id.clone())
+                        .collect(),
+                ),
+                TimelineItem::Event { .. } => None,
+            })
+            .collect()
+    })
+}
+
+fn add_pictures(cx: &mut VisualTestContext, files: &[&TempFile]) {
+    click_on(cx, "add-pictures");
+    let paths: Vec<std::path::PathBuf> = files.iter().map(|file| file.0.clone()).collect();
+    cx.simulate_path_prompt_response(move |_| Some(paths));
+    settle(cx);
+}
+
+fn paste_pictures(cx: &mut VisualTestContext, pictures: &[Vec<u8>]) {
+    cx.write_to_clipboard(gpui::ClipboardItem {
+        entries: pictures
+            .iter()
+            .map(|bytes| {
+                gpui::ClipboardEntry::Image(gpui::Image::from_bytes(
+                    gpui::ImageFormat::Png,
+                    bytes.clone(),
+                ))
+            })
+            .collect(),
+    });
+    cx.simulate_keystrokes("cmd-v");
+    settle(cx);
+}
+
+fn size_sent(server: &FakeServer, id: &str) -> (u32, u32) {
+    let sent = image::load_from_memory(&server.picture_bytes(id).unwrap()).unwrap();
+    (sent.width(), sent.height())
+}
+
+#[gpui::test]
+fn pictures_added_with_the_button_are_shrunk_uploaded_and_posted_with_the_comment_in_the_order_chosen_without_downloading_them_back(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Bread");
+    let receipt = TempFile::with("receipt.png", &png(3000, 1000));
+    let shelf = TempFile::with("shelf.png", &png(40, 30));
+
+    add_pictures(cx, &[&receipt, &shelf]);
+
+    let ids = uploaded(&view, cx);
+    assert_eq!(
+        ids.iter()
+            .map(|id| size_sent(&server, id))
+            .collect::<Vec<_>>(),
+        [(2048, 683), (40, 30)]
+    );
+    cx.simulate_input("receipt and shelf");
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+    assert_eq!(
+        server.tree(),
+        format!(
+            "Groceries\n  Milk\n  Bread [comment: receipt and shelf ({}, {})]\nTrip",
+            ids[0], ids[1]
+        )
+    );
+    assert_eq!(posted_pictures(&view, cx), std::slice::from_ref(&ids));
+    assert_eq!(attachments(&view, cx), []);
+    assert_eq!(server.picture_downloads(), 0);
+    assert!(view.read_with(cx, |view, _| {
+        ids.iter().all(|id| view.pictures.contains_key(id))
+    }));
+}
+
+#[gpui::test]
+fn a_comment_of_only_pictures_is_posted_with_no_text_and_counted_like_any_comment(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Bread");
+    paste_pictures(cx, &[png(30, 20)]);
+    let ids = uploaded(&view, cx);
+
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+
+    assert_eq!(
+        server.tree(),
+        format!("Groceries\n  Milk\n  Bread [comment: ({})]\nTrip", ids[0])
+    );
+    assert_eq!(log(&view, cx), ["Created", ""]);
+    assert_eq!(comments_on(&view, cx, "Bread"), 1);
+}
+
+#[gpui::test]
+fn a_comment_waits_until_its_pictures_have_finished_uploading_so_it_never_goes_out_without_them(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Bread");
+
+    view.update(cx, |view, cx| {
+        view.attach(vec![thread_pane::Picked::Pasted(png(30, 20))], cx);
+        view.post_comment(cx);
+    });
+
+    assert_eq!(attachments(&view, cx), [None]);
+    assert_eq!(server.sent(), []);
+    settle(cx);
+    view.update(cx, OutlineView::post_comment);
+    settle(cx);
+    assert_eq!(server.sent().len(), 1);
+    assert_eq!(posted_pictures(&view, cx).len(), 1);
+}
+
+#[gpui::test]
+fn pasting_a_screenshot_adds_it_as_a_picture_while_pasting_text_still_types_the_text(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Bread");
+
+    paste_pictures(cx, &[png(30, 20)]);
+    assert_eq!(uploaded(&view, cx).len(), 1);
+    assert_eq!(composer_text(&view, cx), "");
+
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("opens at 7".into()));
+    cx.simulate_keystrokes("cmd-v");
+    assert_eq!(composer_text(&view, cx), "opens at 7");
+    assert_eq!(attachments(&view, cx).len(), 1);
+}
+
+#[gpui::test]
+fn dropping_an_image_file_on_the_comment_box_right_after_typing_adds_it_as_a_picture(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Bread");
+    cx.simulate_input("the photo");
+    let photo = TempFile::with("photo.png", &png(50, 40));
+    let at = cx
+        .debug_bounds("compose")
+        .expect("the comment box is drawn")
+        .center();
+    let mut dropped = gpui::ExternalPaths::default();
+    dropped.0.push(photo.0.clone());
+
+    cx.simulate_event(gpui::FileDropEvent::Entered {
+        position: at,
+        paths: dropped,
+    });
+    cx.simulate_event(gpui::FileDropEvent::Submit { position: at });
+    settle(cx);
+
+    let ids = uploaded(&view, cx);
+    assert_eq!(ids.len(), 1);
+    assert_eq!(size_sent(&server, &ids[0]), (50, 40));
+}
+
+#[gpui::test]
+fn a_file_dropped_outside_the_comment_box_is_not_added_to_the_comment(cx: &mut TestAppContext) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Bread");
+    let photo = TempFile::with("photo.png", &png(50, 40));
+    let at = cx
+        .debug_bounds("thread-title")
+        .expect("the pane title is drawn")
+        .center();
+    let mut dropped = gpui::ExternalPaths::default();
+    dropped.0.push(photo.0.clone());
+
+    cx.simulate_event(gpui::FileDropEvent::Entered {
+        position: at,
+        paths: dropped,
+    });
+    cx.simulate_event(gpui::FileDropEvent::Submit { position: at });
+    settle(cx);
+
+    assert_eq!(attachments(&view, cx), []);
+    assert_eq!(server.pictures_uploaded(), 0);
+}
+
+#[gpui::test]
+fn no_more_than_four_pictures_go_on_one_comment_and_the_pane_says_so(cx: &mut TestAppContext) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Bread");
+
+    paste_pictures(cx, &vec![png(10, 10); 5]);
+
+    assert_eq!(uploaded(&view, cx).len(), 4);
+    assert_eq!(server.pictures_uploaded(), 4);
+    assert_eq!(
+        problem(&view, cx).as_deref(),
+        Some("A comment can have up to 4 images")
+    );
+    click_on(cx, "add-pictures");
+    assert!(!cx.did_prompt_for_paths());
+}
+
+#[gpui::test]
+fn a_picture_the_server_refuses_is_dropped_with_the_servers_reason_and_a_file_that_is_no_picture_says_it_could_not_be_read(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Bread");
+
+    server.refuse_pictures("The image must be 2048 KB or smaller");
+    paste_pictures(cx, &[png(30, 20)]);
+    assert_eq!(attachments(&view, cx), []);
+    assert_eq!(
+        problem(&view, cx).as_deref(),
+        Some("The image must be 2048 KB or smaller")
+    );
+
+    let notes = TempFile::with("notes.txt", b"not a picture");
+    add_pictures(cx, &[&notes]);
+    assert_eq!(attachments(&view, cx), []);
+    assert_eq!(
+        problem(&view, cx).as_deref(),
+        Some("The image could not be read.")
+    );
+    assert_eq!(server.pictures_uploaded(), 0);
+}
+
+#[gpui::test]
+fn a_picture_removed_before_posting_is_left_out_of_the_comment(cx: &mut TestAppContext) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Bread");
+    paste_pictures(cx, &[png(30, 20), png(20, 30)]);
+    let ids = uploaded(&view, cx);
+
+    click_on(cx, "remove-attachment-0");
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+
+    assert_eq!(posted_pictures(&view, cx), [vec![ids[1].clone()]]);
+}
+
+#[gpui::test]
+fn the_text_of_a_comment_with_pictures_can_be_cleared_keeping_its_pictures_while_a_comment_without_pictures_keeps_its_text(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Fence")
+            .comment_with_pictures("two coats", 1)
+            .comment("bought paint"),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Fence");
+
+    click_on(cx, "edit-comment-1");
+    cx.simulate_keystrokes("cmd-a backspace enter");
+    settle(cx);
+    assert_eq!(
+        server.tree(),
+        "Fence [comment: (pic1)] [comment: bought paint]"
+    );
+    assert_eq!(log(&view, cx), ["Created", "", "bought paint"]);
+
+    click_on(cx, "edit-comment-2");
+    cx.simulate_keystrokes("cmd-a backspace enter");
+    settle(cx);
+    assert_eq!(
+        server.tree(),
+        "Fence [comment: (pic1)] [comment: bought paint]"
+    );
+}
+
+#[gpui::test]
+fn deleting_a_comment_of_only_pictures_asks_first_saying_how_many_pictures_go_with_it(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Fence").comment_with_pictures("", 2),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Fence");
+
+    click_on(cx, "delete-comment-1");
+
+    assert_eq!(
+        cx.pending_prompt(),
+        Some(("Delete this comment?".into(), "2 images".into()))
+    );
+    cx.simulate_prompt_answer("Delete");
+    settle(cx);
+    assert_eq!(server.tree(), "Fence");
+    assert_eq!(log(&view, cx), ["Created"]);
+}
+
+#[gpui::test]
+fn pictures_on_comments_are_downloaded_once_and_one_opens_full_size_until_escape_returns_to_the_comment_box(
+    cx: &mut TestAppContext,
+) {
+    let server = Arc::new(FakeServer::with(vec![
+        seed("Fence").comment_with_pictures("before", 1),
+    ]));
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Fence");
+    assert_eq!(server.picture_downloads(), 1);
+
+    click_on(cx, "picture-comment-1-0");
+    assert!(view.read_with(cx, |view, _| view.viewing.is_some()));
+    assert!(cx.debug_bounds("picture-view").is_some());
+    assert!(view.read_with(cx, |view, _| view.has_modal()));
+
+    cx.simulate_keystrokes("escape");
+    assert!(view.read_with(cx, |view, _| view.viewing.is_none()));
+    assert!(composer_focused(&view, cx));
+
+    view.update(cx, OutlineView::refresh_thread);
+    settle(cx);
+    assert_eq!(server.picture_downloads(), 1);
+}
+
+#[gpui::test]
+fn pictures_waiting_to_be_posted_stay_with_their_own_todo_when_the_pane_switches_to_another(
+    cx: &mut TestAppContext,
+) {
+    let server = groceries();
+    let (view, cx) = open(cx, &server, true);
+    open_comments_on(&view, cx, "Bread");
+    paste_pictures(cx, &[png(30, 20)]);
+    let ids = uploaded(&view, cx);
+
+    open_comments_on(&view, cx, "Milk");
+    assert_eq!(attachments(&view, cx), []);
+
+    open_comments_on(&view, cx, "Bread");
+    assert_eq!(uploaded(&view, cx), ids);
+}

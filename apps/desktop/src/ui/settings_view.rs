@@ -1457,7 +1457,7 @@ mod tests {
     use gpui::{Focusable, TestAppContext, VisualTestContext};
     use nestodo_desktop::api::StatsResponse;
     use nestodo_desktop::icon::ImageIcon;
-    use nestodo_desktop::thread::TimelineItem;
+    use nestodo_desktop::thread::{CommentImage, TimelineItem};
     use nestodo_desktop::webhook::WebhookEdit;
     use nestodo_desktop::wire::{Reply, Request, Todo};
 
@@ -1665,6 +1665,14 @@ mod tests {
         }
 
         fn icon_image(&self, _: &str) -> Result<Vec<u8>, Error> {
+            Err(Error::Invalid("not used".into()))
+        }
+
+        fn add_comment_image(&self, _: &[u8]) -> Result<CommentImage, Error> {
+            Err(Error::Invalid("not used".into()))
+        }
+
+        fn comment_image(&self, _: &str) -> Result<Vec<u8>, Error> {
             Err(Error::Invalid("not used".into()))
         }
 

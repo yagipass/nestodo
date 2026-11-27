@@ -1,16 +1,23 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::{Local, Utc};
 use gpui::{
-    ClipboardItem, CursorStyle, DispatchPhase, Div, HitboxBehavior, MouseMoveEvent, Point,
-    WeakEntity,
+    ClipboardItem, CursorStyle, DispatchPhase, Div, DragMoveEvent, ExternalPaths, HitboxBehavior,
+    MouseMoveEvent, ObjectFit, PathPromptOptions, Point, StyledImage, WeakEntity, anchored,
+    deferred, hsla, img, white,
 };
 
+use nestodo_desktop::profile::comment_jpeg;
 use nestodo_desktop::sync::Saved;
-use nestodo_desktop::thread::{Comment, Entry, EventKind, TimelineItem, Via, by_day};
+use nestodo_desktop::thread::{
+    Comment, CommentImage, Entry, EventKind, MAX_COMMENT_IMAGES, TimelineItem, Via, by_day,
+    image_count,
+};
 
 use super::*;
 use crate::ui::avatar::avatar_circle;
+use crate::ui::icon_picker::{UNREADABLE, told};
 use crate::ui::markdown_view::markdown_view;
 use crate::ui::text_selection::{Selectable, Selection};
 use crate::ui::widgets::{pill, text_button};
@@ -19,6 +26,30 @@ const FETCH_DELAY: Duration = Duration::from_millis(150);
 const AUTOSCROLL_TICK: Duration = Duration::from_millis(16);
 const PANE_WIDTH: f32 = 420.;
 const QUOTE_ROOM: usize = 300;
+const THUMBNAIL: f32 = 96.;
+const ATTACHMENT: f32 = 64.;
+const UPLOAD_FAILED: &str = "Could not add the image.";
+
+pub(super) enum Picked {
+    File(PathBuf),
+    Pasted(Vec<u8>),
+}
+
+impl Picked {
+    fn into_bytes(self) -> Option<Vec<u8>> {
+        match self {
+            Picked::File(path) => std::fs::read(path).ok(),
+            Picked::Pasted(bytes) => Some(bytes),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct Attachment {
+    pub(super) ticket: u64,
+    pub(super) preview: Option<Arc<Image>>,
+    pub(super) image: Option<CommentImage>,
+}
 
 pub(super) struct Thread {
     pub(super) key: Key,
@@ -26,6 +57,9 @@ pub(super) struct Thread {
     pub(super) load_failed: bool,
     pub(super) local: Vec<Entry>,
     pub(super) editing: Option<u64>,
+    pub(super) attachments: Vec<Attachment>,
+    pub(super) problem: Option<String>,
+    dropping: Option<(Vec<PathBuf>, Bounds<Pixels>)>,
     shown_done: bool,
     fetched: Option<u64>,
     changes: u64,
@@ -44,11 +78,15 @@ pub(super) struct Draft {
     text: String,
     editing: Option<(u64, String)>,
     pending: Vec<Entry>,
+    attachments: Vec<Attachment>,
 }
 
 impl Draft {
     fn is_empty(&self) -> bool {
-        self.text.is_empty() && self.editing.is_none() && self.pending.is_empty()
+        self.text.is_empty()
+            && self.editing.is_none()
+            && self.pending.is_empty()
+            && self.attachments.is_empty()
     }
 }
 
@@ -64,6 +102,9 @@ impl Thread {
             load_failed: false,
             local: Vec::new(),
             editing: None,
+            attachments: Vec::new(),
+            problem: None,
+            dropping: None,
             shown_done: done,
             fetched: None,
             changes: 0,
@@ -167,8 +208,12 @@ fn drag_tracker(view: WeakEntity<OutlineView>) -> impl IntoElement {
             });
             window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
                 if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-                    view.update(cx, |this, cx| this.release_text(event.position, cx))
-                        .ok();
+                    let dragging = cx.has_active_drag();
+                    view.update(cx, |this, cx| {
+                        this.release_text(event.position, cx);
+                        this.finish_drop(event.position, dragging, cx);
+                    })
+                    .ok();
                 }
             });
         },
@@ -247,6 +292,7 @@ impl OutlineView {
         let draft = self.drafts.remove(key).unwrap_or_default();
         let mut thread = Thread::new(key, done);
         thread.local = draft.pending;
+        thread.attachments = draft.attachments;
         thread.editing = draft.editing.as_ref().map(|(id, _)| *id);
         self.thread = Some(thread);
         let read_only = self.sync.failed;
@@ -274,6 +320,7 @@ impl OutlineView {
                 .into_iter()
                 .filter(|entry| matches!(entry, Entry::Pending { .. }))
                 .collect(),
+            attachments: thread.attachments,
         };
         if draft.is_empty() {
             self.drafts.remove(&thread.key);
@@ -371,7 +418,285 @@ impl OutlineView {
             }
             Err(_) => thread.load_failed = true,
         }
+        self.want_pictures(cx);
         cx.notify();
+    }
+
+    fn want_pictures(&mut self, cx: &mut Context<Self>) {
+        let Some(thread) = self.thread.as_ref() else {
+            return;
+        };
+        let mut missing: Vec<CommentImage> = Vec::new();
+        for item in thread.items.iter().flatten() {
+            let TimelineItem::Comment(comment) = item else {
+                continue;
+            };
+            for image in &comment.images {
+                let known = self.pictures.contains_key(&image.id)
+                    || self.asked_pictures.contains(&image.id)
+                    || missing.iter().any(|asked| asked.id == image.id);
+                if !known {
+                    missing.push(image.clone());
+                }
+            }
+        }
+        if missing.is_empty() {
+            return;
+        }
+        self.asked_pictures
+            .extend(missing.iter().map(|image| image.id.clone()));
+        let backend = self.backend.clone();
+        cx.spawn(async move |this, cx| {
+            let fetched: Vec<(String, Option<Arc<Image>>)> = cx
+                .background_spawn(async move {
+                    missing
+                        .into_iter()
+                        .map(|image| {
+                            let picture = backend
+                                .comment_image(&image.url)
+                                .ok()
+                                .and_then(decode_image);
+                            (image.id, picture)
+                        })
+                        .collect()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                for (id, picture) in fetched {
+                    match picture {
+                        Some(picture) => {
+                            this.pictures.insert(id, picture);
+                        }
+                        None => {
+                            this.asked_pictures.remove(&id);
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn attachments_of(&mut self, key: &str) -> Option<&mut Vec<Attachment>> {
+        if self.thread.as_ref().is_some_and(|thread| thread.key == key) {
+            return self.thread.as_mut().map(|thread| &mut thread.attachments);
+        }
+        self.drafts.get_mut(key).map(|draft| &mut draft.attachments)
+    }
+
+    pub(super) fn attach(&mut self, picked: Vec<Picked>, cx: &mut Context<Self>) {
+        if self.sync.failed || picked.is_empty() {
+            return;
+        }
+        let Some(thread) = self.thread.as_mut() else {
+            return;
+        };
+        let room = MAX_COMMENT_IMAGES.saturating_sub(thread.attachments.len());
+        thread.problem = (picked.len() > room)
+            .then(|| format!("A comment can have up to {MAX_COMMENT_IMAGES} images"));
+        let key = thread.key.clone();
+        for source in picked.into_iter().take(room) {
+            self.attachments_made += 1;
+            let ticket = self.attachments_made;
+            if let Some(thread) = self.thread.as_mut() {
+                thread.attachments.push(Attachment {
+                    ticket,
+                    preview: None,
+                    image: None,
+                });
+            }
+            self.upload_picture(key.clone(), ticket, source, cx);
+        }
+        cx.notify();
+    }
+
+    fn upload_picture(&mut self, key: Key, ticket: u64, source: Picked, cx: &mut Context<Self>) {
+        let backend = self.backend.clone();
+        cx.spawn(async move |this, cx| {
+            let prepared = cx
+                .background_spawn(async move {
+                    let jpeg = comment_jpeg(&source.into_bytes()?).ok()?;
+                    let preview = decode_image(jpeg.clone())?;
+                    Some((jpeg, preview))
+                })
+                .await;
+            let Some((jpeg, preview)) = prepared else {
+                this.update(cx, |this, cx| {
+                    this.attachment_failed(&key, ticket, UNREADABLE.to_owned(), cx);
+                })
+                .ok();
+                return;
+            };
+            let wanted = this
+                .update(cx, |this, cx| {
+                    this.attachment_previewed(&key, ticket, preview.clone(), cx)
+                })
+                .unwrap_or(false);
+            if !wanted {
+                return;
+            }
+            let uploaded = cx
+                .background_spawn(async move { backend.add_comment_image(&jpeg) })
+                .await;
+            this.update(cx, |this, cx| match uploaded {
+                Ok(image) => this.attachment_uploaded(&key, ticket, image, preview, cx),
+                Err(error) => {
+                    this.attachment_failed(&key, ticket, told(&error, UPLOAD_FAILED), cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn attachment_previewed(
+        &mut self,
+        key: &str,
+        ticket: u64,
+        preview: Arc<Image>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(attachment) = self
+            .attachments_of(key)
+            .and_then(|attachments| attachments.iter_mut().find(|known| known.ticket == ticket))
+        else {
+            return false;
+        };
+        attachment.preview = Some(preview);
+        cx.notify();
+        true
+    }
+
+    fn attachment_uploaded(
+        &mut self,
+        key: &str,
+        ticket: u64,
+        image: CommentImage,
+        preview: Arc<Image>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(attachment) = self
+            .attachments_of(key)
+            .and_then(|attachments| attachments.iter_mut().find(|known| known.ticket == ticket))
+        else {
+            return;
+        };
+        attachment.image = Some(image.clone());
+        self.pictures.insert(image.id, preview);
+        cx.notify();
+    }
+
+    fn attachment_failed(
+        &mut self,
+        key: &str,
+        ticket: u64,
+        problem: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.forget_attachment(key, ticket);
+        if let Some(thread) = self.thread.as_mut().filter(|thread| thread.key == key) {
+            thread.problem = Some(problem);
+        }
+        cx.notify();
+    }
+
+    fn forget_attachment(&mut self, key: &str, ticket: u64) {
+        if let Some(attachments) = self.attachments_of(key) {
+            attachments.retain(|attachment| attachment.ticket != ticket);
+        }
+        if self.drafts.get(key).is_some_and(Draft::is_empty) {
+            self.drafts.remove(key);
+        }
+    }
+
+    fn detach(&mut self, ticket: u64, cx: &mut Context<Self>) {
+        let Some(key) = self.thread.as_ref().map(|thread| thread.key.clone()) else {
+            return;
+        };
+        self.forget_attachment(&key, ticket);
+        cx.notify();
+    }
+
+    fn choose_pictures(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sync.failed {
+            return;
+        }
+        let chosen = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Add".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = chosen.await else {
+                return;
+            };
+            this.update_in(cx, |this, window, cx| {
+                this.attach(paths.into_iter().map(Picked::File).collect(), cx);
+                if this.thread.is_some() {
+                    window.focus(&this.composer.focus_handle(cx), cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn on_composer_event(
+        &mut self,
+        _: Entity<TextField>,
+        event: &FieldEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if let FieldEvent::PastedImages(images) = event {
+            self.attach(images.iter().cloned().map(Picked::Pasted).collect(), cx);
+        }
+        cx.notify();
+    }
+
+    fn follow_drop(&mut self, event: &DragMoveEvent<ExternalPaths>, cx: &mut Context<Self>) {
+        let over = event.bounds.contains(&event.event.position);
+        let paths = over.then(|| event.drag(cx).paths().to_vec());
+        if let Some(thread) = self.thread.as_mut() {
+            thread.dropping = paths.map(|paths| (paths, event.bounds));
+        }
+    }
+
+    fn finish_drop(&mut self, position: Point<Pixels>, dragging: bool, cx: &mut Context<Self>) {
+        let Some((paths, bounds)) = self
+            .thread
+            .as_mut()
+            .and_then(|thread| thread.dropping.take())
+        else {
+            return;
+        };
+        if dragging && bounds.contains(&position) {
+            self.attach(paths.into_iter().map(Picked::File).collect(), cx);
+        }
+    }
+
+    fn view_picture(&mut self, picture: Arc<Image>, window: &mut Window, cx: &mut Context<Self>) {
+        self.viewing = Some(picture);
+        window.focus(&self.picture_focus, cx);
+        cx.notify();
+    }
+
+    fn close_picture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.viewing.take().is_none() {
+            return;
+        }
+        if self.thread.is_some() {
+            window.focus(&self.composer.focus_handle(cx), cx);
+        } else {
+            window.focus(&self.focus_handle, cx);
+        }
+        cx.notify();
+    }
+
+    fn on_close_image(&mut self, _: &CloseImage, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_picture(window, cx);
     }
 
     pub(super) fn sync_thread(&mut self, cx: &mut Context<Self>) {
@@ -418,21 +743,37 @@ impl OutlineView {
             return;
         }
         let body = composer.text().trim().to_string();
-        let key = self
+        let Some(thread) = self
             .thread
             .as_ref()
-            .map(|thread| thread.key.clone())
-            .filter(|key| self.outline.contains(key));
-        let Some(key) = key.filter(|_| !body.is_empty()) else {
+            .filter(|thread| self.outline.contains(&thread.key))
+        else {
             return;
         };
-        let ticket = self.sync.comment(&key, &body);
+        let uploading = thread
+            .attachments
+            .iter()
+            .any(|attachment| attachment.image.is_none());
+        if uploading || (body.is_empty() && thread.attachments.is_empty()) {
+            return;
+        }
+        let key = thread.key.clone();
+        let images: Vec<CommentImage> = thread
+            .attachments
+            .iter()
+            .filter_map(|attachment| attachment.image.clone())
+            .collect();
+        let ids: Vec<String> = images.iter().map(|image| image.id.clone()).collect();
+        let ticket = self.sync.comment(&key, &body, &ids);
         if let Some(thread) = self.thread.as_mut() {
             thread.local.push(Entry::Pending {
                 ticket,
                 body,
                 at: Utc::now(),
+                images,
             });
+            thread.attachments.clear();
+            thread.problem = None;
             thread.changes += 1;
         }
         self.composer
@@ -470,6 +811,7 @@ impl OutlineView {
                 if !known {
                     items.push(TimelineItem::Comment(comment));
                 }
+                self.want_pictures(cx);
             }
             Saved::Edited(comment) => {
                 if let Some(known) = self
@@ -510,15 +852,19 @@ impl OutlineView {
             return;
         }
         let body = field.text().trim().to_string();
-        if body.is_empty() {
-            return;
-        }
         let Some(thread) = self.thread.as_mut() else {
             return;
         };
-        let Some(id) = thread.editing.take() else {
+        let Some(id) = thread.editing else {
             return;
         };
+        let pictured = thread
+            .comment(id)
+            .is_some_and(|comment| !comment.images.is_empty());
+        if body.is_empty() && !pictured {
+            return;
+        }
+        thread.editing = None;
         if let Some(comment) = thread.comment_mut(id) {
             comment.body.clone_from(&body);
         }
@@ -547,7 +893,13 @@ impl OutlineView {
             .thread
             .as_ref()
             .and_then(|thread| thread.comment(id))
-            .map(|comment| quoted(&comment.body))
+            .map(|comment| {
+                if comment.body.trim().is_empty() {
+                    image_count(comment.images.len())
+                } else {
+                    quoted(&comment.body)
+                }
+            })
         else {
             return;
         };
@@ -900,6 +1252,136 @@ impl OutlineView {
         cx.notify();
     }
 
+    fn picture_row(
+        &self,
+        owner: &str,
+        images: &[CommentImage],
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if images.is_empty() {
+            return None;
+        }
+        let colors = theme(cx);
+        let tiles = images.iter().enumerate().map(|(index, image)| {
+            let selector = format!("picture-{owner}-{index}");
+            let tile = div()
+                .id(SharedString::from(selector.clone()))
+                .debug_selector(move || selector.clone())
+                .flex_none()
+                .size(px(THUMBNAIL))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.accent_soft);
+            match self.pictures.get(&image.id).cloned() {
+                Some(picture) => tile
+                    .cursor_pointer()
+                    .child(
+                        img(picture.clone())
+                            .size_full()
+                            .rounded(px(10.))
+                            .object_fit(ObjectFit::Cover),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.view_picture(picture.clone(), window, cx);
+                    }))
+                    .into_any_element(),
+                None => tile.into_any_element(),
+            }
+        });
+        Some(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(px(6.))
+                .mt(px(6.))
+                .children(tiles)
+                .into_any_element(),
+        )
+    }
+
+    fn attachment_strip(attachments: &[Attachment], cx: &mut Context<Self>) -> Div {
+        let colors = theme(cx);
+        div()
+            .flex()
+            .flex_wrap()
+            .gap(px(8.))
+            .children(attachments.iter().enumerate().map(|(index, attachment)| {
+                let ticket = attachment.ticket;
+                let uploading = attachment.image.is_none();
+                div()
+                    .debug_selector(move || format!("attachment-{index}"))
+                    .relative()
+                    .flex_none()
+                    .size(px(ATTACHMENT))
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(colors.border)
+                    .bg(colors.accent_soft)
+                    .children(attachment.preview.clone().map(|preview| {
+                        img(preview)
+                            .size_full()
+                            .rounded(px(10.))
+                            .object_fit(ObjectFit::Cover)
+                            .when(uploading, |preview| preview.opacity(0.4))
+                    }))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("remove-attachment-{ticket}")))
+                            .debug_selector(move || format!("remove-attachment-{index}"))
+                            .absolute()
+                            .top(px(3.))
+                            .right(px(3.))
+                            .size(px(20.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(hsla(0., 0., 0., 0.6))
+                            .cursor_pointer()
+                            .tooltip(Tooltip::text("Remove"))
+                            .on_mouse_down(MouseButton::Left, |_, window, _| {
+                                window.prevent_default();
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| this.detach(ticket, cx)))
+                            .child(icon(Icon::Close, 12., white())),
+                    )
+            }))
+    }
+
+    pub(super) fn render_viewer(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let picture = self.viewing.clone()?;
+        let viewport = window.viewport_size();
+        Some(
+            deferred(
+                anchored().position(Point::default()).child(
+                    div()
+                        .id("picture-view")
+                        .debug_selector(|| "picture-view".into())
+                        .key_context("ImageView")
+                        .track_focus(&self.picture_focus)
+                        .on_action(cx.listener(Self::on_close_image))
+                        .occlude()
+                        .w(viewport.width)
+                        .h(viewport.height)
+                        .p(px(16.))
+                        .bg(hsla(0., 0., 0.03, 0.85))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| this.close_picture(window, cx)),
+                        )
+                        .child(img(picture).size_full().object_fit(ObjectFit::Contain)),
+                ),
+            )
+            .with_priority(2)
+            .into_any_element(),
+        )
+    }
+
     fn render_event(kind: EventKind, time: &str, rail: Option<Div>, colors: &Theme) -> AnyElement {
         let (background, glyph, color) = match kind {
             EventKind::Created => (colors.accent_soft, Icon::Add, colors.accent),
@@ -1034,7 +1516,8 @@ impl OutlineView {
             .when(comment.edited_at.is_some(), |meta| meta.child("(edited)"))
             .children(actions);
         let body = if editing {
-            let can_save = !self.comment_field.read(cx).text().trim().is_empty();
+            let can_save =
+                !self.comment_field.read(cx).text().trim().is_empty() || !comment.images.is_empty();
             let field = self.comment_field.clone();
             div()
                 .flex()
@@ -1083,6 +1566,8 @@ impl OutlineView {
                         )),
                 )
                 .into_any_element()
+        } else if comment.body.trim().is_empty() {
+            div().into_any_element()
         } else {
             self.comment_text(
                 &format!("comment-text-{id}"),
@@ -1092,6 +1577,7 @@ impl OutlineView {
                 cx,
             )
         };
+        let pictures = self.picture_row(&format!("comment-{id}"), &comment.images, cx);
         div()
             .id(SharedString::from(format!("comment-{id}")))
             .group(group)
@@ -1109,21 +1595,25 @@ impl OutlineView {
                     .flex()
                     .flex_col()
                     .child(meta)
-                    .child(body),
+                    .child(body)
+                    .children(pictures),
             )
             .into_any_element()
     }
 
     fn render_pending(
         &self,
-        ticket: u64,
-        body: &str,
+        (ticket, body, images): (u64, &str, &[CommentImage]),
         rail: Option<Div>,
         font: &Font,
         readable: &mut HashMap<SharedString, Rc<Selectable>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let colors = theme(cx);
+        let text = (!body.trim().is_empty()).then(|| {
+            self.comment_text(&format!("pending-text-{ticket}"), body, font, readable, cx)
+        });
+        let pictures = self.picture_row(&format!("pending-{ticket}"), images, cx);
         div()
             .id(SharedString::from(format!("pending-{ticket}")))
             .relative()
@@ -1153,13 +1643,8 @@ impl OutlineView {
                             .text_color(colors.muted)
                             .child("Sending\u{2026}"),
                     )
-                    .child(self.comment_text(
-                        &format!("pending-text-{ticket}"),
-                        body,
-                        font,
-                        readable,
-                        cx,
-                    )),
+                    .children(text)
+                    .children(pictures),
             )
             .into_any_element()
     }
@@ -1179,6 +1664,8 @@ impl OutlineView {
             thread.scroll.scroll_to_bottom();
         }
         let scroll = thread.scroll.clone();
+        let attachments = thread.attachments.clone();
+        let problem = thread.problem.clone();
         let loaded = thread.items.is_some();
         let load_failed = thread.load_failed && !loaded;
         let editable = !self.sync.failed;
@@ -1294,8 +1781,13 @@ impl OutlineView {
                     Entry::Logged(TimelineItem::Comment(comment)) => {
                         self.render_comment(comment, time, rail, &font, &mut readable, cx)
                     }
-                    Entry::Pending { ticket, body, .. } => {
-                        self.render_pending(*ticket, body, rail, &font, &mut readable, cx)
+                    Entry::Pending {
+                        ticket,
+                        body,
+                        images,
+                        ..
+                    } => {
+                        self.render_pending((*ticket, body, images), rail, &font, &mut readable, cx)
                     }
                 });
             }
@@ -1322,9 +1814,18 @@ impl OutlineView {
         }
 
         let composer_focused = self.composer.focus_handle(cx).is_focused(window);
-        let can_post = editable && !self.composer.read(cx).text().trim().is_empty();
+        let uploading = attachments
+            .iter()
+            .any(|attachment| attachment.image.is_none());
+        let can_post = editable
+            && !uploading
+            && (!attachments.is_empty() || !self.composer.read(cx).text().trim().is_empty());
+        let can_add = editable && attachments.len() < MAX_COMMENT_IMAGES;
         let composer = self.composer.clone();
+        let accent = colors.accent;
         let compose = div()
+            .id("compose")
+            .debug_selector(|| "compose".into())
             .flex()
             .flex_col()
             .gap(px(10.))
@@ -1333,6 +1834,15 @@ impl OutlineView {
             .pb(px(16.))
             .border_t_1()
             .border_color(colors.border)
+            .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(accent.opacity(0.08)))
+            .on_drag_move(
+                cx.listener(|this, event: &DragMoveEvent<ExternalPaths>, _, cx| {
+                    this.follow_drop(event, cx);
+                }),
+            )
+            .when(!attachments.is_empty(), |compose| {
+                compose.child(Self::attachment_strip(&attachments, cx))
+            })
             .child(
                 div()
                     .debug_selector(|| "composer".into())
@@ -1357,6 +1867,15 @@ impl OutlineView {
                     })
                     .child(self.composer.clone()),
             )
+            .when_some(problem, |compose, problem| {
+                compose.child(
+                    div()
+                        .debug_selector(|| "compose-problem".into())
+                        .text_size(px(13.))
+                        .text_color(colors.danger)
+                        .child(problem),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -1377,9 +1896,32 @@ impl OutlineView {
                             .child("back to the item"),
                     )
                     .child(
-                        pill("post-comment", "Post", can_post, &colors).when(can_post, |pill| {
-                            pill.on_click(cx.listener(|this, _, _, cx| this.post_comment(cx)))
-                        }),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .child(
+                                icon_button("add-pictures", Icon::Image, 18., colors.hover, cx)
+                                    .debug_selector(|| "add-pictures".into())
+                                    .tooltip(Tooltip::text("Add images"))
+                                    .on_mouse_down(MouseButton::Left, |_, window, _| {
+                                        window.prevent_default();
+                                    })
+                                    .when(!can_add, |button| button.opacity(0.4))
+                                    .when(can_add, |button| {
+                                        button.on_click(cx.listener(|this, _, window, cx| {
+                                            this.choose_pictures(window, cx);
+                                        }))
+                                    }),
+                            )
+                            .child(pill("post-comment", "Post", can_post, &colors).when(
+                                can_post,
+                                |pill| {
+                                    pill.on_click(
+                                        cx.listener(|this, _, _, cx| this.post_comment(cx)),
+                                    )
+                                },
+                            )),
                     ),
             );
 

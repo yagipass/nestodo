@@ -26,6 +26,7 @@ pub enum Icon {
     Reopen,
     Bot,
     Back,
+    Image,
 }
 
 impl Icon {
@@ -53,6 +54,7 @@ impl Icon {
             Icon::Reopen => "icons/reopen.svg",
             Icon::Bot => "icons/bot.svg",
             Icon::Back => "icons/back.svg",
+            Icon::Image => "icons/image.svg",
         })
     }
 }
@@ -117,6 +119,10 @@ fn svg_for(path: &str) -> Option<String> {
             r#"<rect x="5" y="8.5" width="14" height="10.5" rx="3"/><path d="M12 8.5V5"/><circle cx="9.5" cy="13.5" r=".9" fill="black"/><circle cx="14.5" cy="13.5" r=".9" fill="black"/>"#,
         ),
         "icons/back.svg" => line("2.2", r#"<path d="M14.5 6.5 9 12l5.5 5.5"/>"#),
+        "icons/image.svg" => line(
+            "2",
+            r#"<rect x="3.5" y="4.5" width="17" height="15" rx="4"/><circle cx="9" cy="10" r="1.5"/><path d="m4.5 17 4.5-4.5 3.5 3.5 2.5-2.5 4.5 4.5"/>"#,
+        ),
         APP_ICON => include_str!("../../../web/public/icon.svg").to_string(),
         _ => return None,
     })

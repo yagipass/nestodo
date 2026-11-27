@@ -71,6 +71,7 @@ actions!(
         PreviousMatch,
         ToggleShowDone,
         OpenSearch,
+        CloseImage,
     ]
 );
 
@@ -129,6 +130,7 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-enter", SaveComment, edit),
         KeyBinding::new("ctrl-enter", SaveComment, edit),
         KeyBinding::new("escape", CancelEdit, edit),
+        KeyBinding::new("escape", CloseImage, Some("ImageView")),
         KeyBinding::new("escape", CloseSearch, search),
         KeyBinding::new("enter", NextMatch, search),
         KeyBinding::new("shift-enter", PreviousMatch, search),
@@ -159,6 +161,10 @@ pub struct OutlineView {
     current: Option<Key>,
     thread: Option<thread_pane::Thread>,
     drafts: HashMap<Key, thread_pane::Draft>,
+    pictures: HashMap<String, Arc<Image>>,
+    asked_pictures: HashSet<String>,
+    attachments_made: u64,
+    viewing: Option<Arc<Image>>,
     avatar: Option<Avatar>,
     moving: Option<Focus>,
     picker: Option<Entity<MovePicker>>,
@@ -177,6 +183,7 @@ pub struct OutlineView {
     search_field: Entity<TextField>,
     focus_handle: FocusHandle,
     log_focus: FocusHandle,
+    picture_focus: FocusHandle,
     scroll: ScrollHandle,
     refreshing: bool,
     pending_link: Option<String>,
@@ -353,6 +360,7 @@ impl OutlineView {
                 .multiline()
                 .max_len(MAX_COMMENT_LENGTH)
                 .encode_urls()
+                .takes_images()
                 .placeholder("Add to the log\u{2026}")
         });
         let comment_field = cx.new(|cx| {
@@ -365,7 +373,7 @@ impl OutlineView {
         let mut subscriptions = vec![
             cx.subscribe_in(&title_field, window, Self::on_title_event),
             cx.subscribe_in(&search_field, window, Self::on_search_event),
-            cx.subscribe(&composer, |_, _, _: &FieldEvent, cx| cx.notify()),
+            cx.subscribe(&composer, Self::on_composer_event),
             cx.subscribe(&comment_field, |_, _, _: &FieldEvent, cx| cx.notify()),
         ];
         let title_focus = title_field.read(cx).focus_handle(cx);
@@ -406,6 +414,10 @@ impl OutlineView {
             current: None,
             thread: None,
             drafts: HashMap::new(),
+            pictures: HashMap::new(),
+            asked_pictures: HashSet::new(),
+            attachments_made: 0,
+            viewing: None,
             avatar: None,
             moving: None,
             picker: None,
@@ -424,6 +436,7 @@ impl OutlineView {
             search_field,
             focus_handle: cx.focus_handle(),
             log_focus: cx.focus_handle(),
+            picture_focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
             refreshing: false,
             pending_link: None,
@@ -450,7 +463,7 @@ impl OutlineView {
     }
 
     pub fn has_modal(&self) -> bool {
-        self.picker.is_some() || self.icon_picker.is_some()
+        self.picker.is_some() || self.icon_picker.is_some() || self.viewing.is_some()
     }
 
     fn rows(&self) -> Vec<Row> {
@@ -1173,6 +1186,7 @@ impl OutlineView {
                 }
             }
             FieldEvent::CompositionEnded => self.history.composed(),
+            FieldEvent::PastedImages(_) => {}
         }
     }
 
@@ -2188,6 +2202,7 @@ impl Render for OutlineView {
         });
 
         let thread = self.render_thread(window, cx);
+        let viewer = self.render_viewer(window, cx);
         let picker = self.picker.clone().map(|picker| {
             let backdrop = cx.entity().downgrade();
             modal(
@@ -2258,6 +2273,7 @@ impl Render for OutlineView {
             .children(thread)
             .children(picker)
             .children(icon_picker)
+            .children(viewer)
     }
 }
 
