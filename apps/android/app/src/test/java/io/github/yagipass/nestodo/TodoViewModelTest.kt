@@ -5,6 +5,7 @@ import io.github.yagipass.nestodo.access.DeviceLockedException
 import io.github.yagipass.nestodo.data.ApiException
 import io.github.yagipass.nestodo.data.Screen
 import io.github.yagipass.nestodo.domain.Appearance
+import io.github.yagipass.nestodo.domain.Attachment
 import io.github.yagipass.nestodo.domain.Caret
 import io.github.yagipass.nestodo.domain.Pending
 import io.github.yagipass.nestodo.domain.Profile
@@ -1546,6 +1547,183 @@ class TodoViewModelTest {
         assertEquals(listOf("GET 4 timeline"), repository.calls)
         assertEquals(listOf(created), viewModel.comments().entries)
         assertEquals(0, viewModel.state.value.outline[4]!!.comments)
+    }
+
+    @Test
+    fun `pictures upload as soon as they are chosen and go out with the comment in the order chosen, so the log shows them as picked`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        val first = commentPicture("000000000001")
+        val second = commentPicture("000000000002")
+
+        viewModel.attachImage(byteArrayOf(1))
+        viewModel.attachImage(byteArrayOf(2))
+        assertTrue(viewModel.postComment("Fixed, see the photos"))
+
+        assertEquals(
+            listOf(
+                "GET 4 timeline",
+                "POST comment image",
+                "POST comment image",
+                "POST comment on 4 \"Fixed, see the photos\" with images [${first.id}, ${second.id}]",
+            ),
+            repository.calls,
+        )
+        assertEquals(
+            TimelineItem.Comment(
+                500,
+                "Fixed, see the photos",
+                at = POSTED,
+                images = listOf(first, second),
+            ),
+            viewModel.comments().entries.last(),
+        )
+        assertEquals(emptyList<Attachment>(), viewModel.comments().attachments)
+    }
+
+    @Test
+    fun `a comment can be only pictures, so a photo needs no caption, while one with neither is still not posted`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        val photo = commentPicture("000000000001")
+
+        assertFalse(viewModel.postComment(" "))
+        viewModel.attachImage(byteArrayOf(1))
+        assertTrue(viewModel.postComment(" "))
+
+        assertEquals("POST comment on 4 \"\" with images [${photo.id}]", repository.calls.last())
+        assertEquals(1, viewModel.state.value.outline[4]!!.comments)
+    }
+
+    @Test
+    fun `a comment waits for its pictures to finish uploading, so it never goes out without one of them`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        repository.gate = CompletableDeferred()
+
+        viewModel.attachImage(byteArrayOf(1))
+        assertTrue(viewModel.comments().uploading)
+        assertFalse(viewModel.postComment("Before"))
+        repository.gate!!.complete(Unit)
+
+        assertFalse(viewModel.comments().uploading)
+        assertTrue(viewModel.postComment("Before"))
+        assertEquals(
+            "POST comment on 4 \"Before\" with images [${commentPicture("000000000001").id}]",
+            repository.calls.last(),
+        )
+    }
+
+    @Test
+    fun `a picture the server refuses is dropped with the server's reason, so the member knows why it is not in the comment`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        repository.uploadFailure =
+            ApiException.Invalid(mapOf("image" to "The image must be 2048 KB or smaller"))
+
+        viewModel.attachImage(byteArrayOf(1))
+
+        assertEquals(emptyList<Attachment>(), viewModel.comments().attachments)
+        assertEquals("The image must be 2048 KB or smaller", viewModel.comments().problem)
+        assertEquals(listOf("GET 4 timeline", "POST comment image"), repository.calls)
+        assertNull(viewModel.state.value.notice)
+    }
+
+    @Test
+    fun `a picture that cannot be read, or one past the four a comment holds, is refused with a reason instead of silently vanishing`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+
+        viewModel.attachImage(null)
+        assertEquals("The image could not be read.", viewModel.comments().problem)
+        assertEquals(4, viewModel.roomForImages(6))
+        assertEquals("A comment can have up to 4 images", viewModel.comments().problem)
+        repeat(5) { viewModel.attachImage(byteArrayOf(it.toByte())) }
+
+        assertEquals(4, viewModel.comments().attachments.size)
+        assertEquals(4, repository.calls.count { it == "POST comment image" })
+        assertEquals(0, viewModel.roomForImages(1))
+    }
+
+    @Test
+    fun `a picture removed before posting is left out of the comment`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        viewModel.attachImage(byteArrayOf(1))
+        viewModel.attachImage(byteArrayOf(2))
+
+        viewModel.detachImage(viewModel.comments().attachments.first().key)
+        viewModel.postComment("")
+
+        assertEquals(
+            "POST comment on 4 \"\" with images [${commentPicture("000000000002").id}]",
+            repository.calls.last(),
+        )
+    }
+
+    @Test
+    fun `closing the log drops the pictures waiting to be posted, as it drops the text being typed`() {
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+        viewModel.attachImage(byteArrayOf(1))
+
+        viewModel.closeComments()
+        viewModel.openComments(4)
+
+        assertEquals(emptyList<Attachment>(), viewModel.comments().attachments)
+    }
+
+    @Test
+    fun `the pictures in a log are downloaded once each, and the member's own uploads are shown without downloading them back`() {
+        val photo = commentPicture("000000000077")
+        repository.commentImages[photo.url] = byteArrayOf(7)
+        repository.timelines[4] =
+            listOf(created, TimelineItem.Comment(9, "", at = POSTED, images = listOf(photo)))
+        val viewModel = viewModel()
+        val uploaded = commentPicture("000000000001")
+
+        viewModel.openComments(4)
+        viewModel.attachImage(byteArrayOf(1))
+        viewModel.postComment("")
+        viewModel.closeComments()
+        viewModel.openComments(4)
+
+        assertEquals(
+            listOf(
+                "GET 4 timeline",
+                "GET ${photo.url}",
+                "POST comment image",
+                "POST comment on 4 \"\" with images [${uploaded.id}]",
+                "GET 4 timeline",
+            ),
+            repository.calls,
+        )
+        assertArrayEquals(byteArrayOf(7), viewModel.state.value.pictures[photo.id])
+        assertArrayEquals(byteArrayOf(1), viewModel.state.value.pictures[uploaded.id])
+    }
+
+    @Test
+    fun `the text of a comment with pictures can be cleared, while a comment without pictures still needs text`() {
+        val photo = commentPicture("000000000077")
+        repository.timelines[4] =
+            listOf(
+                created,
+                TimelineItem.Comment(9, "Rusty chain", at = POSTED, images = listOf(photo)),
+                TimelineItem.Comment(10, "Ordered a new one", at = POSTED),
+            )
+        val viewModel = viewModel()
+        viewModel.openComments(4)
+
+        viewModel.editComment(10)
+        assertFalse(viewModel.saveComment(" "))
+        viewModel.editComment(9)
+        assertTrue(viewModel.saveComment(" "))
+
+        assertEquals("PATCH comment 9 \"\"", repository.calls.last())
+        assertEquals(
+            TimelineItem.Comment(9, "", at = POSTED, editedAt = POSTED, images = listOf(photo)),
+            viewModel.comments().entries[1],
+        )
     }
 
     @Test

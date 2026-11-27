@@ -16,6 +16,7 @@ import io.github.yagipass.nestodo.data.Settings
 import io.github.yagipass.nestodo.data.TodoRepository
 import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Appearance
+import io.github.yagipass.nestodo.domain.CommentImage
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.ImageIcon
 import io.github.yagipass.nestodo.domain.MyIcons
@@ -54,6 +55,9 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
     var analyticsGate: CompletableDeferred<Unit>? = null
     var gate: CompletableDeferred<Unit>? = null
     val timelines = mutableMapOf<Long, List<TimelineItem>>()
+    val commentImages = mutableMapOf<String, ByteArray>()
+    var uploadFailure: Exception? = null
+    private var nextImage = 1
     private var nextId = 100L
     private var nextComment = 500L
 
@@ -143,16 +147,51 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
         return timelineOf(id)
     }
 
-    override suspend fun comment(todoId: Long, body: String): TimelineItem.Comment {
-        answer("POST comment on $todoId \"$body\"")
-        val comment = TimelineItem.Comment(nextComment++, body, at = POSTED)
+    override suspend fun comment(
+        todoId: Long,
+        body: String,
+        images: List<String>,
+    ): TimelineItem.Comment {
+        val pictured = if (images.isEmpty()) "" else " with images $images"
+        answer("POST comment on $todoId \"$body\"$pictured")
+        val comment =
+            TimelineItem.Comment(
+                nextComment++,
+                body,
+                at = POSTED,
+                images = images.map { CommentImage(it, commentImageUrl(it)) },
+            )
         timelines[todoId] = timelineOf(todoId) + comment
         return comment
     }
 
+    override suspend fun addCommentImage(image: ByteArray): CommentImage {
+        answer("POST comment image")
+        uploadFailure?.let {
+            uploadFailure = null
+            throw it
+        }
+        val picture = commentPicture("%012d".format(nextImage++))
+        commentImages[picture.url] = image
+        return picture
+    }
+
+    override suspend fun commentImage(url: String): ByteArray {
+        answer("GET $url")
+        return commentImages[url] ?: throw ApiException.Server(404)
+    }
+
     override suspend fun editComment(id: Long, body: String): TimelineItem.Comment {
         answer("PATCH comment $id \"$body\"")
-        val comment = TimelineItem.Comment(id, body, at = POSTED, editedAt = POSTED)
+        val images =
+            timelines.values
+                .flatten()
+                .filterIsInstance<TimelineItem.Comment>()
+                .firstOrNull { it.id == id }
+                ?.images
+                .orEmpty()
+        val comment =
+            TimelineItem.Comment(id, body, at = POSTED, editedAt = POSTED, images = images)
         timelines.replaceAll { _, items ->
             items.map { if (it is TimelineItem.Comment && it.id == id) comment else it }
         }
@@ -277,6 +316,13 @@ class FakeRepository(var todos: List<Todo>) : TodoRepository {
 fun imageIcon(serial: String, name: String): ImageIcon {
     val id = "00000000-0000-4000-8000-$serial"
     return ImageIcon(id, name, "/api/v1/icons/$id/image")
+}
+
+fun commentImageUrl(id: String) = "/api/v1/comment-images/$id"
+
+fun commentPicture(serial: String): CommentImage {
+    val id = "00000000-0000-4000-9000-$serial"
+    return CommentImage(id, commentImageUrl(id))
 }
 
 val POSTED: Instant = Instant.parse("2026-11-16T02:19:55Z")

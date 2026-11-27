@@ -1,8 +1,13 @@
 package io.github.yagipass.nestodo.ui
 
 import android.view.KeyCharacterMap
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +15,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
@@ -27,6 +33,7 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
@@ -58,6 +65,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
@@ -69,7 +77,9 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -82,26 +92,36 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import io.github.yagipass.nestodo.CommentsState
 import io.github.yagipass.nestodo.TodoUiState
 import io.github.yagipass.nestodo.TodoViewModel
+import io.github.yagipass.nestodo.data.commentImage
+import io.github.yagipass.nestodo.domain.Attachment
 import io.github.yagipass.nestodo.domain.Avatar
+import io.github.yagipass.nestodo.domain.COMMENT_IMAGE_EDGE
+import io.github.yagipass.nestodo.domain.MAX_COMMENT_IMAGES
 import io.github.yagipass.nestodo.domain.MAX_COMMENT_LENGTH
 import io.github.yagipass.nestodo.domain.Pending
 import io.github.yagipass.nestodo.domain.Stamped
 import io.github.yagipass.nestodo.domain.TimelineItem
 import io.github.yagipass.nestodo.domain.Via
 import io.github.yagipass.nestodo.domain.byDay
+import io.github.yagipass.nestodo.domain.imageCount
 import io.github.yagipass.nestodo.domain.nextMidnight
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal sealed interface LogLine {
     val key: String
@@ -177,6 +197,9 @@ internal fun CommentSheet(
             .toList()
             .asReversed()
 
+    var viewing by remember { mutableStateOf<ByteArray?>(null) }
+    val log = LogView(state.avatar, state.pictures, viewModel, onOpenLink, expand) { viewing = it }
+
     ModalBottomSheet(onDismissRequest = viewModel::closeComments, sheetState = sheetState) {
         Column(Modifier.fillMaxWidth().fillMaxHeight().inView(sheetState).imePadding()) {
             Header(path, images, node.title, node.completed, node.comments) {
@@ -187,11 +210,12 @@ internal fun CommentSheet(
                     }
             }
             HorizontalDivider(color = colors.outlineVariant)
-            Log(comments, state.avatar, viewModel, onOpenLink, expand, Modifier.weight(1f))
+            Log(comments, log, Modifier.weight(1f))
             HorizontalDivider(color = colors.outlineVariant)
-            Composer(viewModel, expand)
+            Composer(comments, viewModel, expand)
         }
         comments.deleting?.let { DeleteCommentDialog(it, viewModel) }
+        viewing?.let { PictureDialog(it) { viewing = null } }
     }
 }
 
@@ -292,15 +316,18 @@ private fun Tag(text: String, strong: Boolean = false) {
     )
 }
 
+private class LogView(
+    val avatar: Avatar?,
+    val pictures: Map<String, ByteArray>,
+    val viewModel: TodoViewModel,
+    val onOpenLink: (String) -> Unit,
+    val onEditing: () -> Unit,
+    val onOpenPicture: (ByteArray) -> Unit,
+)
+
 @Composable
-private fun Log(
-    comments: CommentsState,
-    avatar: Avatar?,
-    viewModel: TodoViewModel,
-    onOpenLink: (String) -> Unit,
-    onEditing: () -> Unit,
-    modifier: Modifier,
-) {
+private fun Log(comments: CommentsState, view: LogView, modifier: Modifier) {
+    val viewModel = view.viewModel
     val zone = ZoneId.systemDefault()
     val now by
         produceState(Instant.now(), zone) {
@@ -330,16 +357,8 @@ private fun Log(
                     when (val entry = line.stamped.entry) {
                         is TimelineItem.Event -> EventLine(entry, line)
                         is TimelineItem.Comment ->
-                            CommentLine(
-                                entry,
-                                line,
-                                avatar,
-                                comments.editing == entry.id,
-                                viewModel,
-                                onOpenLink,
-                                onEditing,
-                            )
-                        is Pending -> PendingLine(entry, line, avatar, onOpenLink)
+                            CommentLine(entry, line, comments.editing == entry.id, view)
+                        is Pending -> PendingLine(entry, line, view)
                     }
                 LogLine.Unwritten -> Notice("Nothing written yet. Note what you did or found.")
                 LogLine.Unloaded ->
@@ -455,18 +474,16 @@ private fun Portrait(avatar: Avatar?, via: Via) {
 private fun CommentLine(
     comment: TimelineItem.Comment,
     line: LogLine.Item,
-    avatar: Avatar?,
     editing: Boolean,
-    viewModel: TodoViewModel,
-    onOpenLink: (String) -> Unit,
-    onEditing: () -> Unit,
+    view: LogView,
 ) {
+    val viewModel = view.viewModel
     val colors = MaterialTheme.colorScheme
     Row(
         Modifier.fillMaxWidth().rail(line, colors.secondaryContainer),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Portrait(avatar, comment.via)
+        Portrait(view.avatar, comment.via)
         Column(Modifier.weight(1f).padding(bottom = 14.dp)) {
             Row(
                 Modifier.heightIn(min = 34.dp),
@@ -502,32 +519,143 @@ private fun CommentLine(
                 }
             }
             if (editing) {
-                CommentEditor(comment, viewModel, onEditing)
-            } else {
-                MarkdownText(comment.body, onOpenLink)
+                CommentEditor(comment, viewModel, view.onEditing)
+            } else if (comment.body.isNotBlank()) {
+                MarkdownText(comment.body, view.onOpenLink)
+            }
+            Pictures(comment.images.map { view.pictures[it.id] }, view.onOpenPicture)
+        }
+    }
+}
+
+@Composable
+private fun PendingLine(pending: Pending, line: LogLine.Item, view: LogView) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().rail(line, colors.secondaryContainer),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(Modifier.alpha(0.6f)) { Portrait(view.avatar, Via.App) }
+        Column(Modifier.weight(1f).padding(bottom = 14.dp).alpha(0.6f)) {
+            Row(Modifier.heightIn(min = 34.dp), verticalAlignment = Alignment.CenterVertically) {
+                Meta("Sending…")
+            }
+            if (pending.body.isNotBlank()) MarkdownText(pending.body, view.onOpenLink)
+            Pictures(pending.images.map { it.bytes }, view.onOpenPicture)
+        }
+    }
+}
+
+private val PictureShape = RoundedCornerShape(10.dp)
+
+@Composable
+private fun Thumbnail(bytes: ByteArray?, size: Dp, modifier: Modifier = Modifier) {
+    val colors = MaterialTheme.colorScheme
+    val pixels = with(LocalDensity.current) { size.roundToPx() }
+    val picture by
+        produceState<ImageBitmap?>(null, bytes, pixels) {
+            value = bytes?.let { withContext(Dispatchers.Default) { decodePicture(it, pixels) } }
+        }
+    Box(
+        modifier
+            .size(size)
+            .clip(PictureShape)
+            .background(colors.secondaryContainer)
+            .border(1.dp, colors.outlineVariant, PictureShape)
+    ) {
+        picture?.let {
+            Image(
+                it,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        }
+    }
+}
+
+@Composable
+private fun Pictures(pictures: List<ByteArray?>, onOpen: (ByteArray) -> Unit) {
+    if (pictures.isEmpty()) return
+    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        pictures.forEachIndexed { index, bytes ->
+            val label = "Open image ${index + 1} of ${pictures.size}"
+            Thumbnail(
+                bytes,
+                72.dp,
+                if (bytes == null) Modifier
+                else
+                    Modifier.clickable(onClickLabel = label) { onOpen(bytes) }
+                        .semantics {
+                            contentDescription = label
+                        },
+            )
+        }
+    }
+}
+
+@Composable
+private fun PictureDialog(bytes: ByteArray, onClose: () -> Unit) {
+    val picture by
+        produceState<ImageBitmap?>(null, bytes) {
+            value = withContext(Dispatchers.Default) { decodePicture(bytes, COMMENT_IMAGE_EDGE) }
+        }
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            Modifier.fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.9f))
+                .clickable(onClickLabel = "Close image", onClick = onClose)
+                .padding(16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            picture?.let {
+                Image(
+                    it,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                )
+            }
+            IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd)) {
+                Icon(NestodoIcons.Close, contentDescription = "Close image", tint = Color.White)
             }
         }
     }
 }
 
 @Composable
-private fun PendingLine(
-    pending: Pending,
-    line: LogLine.Item,
-    avatar: Avatar?,
-    onOpenLink: (String) -> Unit,
-) {
-    val colors = MaterialTheme.colorScheme
-    Row(
-        Modifier.fillMaxWidth().rail(line, colors.secondaryContainer),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Box(Modifier.alpha(0.6f)) { Portrait(avatar, Via.App) }
-        Column(Modifier.weight(1f).padding(bottom = 14.dp).alpha(0.6f)) {
-            Row(Modifier.heightIn(min = 34.dp), verticalAlignment = Alignment.CenterVertically) {
-                Meta("Sending…")
-            }
-            MarkdownText(pending.body, onOpenLink)
+private fun DraftPicture(attachment: Attachment, onRemove: () -> Unit) {
+    Box {
+        Thumbnail(
+            attachment.bytes,
+            64.dp,
+            if (attachment.uploading) Modifier.alpha(0.4f) else Modifier,
+        )
+        if (attachment.uploading) {
+            CircularProgressIndicator(
+                Modifier.align(Alignment.Center).size(20.dp),
+                strokeWidth = 2.dp,
+            )
+        }
+        Box(
+            Modifier.align(Alignment.TopEnd)
+                .padding(3.dp)
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.6f))
+                .clickable(onClickLabel = "Remove image", onClick = onRemove)
+                .semantics { contentDescription = "Remove image" },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                NestodoIcons.Close,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(12.dp),
+            )
         }
     }
 }
@@ -638,34 +766,86 @@ private fun submitKey(
 }
 
 @Composable
-private fun Composer(viewModel: TodoViewModel, onFocused: () -> Unit) {
+private fun Composer(comments: CommentsState, viewModel: TodoViewModel, onFocused: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
     val draft = remember { TextFieldState() }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val pick =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.PickMultipleVisualMedia(MAX_COMMENT_IMAGES)
+        ) { uris ->
+            val room = viewModel.roomForImages(uris.size)
+            scope.launch {
+                for (uri in uris.take(room)) {
+                    val image =
+                        withContext(Dispatchers.IO) { commentImage(context.contentResolver, uri) }
+                    viewModel.attachImage(image)
+                }
+            }
+        }
 
     fun post() {
         if (viewModel.postComment(draft.text.toString())) draft.clearText()
     }
 
-    Row(
-        Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 10.dp, bottom = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.Bottom,
+    Column(
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 10.dp, bottom = 12.dp)
     ) {
-        CommentField(
-            draft,
-            label = "Add a comment",
-            placeholder = "Add to the log…",
-            modifier =
-                Modifier.weight(1f)
-                    .onFocusChanged { if (it.isFocused) onFocused() }
-                    .onPreviewKeyEvent { submitKey(it, draft, ::post) },
-        )
-        FilledIconButton(
-            onClick = ::post,
-            enabled = draft.text.isNotBlank(),
-            modifier = Modifier.size(48.dp),
-            shape = CircleShape,
+        if (comments.attachments.isNotEmpty()) {
+            Row(
+                Modifier.padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                comments.attachments.forEach { attachment ->
+                    DraftPicture(attachment) { viewModel.detachImage(attachment.key) }
+                }
+            }
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.Bottom,
         ) {
-            Icon(NestodoIcons.Send, contentDescription = "Post", modifier = Modifier.size(22.dp))
+            IconButton(
+                onClick = {
+                    pick.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                enabled = comments.attachments.size < MAX_COMMENT_IMAGES,
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(NestodoIcons.Image, contentDescription = "Add images")
+            }
+            CommentField(
+                draft,
+                label = "Add a comment",
+                placeholder = "Add to the log…",
+                modifier =
+                    Modifier.weight(1f)
+                        .onFocusChanged { if (it.isFocused) onFocused() }
+                        .onPreviewKeyEvent { submitKey(it, draft, ::post) },
+            )
+            FilledIconButton(
+                onClick = ::post,
+                enabled = comments.canPost(draft.text.toString()),
+                modifier = Modifier.size(48.dp),
+                shape = CircleShape,
+            ) {
+                Icon(
+                    NestodoIcons.Send,
+                    contentDescription = "Post",
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+        comments.problem?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.error,
+                modifier = Modifier.padding(start = 56.dp, top = 6.dp),
+            )
         }
     }
 }
@@ -703,7 +883,12 @@ private fun CommentEditor(
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
         ) {
             TextButton(onClick = viewModel::cancelEditComment) { Text("Cancel") }
-            Button(onClick = ::save, enabled = draft.text.isNotBlank()) { Text("Save") }
+            Button(
+                onClick = ::save,
+                enabled = draft.text.isNotBlank() || comment.images.isNotEmpty(),
+            ) {
+                Text("Save")
+            }
         }
     }
 }
@@ -715,12 +900,18 @@ private fun DeleteCommentDialog(comment: TimelineItem.Comment, viewModel: TodoVi
         onDismissRequest = viewModel::cancelDeleteComment,
         title = { Text("Delete this comment?") },
         text = {
-            Text(
-                remember(comment.body, colors.primary) { shownText(comment.body, colors.primary) },
-                maxLines = 5,
-                overflow = TextOverflow.Ellipsis,
-                inlineContent = LinkIcon,
-            )
+            if (comment.body.isBlank()) {
+                Text(imageCount(comment.images.size))
+            } else {
+                Text(
+                    remember(comment.body, colors.primary) {
+                        shownText(comment.body, colors.primary)
+                    },
+                    maxLines = 5,
+                    overflow = TextOverflow.Ellipsis,
+                    inlineContent = LinkIcon,
+                )
+            }
         },
         confirmButton = {
             TextButton(onClick = viewModel::confirmDeleteComment) { Text("Delete") }

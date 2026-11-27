@@ -3,6 +3,7 @@ package io.github.yagipass.nestodo.data
 import io.github.yagipass.nestodo.access.HttpResult
 import io.github.yagipass.nestodo.access.fetch
 import io.github.yagipass.nestodo.domain.Analytics
+import io.github.yagipass.nestodo.domain.CommentImage
 import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.ImageIcon
 import io.github.yagipass.nestodo.domain.Profile
@@ -15,10 +16,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -66,7 +69,15 @@ interface TodoRepository {
 
     suspend fun timeline(id: Long): List<TimelineItem>
 
-    suspend fun comment(todoId: Long, body: String): TimelineItem.Comment
+    suspend fun comment(
+        todoId: Long,
+        body: String,
+        images: List<String> = emptyList(),
+    ): TimelineItem.Comment
+
+    suspend fun addCommentImage(image: ByteArray): CommentImage
+
+    suspend fun commentImage(url: String): ByteArray
 
     suspend fun editComment(id: Long, body: String): TimelineItem.Comment
 
@@ -119,6 +130,8 @@ class TodoApi(
     @Serializable private data class Timeline(val items: List<TimelineItem>)
 
     @Serializable private data class Written(val comment: TimelineItem.Comment)
+
+    @Serializable private data class Uploaded(val image: CommentImage)
 
     @Serializable private data class Consent(val enabled: Boolean)
 
@@ -191,9 +204,25 @@ class TodoApi(
     override suspend fun timeline(id: Long): List<TimelineItem> =
         parse<Timeline>(call("GET", url("${item(id)}/timeline"), id = id)).items
 
-    override suspend fun comment(todoId: Long, body: String): TimelineItem.Comment =
-        parse<Written>(call("POST", url("${item(todoId)}/comments"), commentBody(body), todoId))
-            .comment
+    override suspend fun comment(
+        todoId: Long,
+        body: String,
+        images: List<String>,
+    ): TimelineItem.Comment {
+        val sent = buildJsonObject {
+            put("body", body)
+            putJsonArray("images") { images.forEach { add(JsonPrimitive(it)) } }
+        }
+        return parse<Written>(call("POST", url("${item(todoId)}/comments"), sent, todoId)).comment
+    }
+
+    override suspend fun addCommentImage(image: ByteArray): CommentImage =
+        parse<Uploaded>(
+                call("POST", url(COMMENT_IMAGES), buildJsonObject { put("image", encoded(image)) })
+            )
+            .image
+
+    override suspend fun commentImage(url: String): ByteArray = download(url, "$COMMENT_IMAGES/")
 
     override suspend fun editComment(id: Long, body: String): TimelineItem.Comment =
         parse<Written>(call("PATCH", url(commentItem(id)), commentBody(body), id)).comment
@@ -356,6 +385,7 @@ class TodoApi(
     private companion object {
         const val COLLECTION = "/api/v1/todos"
         const val COMMENTS = "/api/v1/comments"
+        const val COMMENT_IMAGES = "/api/v1/comment-images"
         const val STATS = "/api/v1/stats"
         const val WEBHOOK = "/api/v1/webhook"
         const val ANALYTICS = "/api/v1/analytics"

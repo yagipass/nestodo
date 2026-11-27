@@ -27,6 +27,7 @@ import io.github.yagipass.nestodo.data.baseUrlOf
 import io.github.yagipass.nestodo.data.label
 import io.github.yagipass.nestodo.domain.Analytics
 import io.github.yagipass.nestodo.domain.Appearance
+import io.github.yagipass.nestodo.domain.Attachment
 import io.github.yagipass.nestodo.domain.Avatar
 import io.github.yagipass.nestodo.domain.Caret
 import io.github.yagipass.nestodo.domain.Change
@@ -34,6 +35,7 @@ import io.github.yagipass.nestodo.domain.Day
 import io.github.yagipass.nestodo.domain.Edit
 import io.github.yagipass.nestodo.domain.Entry
 import io.github.yagipass.nestodo.domain.ImageIcon
+import io.github.yagipass.nestodo.domain.MAX_COMMENT_IMAGES
 import io.github.yagipass.nestodo.domain.MAX_COMMENT_LENGTH
 import io.github.yagipass.nestodo.domain.MAX_TITLE_LENGTH
 import io.github.yagipass.nestodo.domain.MyIcons
@@ -54,6 +56,7 @@ import io.github.yagipass.nestodo.domain.enter
 import io.github.yagipass.nestodo.domain.iconName
 import io.github.yagipass.nestodo.domain.indent
 import io.github.yagipass.nestodo.domain.isIcon
+import io.github.yagipass.nestodo.domain.keeping
 import io.github.yagipass.nestodo.domain.moveDown
 import io.github.yagipass.nestodo.domain.moveTo
 import io.github.yagipass.nestodo.domain.moveUp
@@ -74,6 +77,8 @@ import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -146,12 +151,30 @@ data class CommentsState(
     val failed: Boolean = false,
     val editing: Long? = null,
     val deleting: TimelineItem.Comment? = null,
+    val attachments: List<Attachment> = emptyList(),
+    val problem: String? = null,
 ) {
     val entries: List<Entry>
         get() = items.orEmpty() + local
 
     val written: Boolean
         get() = entries.any { it !is TimelineItem.Event }
+
+    val uploading: Boolean
+        get() = attachments.any { it.uploading }
+
+    val shownImages: Set<String>
+        get() =
+            items
+                .orEmpty()
+                .filterIsInstance<TimelineItem.Comment>()
+                .flatMap { comment ->
+                    comment.images.map { it.id }
+                }
+                .toSet() + attachments.mapNotNull { it.image?.id }
+
+    fun canPost(text: String): Boolean =
+        !uploading && (text.isNotBlank() || attachments.isNotEmpty())
 }
 
 sealed interface IconView {
@@ -201,6 +224,7 @@ data class TodoUiState(
     val completing: Caret? = null,
     val choosingIcon: ChoosingIcon? = null,
     val comments: CommentsState? = null,
+    val pictures: Map<String, ByteArray> = emptyMap(),
     val revision: Long = 0,
     val canUndo: Boolean = false,
     val notice: Notice? = null,
@@ -250,7 +274,12 @@ class TodoViewModel(
 
         data class LoadComments(val key: Long, val request: Long) : Task
 
-        data class PostComment(val key: Long, val pending: Long, val body: String) : Task
+        data class PostComment(
+            val key: Long,
+            val pending: Long,
+            val body: String,
+            val images: List<String>,
+        ) : Task
 
         data class EditComment(val id: Long, val body: String) : Task
 
@@ -319,6 +348,10 @@ class TodoViewModel(
     private var analyticsJob: Job? = null
     private var typingJob: Job? = null
     private var tasks: Channel<Queued>? = null
+    private var connected: TodoRepository? = null
+    private val commentWork = SupervisorJob(viewModelScope.coroutineContext[Job])
+    private var pictureJob: Job? = null
+    private val triedPictures = mutableSetOf<String>()
     private val cacheWrites = Channel<Saved?>(Channel.CONFLATED)
     private var kept: Outline? = null
     private var keptIcons: MyIcons? = null
@@ -627,12 +660,15 @@ class TodoViewModel(
     fun openComments(key: Long) {
         if (!current.loaded) return
         val node = current.outline[key] ?: return
+        commentWork.cancelChildren()
+        triedPictures.clear()
         _state.update { it.copy(comments = CommentsState(key, done = node.completed)) }
         loadComments(key)
     }
 
     fun closeComments() {
         commentsRequest += 1
+        commentWork.cancelChildren()
         _state.update { it.copy(comments = null) }
     }
 
@@ -642,18 +678,152 @@ class TodoViewModel(
         loadComments(comments.key)
     }
 
+    fun roomForImages(chosen: Int): Int {
+        val comments = current.comments ?: return 0
+        val room = (MAX_COMMENT_IMAGES - comments.attachments.size).coerceAtLeast(0)
+        updateComments { it.copy(problem = TOO_MANY_IMAGES.takeIf { chosen > room }) }
+        return minOf(chosen, room)
+    }
+
+    fun attachImage(image: ByteArray?) {
+        val comments = current.comments ?: return
+        val repository = connected ?: return
+        when {
+            image == null -> updateComments { it.copy(problem = UNREADABLE_IMAGE) }
+            comments.attachments.size >= MAX_COMMENT_IMAGES ->
+                updateComments { it.copy(problem = TOO_MANY_IMAGES) }
+            else -> {
+                val attachment = Attachment(newKey(), image)
+                updateComments { it.copy(attachments = it.attachments + attachment) }
+                viewModelScope.launch(commentWork) {
+                    upload(repository, comments.key, attachment)
+                }
+            }
+        }
+    }
+
+    fun detachImage(key: Long) = updateComments { comments ->
+        comments.copy(attachments = comments.attachments.filterNot { it.key == key })
+    }
+
+    private suspend fun upload(repository: TodoRepository, key: Long, attachment: Attachment) {
+        val image =
+            try {
+                repository.addCommentImage(attachment.bytes)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ApiException.NotSignedIn) {
+                fail(e, retry = null)
+                return
+            } catch (e: Exception) {
+                updateAttachment(key, attachment) { comments ->
+                    comments.copy(
+                        attachments = comments.attachments.filterNot { it.key == attachment.key },
+                        problem = said(e) ?: "Could not add the image.",
+                    )
+                }
+                return
+            }
+        _state.update { state ->
+            val comments =
+                state.comments?.takeIf { it.holds(key, attachment) } ?: return@update state
+            val attached =
+                comments.copy(
+                    attachments =
+                        comments.attachments.map {
+                            if (it.key == attachment.key) it.uploaded(image) else it
+                        }
+                )
+            state.copy(
+                comments = attached,
+                pictures =
+                    state.pictures.keeping(
+                        image.id,
+                        attachment.bytes,
+                        PICTURE_BUDGET,
+                        attached.shownImages,
+                    ),
+            )
+        }
+    }
+
+    private fun CommentsState.holds(key: Long, attachment: Attachment): Boolean =
+        this.key == key && attachments.any { it.key == attachment.key }
+
+    private fun updateAttachment(
+        key: Long,
+        attachment: Attachment,
+        change: (CommentsState) -> CommentsState,
+    ) = updateComments { if (it.holds(key, attachment)) change(it) else it }
+
+    private fun loadPictures() {
+        val repository = connected ?: return
+        if (pictureJob?.isActive == true) return
+        pictureJob =
+            viewModelScope.launch(commentWork) {
+                while (true) {
+                    val wanted =
+                        current.comments
+                            ?.items
+                            .orEmpty()
+                            .filterIsInstance<TimelineItem.Comment>()
+                            .flatMap { it.images }
+                            .firstOrNull { it.id !in current.pictures && it.id !in triedPictures }
+                            ?: return@launch
+                    triedPictures += wanted.id
+                    val bytes =
+                        try {
+                            repository.commentImage(wanted.url)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: ApiException.NotSignedIn) {
+                            fail(e, retry = null)
+                            return@launch
+                        } catch (_: Exception) {
+                            continue
+                        }
+                    _state.update { state ->
+                        state.copy(
+                            pictures =
+                                state.pictures.keeping(
+                                    wanted.id,
+                                    bytes,
+                                    PICTURE_BUDGET,
+                                    state.comments?.shownImages.orEmpty(),
+                                )
+                        )
+                    }
+                }
+            }
+    }
+
     fun postComment(body: String): Boolean {
         val comments = current.comments ?: return false
         val text = body.trim().take(MAX_COMMENT_LENGTH)
-        if (text.isEmpty()) return false
-        val pending = Pending(newKey(), text, now())
+        if (!comments.canPost(text)) return false
+        val attached = comments.attachments
+        val pending = Pending(newKey(), text, now(), attached)
         _state.update { state ->
             state.copy(
                 outline = state.outline.recount(comments.key, 1),
-                comments = state.comments?.let { it.copy(local = it.local + pending) },
+                comments =
+                    state.comments?.let {
+                        it.copy(
+                            local = it.local + pending,
+                            attachments = emptyList(),
+                            problem = null,
+                        )
+                    },
             )
         }
-        enqueue(Task.PostComment(comments.key, pending.key, text))
+        enqueue(
+            Task.PostComment(
+                comments.key,
+                pending.key,
+                text,
+                attached.mapNotNull { it.image?.id },
+            )
+        )
         return true
     }
 
@@ -662,9 +832,14 @@ class TodoViewModel(
     fun cancelEditComment() = updateComments { it.copy(editing = null) }
 
     fun saveComment(body: String): Boolean {
-        val id = current.comments?.editing ?: return false
+        val comments = current.comments ?: return false
+        val id = comments.editing ?: return false
         val text = body.trim().take(MAX_COMMENT_LENGTH)
-        if (text.isEmpty()) return false
+        val pictured =
+            comments.items.orEmpty().any {
+                it is TimelineItem.Comment && it.id == id && it.images.isNotEmpty()
+            }
+        if (text.isEmpty() && !pictured) return false
         updateComments { comments ->
             comments.copy(
                 editing = null,
@@ -1172,6 +1347,7 @@ class TodoViewModel(
     private fun startSync(repository: TodoRepository) {
         val channel = Channel<Queued>(Channel.UNLIMITED)
         tasks = channel
+        connected = repository
         pending = 0
         syncJob = viewModelScope.launch {
             for (queued in channel) {
@@ -1208,6 +1384,8 @@ class TodoViewModel(
         syncJob = null
         tasks?.close()
         tasks = null
+        connected = null
+        commentWork.cancelChildren()
         discardPending()
         history.clear()
         serverIds.clear()
@@ -1250,9 +1428,10 @@ class TodoViewModel(
                         local = comments.local.filterIsInstance<Pending>(),
                     )
                 }
+                loadPictures()
             }
             is Task.PostComment -> {
-                val comment = repository.comment(idOf(task.key), task.body)
+                val comment = repository.comment(idOf(task.key), task.body, task.images)
                 _state.update { state ->
                     val comments =
                         state.comments?.takeIf { it.key == task.key } ?: return@update state
@@ -1270,6 +1449,7 @@ class TodoViewModel(
                 current.comments
                     ?.takeIf { it.key == task.key && it.items == null }
                     ?.let { loadComments(it.key) }
+                loadPictures()
             }
             is Task.EditComment -> {
                 val comment = repository.editComment(task.id, task.body)
@@ -1616,6 +1796,9 @@ class TodoViewModel(
 
     companion object {
         private const val HISTORY_LIMIT = 50
+        private const val PICTURE_BUDGET = 32 * 1024 * 1024
+        private const val TOO_MANY_IMAGES = "A comment can have up to $MAX_COMMENT_IMAGES images"
+        private const val UNREADABLE_IMAGE = "The image could not be read."
         private val TYPING_DELAY = 500.milliseconds
         private val TYPING_PAUSE = 1.seconds
 
