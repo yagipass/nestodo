@@ -1,5 +1,16 @@
 # Changelog
 
+## [v0.16.1](https://github.com/yagipass/nestodo/compare/v0.16.0...v0.16.1) - 2026-11-27
+
+### Web
+- feat(web): show each parent's icon in the trail above the comments by @yagipass in https://github.com/yagipass/nestodo/pull/216
+### Android
+- feat(android): unclutter rows and the edit toolbar on a phone by @yagipass in https://github.com/yagipass/nestodo/pull/211
+- feat(android): show the move to picker's todos as a tree, like sharing by @yagipass in https://github.com/yagipass/nestodo/pull/214
+- feat(android): show each parent's icon in the trail above the comments by @yagipass in https://github.com/yagipass/nestodo/pull/218
+### Desktop
+- feat(desktop): show each parent's icon in the trail above the comments by @yagipass in https://github.com/yagipass/nestodo/pull/217
+
 ## [v0.16.0](https://github.com/yagipass/nestodo/compare/v0.15.0...v0.16.0) - 2026-11-25
 
 ### MCP
