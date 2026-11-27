@@ -1,7 +1,9 @@
 import { env } from "cloudflare:workers";
 import { HTTPException } from "hono/http-exception";
 import { and, db, eq, gt, gte, inArray, isNotNull, isNull, lte, ne, notInArray, sql } from "void/db";
-import { archivedTodos, todoComments, todoEvents, todos, trashedTodos } from "@schema";
+import { archivedTodos, commentImages, todoComments, todoEvents, todos, trashedTodos } from "@schema";
+import { deleteStoredCommentImages } from "./comment-image-service";
+import { presentCommentImage, type CommentImage } from "./comment-images";
 import { hasImageIcon } from "./image-icon-service";
 import { DAY, inUtc, sqliteTime } from "./time";
 import { imageIdOf } from "./todo-icon";
@@ -127,7 +129,7 @@ const inAwaitingWindow = "(created_at > ? AND created_at <= ?)";
 const webhookCandidatesSql = `SELECT id, parent_id AS parentId, position, CASE WHEN parent_id IS NULL OR ${inAwaitingWindow} THEN title ELSE '' END AS title, completed_at AS completedAt, created_at AS createdAt FROM todos WHERE user_id = ?`;
 
 const awaitingCommentsSql =
-  "SELECT todo.id AS todoId, comment.body FROM todos AS todo JOIN todo_comments AS comment ON comment.user_id = todo.user_id AND comment.todo_id = todo.id WHERE todo.user_id = ? AND todo.created_at > ? AND todo.created_at <= ? ORDER BY comment.id";
+  "SELECT todo.id AS todoId, comment.body FROM todos AS todo JOIN todo_comments AS comment ON comment.user_id = todo.user_id AND comment.todo_id = todo.id WHERE todo.user_id = ? AND todo.created_at > ? AND todo.created_at <= ? AND comment.body <> '' ORDER BY comment.id";
 
 const timelineSql = `SELECT 'event' AS type, 'created' AS kind, NULL AS id, NULL AS body, NULL AS via, created_at AS at, NULL AS editedAt, 0 AS rank, 0 AS seq FROM todos WHERE user_id = ?1 AND id = ?2
 UNION ALL
@@ -135,6 +137,11 @@ SELECT 'event', kind, NULL, NULL, NULL, at, NULL, 1, id FROM todo_events WHERE u
 UNION ALL
 SELECT 'comment', NULL, id, body, via, created_at, edited_at, 2, id FROM todo_comments WHERE user_id = ?1 AND todo_id = ?2
 ORDER BY at, rank, seq`;
+
+const timelineImagesSql = `SELECT image.comment_id AS commentId, image.id FROM todo_comments AS comment
+JOIN comment_images AS image ON image.comment_id = comment.id AND image.user_id = comment.user_id
+WHERE comment.user_id = ?1 AND comment.todo_id = ?2
+ORDER BY image.comment_id, image.position`;
 
 const searchSql = `SELECT comment.todo_id AS id, comment.body AS comment, min(comment.id) AS first
 FROM todos AS todo CROSS JOIN todo_comments AS comment ON comment.user_id = todo.user_id AND comment.todo_id = todo.id
@@ -316,19 +323,28 @@ type TimelineRow = {
 
 export type TimelineItem =
   | { type: "event"; kind: "created" | "completed" | "reopened"; at: string }
-  | { type: "comment"; id: number; body: string; via: Via; at: string; editedAt: string | null };
+  | { type: "comment"; id: number; body: string; via: Via; at: string; editedAt: string | null; images: CommentImage[] };
 
-function presentComment(row: { id: number; body: string; via: Via; at: string; editedAt: string | null }) {
-  return { id: row.id, body: row.body, via: row.via, at: inUtc(row.at), editedAt: row.editedAt && inUtc(row.editedAt) };
+function presentComment(row: { id: number; body: string; via: Via; at: string; editedAt: string | null }, images: readonly string[]) {
+  return { id: row.id, body: row.body, via: row.via, at: inUtc(row.at), editedAt: row.editedAt && inUtc(row.editedAt), images: images.map(presentCommentImage) };
 }
 
 export async function timelineOf(userId: string, id: number): Promise<TimelineItem[] | null> {
-  const { results } = await primary().prepare(timelineSql).bind(userId, id).all<TimelineRow>();
+  const session = primary();
+  const [{ results }, { results: images }] = await Promise.all([
+    session.prepare(timelineSql).bind(userId, id).all<TimelineRow>(),
+    session.prepare(timelineImagesSql).bind(userId, id).all<{ commentId: number; id: string }>(),
+  ]);
   if (results.length === 0) return null;
+  const imagesOf = new Map<number, string[]>();
+  for (const image of images) imagesOf.set(image.commentId, [...(imagesOf.get(image.commentId) ?? []), image.id]);
   return results.map((row) =>
     row.type === "event"
       ? { type: "event", kind: row.kind!, at: inUtc(row.at) }
-      : { type: "comment", ...presentComment({ id: row.id!, body: row.body!, via: row.via!, at: row.at, editedAt: row.editedAt }) },
+      : {
+          type: "comment",
+          ...presentComment({ id: row.id!, body: row.body!, via: row.via!, at: row.at, editedAt: row.editedAt }, imagesOf.get(row.id!) ?? []),
+        },
   );
 }
 
@@ -340,10 +356,53 @@ const commentColumns = {
   editedAt: todoComments.editedAt,
 };
 
-export async function addComment(userId: string, todoId: number, body: string, via: Via) {
+function imageNotFound() {
+  return rejected(400, "invalid_images", "Image not found");
+}
+
+async function attachableCount(userId: string, images: readonly string[]) {
+  const placeholders = images.map(() => "?").join(", ");
+  const row = await primary()
+    .prepare(`SELECT count(*) AS count FROM comment_images WHERE user_id = ? AND comment_id IS NULL AND id IN (${placeholders})`)
+    .bind(userId, ...images)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
+}
+
+function attachToLastComment(userId: string, images: readonly string[]) {
+  const position = sql.join([sql`CASE`, ...images.map((id, index) => sql`WHEN ${commentImages.id} = ${id} THEN ${index}`), sql`END`], sql` `);
+  return db
+    .update(commentImages)
+    .set({ commentId: sql`last_insert_rowid()`, position })
+    .where(and(eq(commentImages.userId, userId), isNull(commentImages.commentId), inArray(commentImages.id, [...images])))
+    .returning({ id: commentImages.id });
+}
+
+async function imagesOfComment(userId: string, id: number) {
+  const { results } = await primary()
+    .prepare("SELECT id FROM comment_images WHERE user_id = ? AND comment_id = ? ORDER BY position")
+    .bind(userId, id)
+    .all<{ id: string }>();
+  return results.map((row) => row.id);
+}
+
+export async function addComment(userId: string, todoId: number, body: string, via: Via, images: readonly string[] = []) {
   if (!(await exists(userId, todoId))) return null;
-  const [comment] = await db.insert(todoComments).values({ userId, todoId, body, via }).returning(commentColumns);
-  return presentComment(comment);
+  const insert = db.insert(todoComments).values({ userId, todoId, body, via }).returning(commentColumns);
+  if (images.length === 0) {
+    const [comment] = await insert;
+    return presentComment(comment, []);
+  }
+  if ((await attachableCount(userId, images)) !== images.length) throw imageNotFound();
+  const [[comment], attached] = await db.batch([insert, attachToLastComment(userId, images)]);
+  if (attached.length !== images.length) {
+    await db.batch([
+      db.update(commentImages).set({ commentId: null, position: 0 }).where(and(eq(commentImages.userId, userId), eq(commentImages.commentId, comment.id))),
+      db.delete(todoComments).where(and(eq(todoComments.userId, userId), eq(todoComments.id, comment.id))),
+    ]);
+    throw imageNotFound();
+  }
+  return presentComment(comment, images);
 }
 
 function onListedTodo(userId: string, id: number) {
@@ -355,19 +414,36 @@ function onListedTodo(userId: string, id: number) {
 }
 
 export async function editComment(userId: string, id: number, body: string) {
+  const images = await imagesOfComment(userId, id);
+  if (body === "" && images.length === 0) throw rejected(400, "empty_comment", "Comment must not be empty");
   const [comment] = await db
     .update(todoComments)
     .set({ body, editedAt: sql`CASE WHEN ${todoComments.body} = ${body} THEN ${todoComments.editedAt} ELSE strftime('%Y-%m-%d %H:%M:%f', 'now') END` })
     .where(onListedTodo(userId, id))
     .returning(commentColumns);
-  return comment ? presentComment(comment) : null;
+  return comment ? presentComment(comment, images) : null;
+}
+
+async function forgetStoredImages(rows: readonly { id: string }[], what: string) {
+  if (rows.length === 0) return;
+  await deleteStoredCommentImages(rows.map((row) => row.id)).catch((error) => console.error(`Could not delete the images of ${what}`, error));
 }
 
 export async function deleteComment(userId: string, id: number) {
-  const deleted = await db
-    .delete(todoComments)
-    .where(onListedTodo(userId, id))
-    .returning({ id: todoComments.id });
+  const [deleted, images] = await db.batch([
+    db.delete(todoComments).where(onListedTodo(userId, id)).returning({ id: todoComments.id }),
+    db
+      .delete(commentImages)
+      .where(
+        and(
+          eq(commentImages.userId, userId),
+          eq(commentImages.commentId, id),
+          sql`NOT EXISTS (SELECT 1 FROM ${todoComments} WHERE ${todoComments.id} = ${id})`,
+        ),
+      )
+      .returning({ id: commentImages.id }),
+  ]);
+  await forgetStoredImages(images, "a deleted comment");
   return deleted.length > 0;
 }
 
@@ -397,7 +473,11 @@ async function purgeCompletedTodosOf(userId: string, cutoff: string) {
     .where(eq(todos.userId, userId))
     .as("ranked");
   const expired = sql`(SELECT id FROM ${trashedTodos} WHERE user_id = ${userId} AND trashed_at <= ${cutoff})`;
-  await db.batch([
+  const expiredComments = db
+    .select({ id: todoComments.id })
+    .from(todoComments)
+    .where(and(eq(todoComments.userId, userId), inArray(todoComments.todoId, expired)));
+  const [, , , images] = await db.batch([
     db.insert(archivedTodos).select(sql`
       WITH RECURSIVE ancestry(id, ancestor_id, path, seen) AS (
         SELECT id, parent_id, json_array(), json_array(id) FROM ${todos} WHERE user_id = ${userId} AND id NOT IN ${kept}
@@ -418,9 +498,14 @@ async function purgeCompletedTodosOf(userId: string, cutoff: string) {
       .set({ position: sql`${ranked.position}` })
       .from(ranked)
       .where(and(eq(todos.id, ranked.id), ne(todos.position, ranked.position))),
+    db
+      .delete(commentImages)
+      .where(and(eq(commentImages.userId, userId), inArray(commentImages.commentId, expiredComments)))
+      .returning({ id: commentImages.id }),
     db.delete(todoComments).where(and(eq(todoComments.userId, userId), inArray(todoComments.todoId, expired))),
     db.delete(trashedTodos).where(and(eq(trashedTodos.userId, userId), lte(trashedTodos.trashedAt, cutoff))),
   ]);
+  await forgetStoredImages(images, "comments on todos deleted for good");
 }
 
 export async function purgeCompletedTodos(now: Date) {

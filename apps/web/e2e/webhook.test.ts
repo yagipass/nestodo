@@ -69,6 +69,18 @@ describe("sending waiting todos to a webhook", () => {
     expect((await client.settings()).webhook).toMatchObject({ lastError: null, lastSentAt: expect.any(String) });
   });
 
+  it("leaves out a comment that is only pictures, which the receiver could not see, instead of sending it as empty text", async () => {
+    const client = await memberWithWebhook(hook("mine"));
+    const todo = await addUnderProject(client, "read the Workers changelog", "https://developers.cloudflare.com/workers/");
+    await client.postComment(todo.id, { images: [(await client.uploadedCommentImage()).id] });
+
+    await runCron(EVERY_TEN_MINUTES, later(5 * MINUTE));
+
+    expect((await received()).map(({ body }) => body)).toMatchObject([
+      { todos: [{ id: todo.id, title: "read the Workers changelog", comments: ["https://developers.cloudflare.com/workers/"] }] },
+    ]);
+  });
+
   it("sends nothing while every todo under the project has a comment of its own, so the receiver is not called for nothing", async () => {
     const client = await memberWithWebhook(hook("mine"));
     await addUnderProject(client, "read the Workers changelog", "check what changed in cron triggers");

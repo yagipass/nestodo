@@ -19,7 +19,9 @@ export type Todo = {
   commentCount: number;
 };
 
-export type Comment = { id: number; body: string; via: "app" | "mcp"; at: string; editedAt: string | null };
+export type CommentImage = { id: string; url: string };
+
+export type Comment = { id: number; body: string; via: "app" | "mcp"; at: string; editedAt: string | null; images: CommentImage[] };
 
 export type TimelineItem = { type: "event"; kind: "created" | "completed" | "reopened"; at: string } | ({ type: "comment" } & Comment);
 
@@ -118,6 +120,20 @@ export function storedComments(email: string) {
   } finally {
     database.close();
   }
+}
+
+export function storedObjectKeys(prefix: string) {
+  const dir = join(stateDir, "v3", "r2", "miniflare-R2BucketObject");
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".sqlite") && name !== "metadata.sqlite")
+    .flatMap((file) => {
+      const database = new DatabaseSync(join(dir, file), { readOnly: true });
+      try {
+        return (database.prepare("SELECT key FROM _mf_objects WHERE key LIKE ? ORDER BY key").all(`${prefix}%`) as { key: string }[]).map((row) => row.key);
+      } finally {
+        database.close();
+      }
+    });
 }
 
 export function trashedTodoIds(email: string) {
@@ -268,6 +284,23 @@ export class Session {
     const res = await this.request(`/api/v1/todos/${id}/comments`, { method: "POST", body: { body } });
     expect(res.status).toBe(201);
     return (await json<{ comment: Comment }>(res)).comment;
+  }
+
+  postComment(id: number, body: { body?: string; images?: string[] }) {
+    return this.request(`/api/v1/todos/${id}/comments`, { method: "POST", body });
+  }
+
+  uploadCommentImage(image: Uint8Array | string = png([90, 140, 220])) {
+    return this.request("/api/v1/comment-images", {
+      method: "POST",
+      body: { image: typeof image === "string" ? image : Buffer.from(image).toString("base64") },
+    });
+  }
+
+  async uploadedCommentImage(image?: Uint8Array): Promise<CommentImage> {
+    const res = await this.uploadCommentImage(image);
+    expect(res.status).toBe(201);
+    return (await json<{ image: CommentImage }>(res)).image;
   }
 
   editComment(id: number, body: unknown) {
