@@ -26,6 +26,10 @@ function withUtcTimes<T extends { completedAt: string | null; createdAt: string 
   return { ...todo, completedAt: todo.completedAt && inUtc(todo.completedAt), createdAt: inUtc(todo.createdAt) };
 }
 
+function withImageCount<T extends { images: readonly unknown[] }>({ images, ...comment }: T) {
+  return { ...comment, imageCount: images.length };
+}
+
 function reply(value: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value) }] };
 }
@@ -140,13 +144,13 @@ export function nestodoMcpServer(userId: string) {
     {
       title: "Show a todo's work log",
       description:
-        "Show the work log of one todo, oldest first. It lists when the todo was created, completed and reopened, and the comments written on it. via is mcp for comments an assistant added with add_comment and app for the member's own. Times are in UTC as ISO 8601, and editedAt is when a comment was last changed, or null.",
+        "Show the work log of one todo, oldest first. It lists when the todo was created, completed and reopened, and the comments written on it. via is mcp for comments an assistant added with add_comment and app for the member's own. Times are in UTC as ISO 8601, editedAt is when a comment was last changed, or null, and imageCount is how many pictures the member attached to a comment, which you cannot see. body is empty for a comment that is only pictures.",
       inputSchema: z.object({ id }),
       annotations: { readOnlyHint: true },
     },
     async ({ id }) => {
       const items = await timelineOf(userId, id);
-      return items ? reply({ items }) : refuse(notFound);
+      return items ? reply({ items: items.map((item) => (item.type === "comment" ? withImageCount(item) : item)) }) : refuse(notFound);
     },
   );
 
@@ -164,7 +168,7 @@ export function nestodoMcpServer(userId: string) {
     },
     async ({ id, body }) => {
       const comment = await addComment(userId, id, body, "mcp");
-      return comment ? reply({ comment }) : refuse(notFound);
+      return comment ? reply({ comment: withImageCount(comment) }) : refuse(notFound);
     },
   );
 
