@@ -1,5 +1,22 @@
 # Changelog
 
+## [v0.17.0](https://github.com/yagipass/nestodo/compare/v0.16.1...v0.17.0) - 2026-11-28
+
+### MCP
+- feat(mcp): tell Claude how many pictures a comment has by @yagipass in https://github.com/yagipass/nestodo/pull/221
+### Web
+- feat(web): let comments carry pictures by @yagipass in https://github.com/yagipass/nestodo/pull/220
+- feat(web): add pictures to comments from the comment pane by @yagipass in https://github.com/yagipass/nestodo/pull/222
+- build(web): bump the minor-and-patch group with 5 updates by @dependabot[bot] in https://github.com/yagipass/nestodo/pull/231
+### Android
+- feat(android): add pictures to comments and show them by @yagipass in https://github.com/yagipass/nestodo/pull/226
+### Desktop
+- feat(desktop): add pictures to comments and show them by @yagipass in https://github.com/yagipass/nestodo/pull/225
+### Dependencies
+- ci(actions): bump cachix/install-nix-action from 31.11.5 to 32.0.0 by @dependabot[bot] in https://github.com/yagipass/nestodo/pull/228
+- build(cli): bump clap from 4.6.7 to 4.6.9 in /apps/cli in the minor-and-patch group by @dependabot[bot] in https://github.com/yagipass/nestodo/pull/227
+- build(nix): bump the flake-inputs group across 1 directory with 2 updates by @dependabot[bot] in https://github.com/yagipass/nestodo/pull/176
+
 ## [v0.16.1](https://github.com/yagipass/nestodo/compare/v0.16.0...v0.16.1) - 2026-11-27
 
 ### Web
